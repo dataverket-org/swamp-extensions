@@ -10,24 +10,24 @@ typed swamp resources and drive the mutating commands.
 
 ## Model types
 
-| Type                                          | Resource                                     | Methods                                                                                              |
-| --------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `@dataverket/openstack/server`                | `server`                                     | list, get, create, update, delete, start, stop, reboot, attachInterface, detachInterface             |
-| `@dataverket/openstack/image`                 | `image`                                      | list, get, find (newest match), create (upload), update, delete                                      |
-| `@dataverket/openstack/keypair`               | `keypair`, `privateKey`                      | list, get, create (import or generate), delete                                                       |
-| `@dataverket/openstack/server-group`          | `serverGroup`                                | list, get, create, delete                                                                            |
-| `@dataverket/openstack/flavor`                | `flavor`                                     | list, get (read-only lookup)                                                                         |
-| `@dataverket/openstack/availability-zone`     | `zone`                                       | list per service (read-only lookup)                                                                  |
-| `@dataverket/openstack/volume`                | `volume`                                     | list, get, create, update, delete, attach, detach                                                    |
-| `@dataverket/openstack/volume-snapshot`       | `snapshot`                                   | list, get, create, delete                                                                            |
-| `@dataverket/openstack/volume-type`           | `volumeType`                                 | list, get (read-only lookup)                                                                         |
-| `@dataverket/openstack/security-group`        | `securityGroup`                              | list, get, create, update, delete, addRule, removeRule                                               |
-| `@dataverket/openstack/network`               | `network`                                    | list, get, create, update, delete                                                                    |
-| `@dataverket/openstack/subnet`                | `subnet`                                     | list, get, create, update, delete                                                                    |
-| `@dataverket/openstack/router`                | `router`                                     | list, get, create, update, addSubnet, removeSubnet, addRoute, removeRoute, delete                    |
-| `@dataverket/openstack/port`                  | `port`                                       | list, get, create, update, delete                                                                    |
-| `@dataverket/openstack/floating-ip`           | `floatingIp`                                 | list, get, allocate, bind (server or port), unbind, release                                          |
-| `@dataverket/openstack/application-credential`| `applicationCredential`, `secret`            | list, get, create (one-time secret), delete                                                          |
+| Type                                           | Resource                          | Methods                                                                                  |
+| ---------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `@dataverket/openstack/server`                 | `server`                          | list, get, create, update, delete, start, stop, reboot, attachInterface, detachInterface |
+| `@dataverket/openstack/image`                  | `image`                           | list, get, find (newest match), create (upload), update, delete                          |
+| `@dataverket/openstack/keypair`                | `keypair`, `privateKey`           | list, get, create (import or generate), delete                                           |
+| `@dataverket/openstack/server-group`           | `serverGroup`                     | list, get, create, delete                                                                |
+| `@dataverket/openstack/flavor`                 | `flavor`                          | list, get (read-only lookup)                                                             |
+| `@dataverket/openstack/availability-zone`      | `zone`                            | list per service (read-only lookup)                                                      |
+| `@dataverket/openstack/volume`                 | `volume`                          | list, get, create, update, delete, attach, detach                                        |
+| `@dataverket/openstack/volume-snapshot`        | `snapshot`                        | list, get, create, delete                                                                |
+| `@dataverket/openstack/volume-type`            | `volumeType`                      | list, get (read-only lookup)                                                             |
+| `@dataverket/openstack/security-group`         | `securityGroup`                   | list, get, create, update, delete, addRule, removeRule                                   |
+| `@dataverket/openstack/network`                | `network`                         | list, get, create, update, delete                                                        |
+| `@dataverket/openstack/subnet`                 | `subnet`                          | list, get, create, update, delete                                                        |
+| `@dataverket/openstack/router`                 | `router`                          | list, get, create, update, addSubnet, removeSubnet, addRoute, removeRoute, delete        |
+| `@dataverket/openstack/port`                   | `port`                            | list, get, create, update, delete                                                        |
+| `@dataverket/openstack/floating-ip`            | `floatingIp`                      | list, get, allocate, bind (server or port), unbind, release                              |
+| `@dataverket/openstack/application-credential` | `applicationCredential`, `secret` | list, get, create (one-time secret), delete                                              |
 
 Design rules shared by all of them:
 
@@ -46,10 +46,10 @@ Design rules shared by all of them:
 - **Instance names** are `<prefix>-<sanitized name>`: `server-web-01`,
   `volume-web-01-state`, `floatingip-203-0-113-20`, `securitygroup-ssh`,
   `network-private-net`, `port-web-01-eth0`, `zone-compute-zone-a`,
-  `appcred-ci`. An unnamed port is stored under its id. Duplicate names in
-  one batch get an id suffix instead of overwriting.
-- **Structured flags are built, never interpolated.** NICs, block devices,
-  fixed IPs, allocation pools and routes are serialised as the CLI's
+  `appcred-ci`. An unnamed port is stored under its id. Duplicate names in one
+  batch get an id suffix instead of overwriting.
+- **Structured flags are built, never interpolated.** NICs, block devices, fixed
+  IPs, allocation pools and routes are serialised as the CLI's
   `key=value,key=value` form with each value checked; names for `--nic` are
   resolved to ids first.
 
@@ -197,9 +197,8 @@ device: ${{ data.latest("volumes", "volume-web-01-state").attributes.attachments
 - **No load balancers, DNS, object storage or quotas yet.** Extend with
   `export const extension` or open an issue.
 - **Application credentials** can only be created and deleted by a
-  password-authenticated user or an *unrestricted* credential; Keystone
-  refuses the request from a restricted one (HTTP 403). List and get work for
-  everyone.
+  password-authenticated user or an _unrestricted_ credential; Keystone refuses
+  the request from a restricted one (HTTP 403). List and get work for everyone.
 - **Keypair private keys** are only available at generation time. They are
   stored once in the sensitive `privateKey` spec and never re-read.
 
