@@ -247,7 +247,7 @@ const CreateArgs = z.object({
   keyName: z.string().optional().describe("Keypair name to inject"),
   securityGroups: z.array(z.string()).optional(),
   userData: z.string().optional().describe(
-    "cloud-init user data, passed to the CLI through a private temp file",
+    "cloud-init user data, passed to the CLI through a private temp file; empty means none",
   ),
   availabilityZone: z.string().optional(),
   serverGroup: z.string().optional().describe("Server group name or ID"),
@@ -467,7 +467,7 @@ export const model = {
             context.signal,
           );
         const created = assertShow(
-          args.userData !== undefined
+          args.userData
             ? await withTempFile(
               args.userData,
               (path) => run(["--user-data", path]),

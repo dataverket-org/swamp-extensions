@@ -1,0 +1,131 @@
+id: 2a31d02b-40a3-439e-9934-e756118d310e
+name: "@dataverket/openstack/bootstrap-network"
+description: >-
+  A project's private network from scratch: a network, one IPv4 subnet with DHCP and DNS, and a router with the
+  external network as its gateway and the subnet attached. Names are <name>, <name>-v4 and <name>-gw. Every step
+  is a find-or-create on its model, so re-running converges an interrupted run and changes nothing already right.
+version: 1
+inputs:
+  properties:
+    networkModel:
+      type: string
+      description: Name of the @dataverket/openstack/network model instance
+    subnetModel:
+      type: string
+      description: Name of the @dataverket/openstack/subnet model instance
+    routerModel:
+      type: string
+      description: Name of the @dataverket/openstack/router model instance
+    name:
+      type: string
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      description: Network name; the subnet becomes <name>-v4 and the router <name>-gw
+    cidr:
+      type: string
+      description: IPv4 range of the subnet, e.g. 192.0.2.0/24
+    externalNetwork:
+      type: string
+      default: ext-net
+      description: External network (name or ID) the router uses as gateway
+    dnsNameservers:
+      type: array
+      items:
+        type: string
+      default: []
+      description: DNS servers handed out by DHCP; empty keeps the cloud's default
+    snat:
+      type: boolean
+      default: true
+      description: Source NAT on the router's gateway
+  required:
+    - networkModel
+    - subnetModel
+    - routerModel
+    - name
+    - cidr
+jobs:
+  - name: network
+    steps:
+      - name: network
+        description: The network itself, port security on.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.networkModel }}
+          methodName: create
+          inputs:
+            name: ${{ inputs.name }}
+            portSecurity: true
+      - name: subnet
+        description: One IPv4 subnet on it with DHCP and the given DNS servers.
+        dependsOn:
+          - step: network
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.subnetModel }}
+          methodName: create
+          inputs:
+            name: ${{ inputs.name + "-v4" }}
+            network: ${{ inputs.name }}
+            cidr: ${{ inputs.cidr }}
+            ipVersion: 4
+            dhcp: true
+            dnsNameservers: ${{ inputs.dnsNameservers }}
+  - name: router
+    dependsOn:
+      - job: network
+        condition:
+          type: succeeded
+    steps:
+      - name: router
+        description: The router with the external network as gateway.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.routerModel }}
+          methodName: create
+          inputs:
+            name: ${{ inputs.name + "-gw" }}
+            externalGateway: ${{ inputs.externalNetwork }}
+            snat: ${{ inputs.snat }}
+      - name: attach-subnet
+        description: The subnet as an internal interface of the router; a no-op when already attached.
+        dependsOn:
+          - step: router
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.routerModel }}
+          methodName: addSubnet
+          inputs:
+            router: ${{ inputs.name + "-gw" }}
+            subnet: ${{ inputs.name + "-v4" }}
+  - name: verify
+    dependsOn:
+      - job: router
+        condition:
+          type: succeeded
+    steps:
+      - name: network-active
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.networkModel, "network-" + inputs.name).attributes.status == "ACTIVE"
+          message: "The network is not ACTIVE"
+          severity: high
+      - name: gateway-set
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.routerModel, "router-" + inputs.name + "-gw").attributes.externalNetworkId != ""
+          message: "The router has no external gateway"
+          severity: high
+      - name: subnet-attached
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.routerModel, "router-" + inputs.name + "-gw").attributes.interfaces.exists(i,
+              i.subnetId == data.latest(inputs.subnetModel, "subnet-" + inputs.name + "-v4").attributes.id)
+          message: "The subnet is not attached to the router"
+          severity: high

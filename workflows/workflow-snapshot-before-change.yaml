@@ -1,0 +1,79 @@
+id: b050adbf-eb28-4fc4-845a-2315ba005484
+name: "@dataverket/openstack/snapshot-before-change"
+description: >-
+  Before a risky change on a server, snapshot every volume attached to it. Reads the server, then creates one
+  snapshot per attached volume named <label>-<server>-<volume id>, waiting until each is available. Snapshots of
+  attached volumes are forced. Re-running with the same label reuses the existing snapshots.
+version: 1
+inputs:
+  properties:
+    serverModel:
+      type: string
+      description: Name of the @dataverket/openstack/server model instance
+    snapshotModel:
+      type: string
+      description: Name of the @dataverket/openstack/volume-snapshot model instance
+    server:
+      type: string
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      description: Server name
+    label:
+      type: string
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      default: pre-change
+      description: Prefix of the snapshot names
+    timeoutSeconds:
+      type: integer
+      default: 600
+  required:
+    - serverModel
+    - snapshotModel
+    - server
+jobs:
+  - name: inspect
+    steps:
+      - name: server
+        description: The server and its attached volume ids.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.serverModel }}
+          methodName: get
+          inputs:
+            server: ${{ inputs.server }}
+  - name: snapshot
+    dependsOn:
+      - job: inspect
+        condition:
+          type: succeeded
+    steps:
+      - name: snapshot-${{ self.volumeId }}
+        forEach:
+          item: volumeId
+          in: ${{ data.latest(inputs.serverModel, "server-" + inputs.server).attributes.volumesAttached }}
+        concurrency: 2
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.snapshotModel }}
+          methodName: create
+          inputs:
+            name: ${{ inputs.label + "-" + inputs.server + "-" + self.volumeId }}
+            volume: ${{ self.volumeId }}
+            force: true
+            wait: true
+            timeoutSeconds: ${{ inputs.timeoutSeconds }}
+  - name: verify
+    dependsOn:
+      - job: snapshot
+        condition:
+          type: succeeded
+    steps:
+      - name: available-${{ self.volumeId }}
+        forEach:
+          item: volumeId
+          in: ${{ data.latest(inputs.serverModel, "server-" + inputs.server).attributes.volumesAttached }}
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.snapshotModel, "snapshot-" + inputs.label + "-" + inputs.server + "-" + self.volumeId).attributes.status == "available"
+          message: "A snapshot is not available"
+          severity: high

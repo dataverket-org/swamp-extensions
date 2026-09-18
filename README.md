@@ -53,6 +53,28 @@ Design rules shared by all of them:
   `key=value,key=value` form with each value checked; names for `--nic` are
   resolved to ids first.
 
+## Workflows
+
+Five workflows compose the models the way the OpenTofu provider's resources
+are usually combined. Each takes the names of your model instances as inputs,
+is idempotent through the models' find-or-create semantics, and ends with
+assert steps. Run one with `swamp workflow run "@dataverket/openstack/<name>"`.
+
+| Workflow                        | What it does                                                                                                   |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `bootstrap-network`             | Network, IPv4 subnet with DHCP and DNS, router with external gateway, subnet attached; verifies the topology  |
+| `boot-server`                   | Port with optional fixed IP, server on it with config drive, floating IP allocated and bound unless disabled    |
+| `snapshot-before-change`        | One forced snapshot per volume attached to a server, waited until available                                     |
+| `decommission-server`           | Behind an approval: unbind and release the floating IP, delete the server, delete its port                       |
+| `rotate-application-credential` | Create the new credential (secret vaulted), assert it, then an approval gate before deleting the old one         |
+
+```sh
+swamp workflow run "@dataverket/openstack/boot-server" \
+  --input serverModel=servers --input portModel=ports --input floatingIpModel=public-ips \
+  --input name=web-01 --input network=lan --input subnet=lan-v4 --input fixedIp=192.0.2.10 \
+  --input flavor=m5.medium --input image="Debian GNU/Linux 13 (Trixie)" --input keyName=ops-key
+```
+
 ## Prerequisites
 
 ### openstack CLI

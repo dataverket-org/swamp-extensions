@@ -15,7 +15,9 @@ description: >
   application credentials (create with one-time secret, delete), and
   read-only lookups for flavors, availability zones and volume types. Every
   `list` fans out `show` so stored resources are always the full object, and
-  every mutating method re-reads and stores the result.
+  every mutating method re-reads and stores the result. Five workflows compose
+  them: bootstrap-network, boot-server, snapshot-before-change,
+  decommission-server and rotate-application-credential.
 
   Transport is python-openstackclient (10.x) reading `-f json`; the CLI
   handles Keystone auth types, the service catalog and microversions.
@@ -42,7 +44,12 @@ models:
   - port.ts
   - floating_ip.ts
   - application_credential.ts
-workflows: []
+workflows:
+  - workflows/workflow-bootstrap-network.yaml
+  - workflows/workflow-boot-server.yaml
+  - workflows/workflow-snapshot-before-change.yaml
+  - workflows/workflow-decommission-server.yaml
+  - workflows/workflow-rotate-application-credential.yaml
 vaults: []
 datastores: []
 reports: []

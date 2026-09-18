@@ -1,0 +1,94 @@
+id: 02146b2d-56ae-4666-b365-078708db22dd
+name: "@dataverket/openstack/decommission-server"
+description: >-
+  The reverse of boot-server, behind an approval: unbind and release the server's floating IP when one is given,
+  delete the server and wait for it, then delete its port <name>-eth0 unless keepPort is set. Volumes are not
+  touched. Every step tolerates a target that is already gone, so a re-run finishes an interrupted decommission.
+version: 1
+inputs:
+  properties:
+    serverModel:
+      type: string
+      description: Name of the @dataverket/openstack/server model instance
+    portModel:
+      type: string
+      description: Name of the @dataverket/openstack/port model instance
+    floatingIpModel:
+      type: string
+      description: Name of the @dataverket/openstack/floating-ip model instance
+    name:
+      type: string
+      pattern: "^[a-z0-9][a-z0-9-]*$"
+      description: Server name; its port is <name>-eth0
+    floatingIp:
+      type: string
+      default: ""
+      description: Floating IP address to unbind and release; empty when the server has none
+    keepPort:
+      type: boolean
+      default: false
+      description: Leave the port in place, keeping its fixed address
+  required:
+    - serverModel
+    - portModel
+    - floatingIpModel
+    - name
+jobs:
+  - name: confirm
+    steps:
+      - name: approve
+        task:
+          type: manual_approval
+          prompt: "Delete the server, release its floating IP and remove its port?"
+  - name: public-ip
+    dependsOn:
+      - job: confirm
+        condition:
+          type: succeeded
+    steps:
+      - name: unbind
+        guard: ${{ inputs.floatingIp == "" }}
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.floatingIpModel }}
+          methodName: unbind
+          inputs:
+            floatingIp: ${{ inputs.floatingIp }}
+      - name: release
+        guard: ${{ inputs.floatingIp == "" }}
+        dependsOn:
+          - step: unbind
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.floatingIpModel }}
+          methodName: release
+          inputs:
+            floatingIp: ${{ inputs.floatingIp }}
+  - name: delete
+    dependsOn:
+      - job: public-ip
+        condition:
+          type: succeeded
+    steps:
+      - name: server
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.serverModel }}
+          methodName: delete
+          inputs:
+            server: ${{ inputs.name }}
+            wait: true
+      - name: port
+        guard: ${{ inputs.keepPort == true }}
+        dependsOn:
+          - step: server
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.portModel }}
+          methodName: delete
+          inputs:
+            port: ${{ inputs.name + "-eth0" }}
