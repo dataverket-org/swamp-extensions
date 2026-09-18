@@ -1,0 +1,65 @@
+manifestVersion: 1
+name: "@dataverket/openstack"
+version: "2026.09.18.1"
+description: >
+  OpenStack for swamp, through the official `openstack` CLI.
+
+  Sixteen model types cover the compute, storage, network and identity
+  primitives of a project: servers (create with NICs, ports, block devices
+  and config drive; update, start/stop/reboot, attach/detach interfaces,
+  delete), images (upload, find newest, update, delete), keypairs, server
+  groups, volumes (create, extend, attach/detach, delete), volume snapshots,
+  security groups with inline rules, networks, subnets, routers (gateway,
+  subnet interfaces, static routes), ports (fixed IPs, allowed addresses),
+  floating IPs (allocate, bind to server or port, unbind, release),
+  application credentials (create with one-time secret, delete), and
+  read-only lookups for flavors, availability zones and volume types. Every
+  `list` fans out `show` so stored resources are always the full object, and
+  every mutating method re-reads and stores the result.
+
+  Transport is python-openstackclient (10.x) reading `-f json`; the CLI
+  handles Keystone auth types, the service catalog and microversions.
+  Authenticate with a named `clouds.yaml` cloud or an application credential
+  from a vault (env overrides, secret redacted from errors). Creates reuse an
+  existing resource of the same name; deletes are no-ops when already gone.
+repository: "https://git.dataverket.org/dataverket/swamp-openstack"
+paths:
+  base: manifest
+models:
+  - server.ts
+  - image.ts
+  - keypair.ts
+  - server_group.ts
+  - flavor.ts
+  - availability_zone.ts
+  - volume.ts
+  - volume_type.ts
+  - snapshot.ts
+  - security_group.ts
+  - network.ts
+  - subnet.ts
+  - router.ts
+  - port.ts
+  - floating_ip.ts
+  - application_credential.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - openstack
+  - nova
+  - cinder
+  - neutron
+  - glance
+  - compute
+  - volumes
+  - floating-ip
+  - security-groups
+  - networking
+  - keystone
+  - application-credential
+dependencies: []
