@@ -191,3 +191,78 @@ Deno.test("the service-account key reaches the environment and never the error",
     fake.restore();
   }
 });
+
+Deno.test("talosconfigContent is materialized per call and removed afterwards", async () => {
+  let seen = "";
+  let path = "";
+  const fake = installFake((args) => {
+    path = args[args.indexOf("--talosconfig") + 1];
+    seen = Deno.readTextFileSync(path);
+    return "ok";
+  });
+  try {
+    const r = await runTalosctl(
+      {
+        talosctlPath: "t",
+        nodes: ["a"],
+        talosconfigContent: "context: x\n",
+        retryDelayMs: 0,
+      },
+      ["version"],
+    );
+    assertEquals(r.stdout, "ok");
+    assertEquals(seen, "context: x\n");
+    let exists = true;
+    try {
+      await Deno.stat(path);
+    } catch {
+      exists = false;
+    }
+    assertEquals(exists, false);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("talosconfigContent wins over a talosconfig path, once, and skips the path check", async () => {
+  let argv: string[] = [];
+  const fake = installFake((args) => {
+    argv = args;
+    return "ok";
+  });
+  try {
+    await runTalosctl(
+      {
+        talosctlPath: "t",
+        nodes: ["a"],
+        talosconfig: "/nonexistent/talosconfig",
+        talosconfigContent: "context: x\n",
+        retryDelayMs: 0,
+      },
+      ["version"],
+    );
+    const idx = argv.indexOf("--talosconfig");
+    assertEquals(argv.lastIndexOf("--talosconfig"), idx, "flag appears once");
+    assertEquals(argv[idx + 1] !== "/nonexistent/talosconfig", true);
+  } finally {
+    fake.restore();
+  }
+  const g = {
+    insecure: false,
+    talosctlPath: "t",
+    retryDelayMs: 0,
+    talosconfig: "/nonexistent/talosconfig",
+    talosconfigContent: "context: x\n",
+  };
+  assertEquals(
+    (await model.checks["talosconfig-exists"].execute({ globalArgs: g })).pass,
+    true,
+  );
+  assertEquals(
+    (await model.checks["talosconfig-exists"].execute({
+      globalArgs: { ...g, talosconfigContent: "" },
+    })).pass,
+    false,
+    "empty content is unset, so the bogus path fails the check",
+  );
+});

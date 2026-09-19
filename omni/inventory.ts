@@ -5,16 +5,15 @@
  * Linux machines: it registers every machine, assigns machines to clusters, and
  * tracks their health. `discover` asks Omni for that fleet state and writes a
  * typed inventory — one `node` per machine, one `cluster` per cluster, and a
- * `summary` roll-up. `volumes` goes one step further for one cluster: through
- * Omni's Talos proxy it reads every machine's disks, partitions and EPHEMERAL
- * usage and writes one `volumeLayout` per node, the same shape
- * `@dataverket/talosctl/node` produces on a cluster without Omni.
+ * `summary` roll-up. `talosconfig` mints one cluster's admin talosconfig for
+ * the service account and stores it as a sensitive resource, which is what a
+ * `@dataverket/talosctl/node` model needs to speak to the machines through
+ * Omni's proxy; everything said to the Talos API itself lives on that model.
  *
- * Forked from `@mccormick/omni` (MIT). Transport is the `omnictl` CLI, plus
- * `talosctl` for `volumes`, both authenticated with an Omni service account
- * passed through the environment. Strictly read-only. The service-account key
- * is supplied through a vault, marked sensitive, and redacted from logs and
- * error text.
+ * Forked from `@mccormick/omni` (MIT). Transport is the `omnictl` CLI,
+ * authenticated with an Omni service account passed through the environment.
+ * Strictly read-only against Omni. The service-account key is supplied through
+ * a vault, marked sensitive, and redacted from logs and error text.
  *
  * @module
  */
@@ -26,22 +25,12 @@ import {
   SummarySchema,
 } from "./schema.ts";
 import {
-  type CosiResource,
   getResources,
+  mintTalosconfig,
   type OmnictlOptions,
-  talosctl,
-  writeTalosconfig,
 } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
 import { assertHttpsUrl } from "./util.ts";
-import {
-  buildLayout,
-  forNode,
-  layoutProblem,
-  parseConcatJson,
-  parseUsage,
-  VolumeLayoutSchema,
-} from "./talos_layout.ts";
 
 /** Global arguments for the Omni inventory model. */
 const GlobalArgs = z.object({
@@ -57,9 +46,6 @@ const GlobalArgs = z.object({
   ),
   omnictlPath: z.string().default("omnictl").describe(
     "Path to the omnictl binary; override when it is not on PATH",
-  ),
-  talosctlPath: z.string().default("talosctl").describe(
-    "Path to the talosctl binary (volumes only); override when not on PATH",
   ),
 });
 /** {@link GlobalArgs} */
@@ -98,56 +84,30 @@ function optionsOf(g: GlobalArgsData): OmnictlOptions {
     serviceAccountKey: g.serviceAccountKey,
     insecureSkipTlsVerify: g.insecureSkipTlsVerify,
     omnictlPath: g.omnictlPath,
-    talosctlPath: g.talosctlPath,
   };
 }
 
-/** One machine of a cluster as `ClusterMachineIdentity` names it. */
-export interface Member {
-  machineId: string;
-  hostname: string;
-  nodeIp: string;
-}
-
-/** Members of `cluster` from `omnictl get clustermachineidentity`, by hostname. */
-export function clusterMembers(
-  identities: CosiResource[],
-  cluster: string,
-): Member[] {
-  const out: Member[] = [];
-  for (const r of identities) {
-    if ((r.metadata.labels ?? {})["omni.sidero.dev/cluster"] !== cluster) {
-      continue;
-    }
-    const ips = Array.isArray(r.spec.nodeips)
-      ? (r.spec.nodeips as unknown[]).filter((v): v is string =>
-        typeof v === "string"
-      )
-      : [];
-    if (ips.length === 0) continue;
-    out.push({
-      machineId: r.metadata.id,
-      hostname: typeof r.spec.nodename === "string" && r.spec.nodename !== ""
-        ? r.spec.nodename
-        : r.metadata.id,
-      nodeIp: ips[0],
-    });
-  }
-  return out.sort((a, b) => a.hostname.localeCompare(b.hostname));
-}
-
-const VolumesArgs = z.object({
+const TalosconfigArgs = z.object({
   cluster: z.string().min(1).describe("Omni cluster name"),
+});
+
+/** A cluster's admin talosconfig for the service account. */
+export const TalosconfigSchema = z.object({
+  cluster: z.string(),
+  endpoint: z.string().describe("Omni endpoint the config routes through"),
+  content: z.string().describe("The talosconfig YAML").meta({
+    sensitive: true,
+  }),
+  timestamp: z.string(),
 });
 
 /**
  * `@dataverket/omni/inventory` — discovers every Talos machine and cluster an
- * Omni instance manages, and the disk layout of one cluster's machines.
- * Read-only.
+ * Omni instance manages, and mints per-cluster talosconfigs. Read-only.
  */
 export const model = {
   type: "@dataverket/omni/inventory",
-  version: "2026.09.19.1",
+  version: "2026.09.19.2",
   globalArguments: GlobalArgs,
   resources: {
     node: {
@@ -168,12 +128,12 @@ export const model = {
       lifetime: "30d" as const,
       garbageCollection: 20,
     },
-    volumeLayout: {
+    talosconfig: {
       description:
-        "Disks, partitions by label, unallocated space and EPHEMERAL usage of one machine, read through Omni's Talos proxy",
-      schema: VolumeLayoutSchema,
+        "One cluster's admin talosconfig for the service account; feed it to a talosctl model as talosconfigContent",
+      schema: TalosconfigSchema,
       lifetime: "30d" as const,
-      garbageCollection: 20,
+      garbageCollection: 5,
     },
   },
   methods: {
@@ -249,97 +209,34 @@ export const model = {
         return { dataHandles: handles };
       },
     },
-    volumes: {
+    talosconfig: {
       description:
-        "For every machine in one cluster, through Omni's Talos proxy: disks, partitions (STATE, EPHEMERAL, u-<name>, ...), unallocated bytes on the system disk, and /var usage. One volumeLayout per node, one execution. Read-only.",
-      arguments: VolumesArgs,
+        "Mint one cluster's admin talosconfig for the service account and store it as a sensitive talosconfig resource. Nothing is written to ~/.talos/config. Read-only against Omni.",
+      arguments: TalosconfigArgs,
       execute: async (
-        args: z.infer<typeof VolumesArgs>,
+        args: z.infer<typeof TalosconfigArgs>,
         context: MethodContext,
       ): Promise<MethodResult> => {
         const opts = optionsOf(context.globalArgs);
-        const members = clusterMembers(
-          await getResources("clustermachineidentity", opts, context.signal),
+        context.logger.info("omni: minting talosconfig for {cluster}", {
+          cluster: args.cluster,
+        });
+        const content = await mintTalosconfig(
           args.cluster,
+          opts,
+          context.signal,
         );
-        if (members.length === 0) {
-          throw new Error(
-            `cluster ${args.cluster} has no machines with node IPs in Omni`,
-          );
-        }
-        context.logger.info(
-          "omni: reading volumes of {count} machines in {cluster}",
-          { count: members.length, cluster: args.cluster },
+        const handle = await context.writeResource(
+          "talosconfig",
+          `talosconfig-${sanitizeInstanceName(args.cluster)}`,
+          {
+            cluster: args.cluster,
+            endpoint: opts.endpoint,
+            content,
+            timestamp: new Date().toISOString(),
+          },
         );
-        const cfg = await Deno.makeTempFile({ prefix: "omni-talosconfig-" });
-        try {
-          await writeTalosconfig(args.cluster, cfg, opts, context.signal);
-          const nodes = members.map((m) => m.nodeIp);
-          const get = (kind: string) =>
-            talosctl(
-              cfg,
-              nodes,
-              ["get", kind, "-o", "json"],
-              opts,
-              context.signal,
-            )
-              .then(parseConcatJson);
-          const [disks, volumes, usageText] = await Promise.all([
-            get("disks"),
-            get("discoveredvolumes"),
-            talosctl(
-              cfg,
-              nodes,
-              ["usage", "-d", "1", "/var"],
-              opts,
-              context.signal,
-            ),
-          ]);
-          const usage = parseUsage(usageText, nodes[0]);
-          const ts = new Date().toISOString();
-          const handles: DataHandle[] = [];
-          for (const m of members) {
-            const d = forNode(disks, m.nodeIp), v = forNode(volumes, m.nodeIp);
-            const problem = layoutProblem(d, v, usage[m.nodeIp]);
-            if (problem) {
-              context.logger.warning("{host}: skipped, {problem}", {
-                host: m.hostname,
-                problem,
-              });
-              continue;
-            }
-            const layout = buildLayout(
-              m.hostname,
-              m.nodeIp,
-              d,
-              v,
-              usage[m.nodeIp],
-              ts,
-            );
-            context.logger.info(
-              "{host}: EPHEMERAL {used}% of {size} GiB, {free} MiB unallocated",
-              {
-                host: m.hostname,
-                used: layout.ephemeralUsedPercent,
-                size: Math.round(layout.ephemeralSizeBytes / 2 ** 30 * 10) / 10,
-                free: Math.round(layout.systemDiskUnallocatedBytes / 2 ** 20),
-              },
-            );
-            handles.push(
-              await context.writeResource(
-                "volumeLayout",
-                `volume-${sanitizeInstanceName(m.hostname)}`,
-                layout,
-              ),
-            );
-          }
-          if (handles.length === 0) {
-            throw new Error("no machine returned a usable disk layout");
-          }
-          return { dataHandles: handles };
-        } finally {
-          await Deno.remove(cfg).catch(() => {});
-        }
+        return { dataHandles: [handle] };
       },
     },
   },

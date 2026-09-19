@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/talosctl"
-version: "2026.09.19.1"
+version: "2026.09.19.2"
 description: >
   Talos Linux machines for swamp, through `talosctl`, with or without Omni.
 
@@ -12,9 +12,11 @@ description: >
   unallocated space on the system disk and how full EPHEMERAL is, in one
   execution, so a plan for user volumes starts from measured numbers.
 
-  Forked from `@magistr/talos-node` (MIT) and typed; the same methods are
-  offered by `@dataverket/omni` through Omni's proxy for Omni-managed fleets,
-  so a lab cluster on plain talosctl and a managed one share one data shape.
+  Forked from `@magistr/talos-node` (MIT) and typed. For an Omni-managed
+  fleet, `@dataverket/omni` supplies the node addresses and a minted
+  talosconfig as data; this model takes the config as content
+  (`talosconfigContent`) and speaks to the machines through Omni's proxy, so
+  a lab cluster on plain talosctl and a managed one share one code path.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest

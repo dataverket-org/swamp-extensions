@@ -10,7 +10,10 @@
  * `endpoint` is where the API is reached (`--endpoints`) and doubles as the
  * only node when `nodes` is not given. With an Omni-issued talosconfig leave
  * `endpoint` unset: the config already points at Omni's proxy, and `nodes`
- * are the machines' addresses.
+ * are the machines' addresses. A talosconfig can also be given as content
+ * (`talosconfigContent`, from a vault or from `@dataverket/omni`'s
+ * `talosconfig` resource); it is written to a private temporary file for each
+ * call and removed afterwards.
  *
  * @module
  */
@@ -38,6 +41,9 @@ export const GlobalArgsSchema = z.object({
   talosconfig: z.string().optional().describe(
     "Path to a talosconfig; defaults to talosctl's own lookup",
   ),
+  talosconfigContent: z.string().optional().describe(
+    'A talosconfig\'s content, e.g. ${{ data.latest("omni", "talosconfig-<cluster>").attributes.content }}; used through a private temporary file, takes precedence over talosconfig',
+  ).meta({ sensitive: true }),
   insecure: z.boolean().default(false).describe(
     "Use --insecure (maintenance mode, no client certificate)",
   ),
@@ -96,11 +102,14 @@ export function options(g: GlobalArgs, insecure?: boolean): TalosctlOptions {
   return {
     talosctlPath: g.talosctlPath,
     talosconfig: g.talosconfig,
+    talosconfigContent: g.talosconfigContent,
     endpoints: !explicit && g.endpoint ? [g.endpoint] : undefined,
     nodes,
     insecure: insecure ?? g.insecure,
     env,
-    secrets: g.serviceAccountKey ? [g.serviceAccountKey] : [],
+    secrets: [g.serviceAccountKey, g.talosconfigContent].filter((
+      s,
+    ): s is string => Boolean(s)),
     retryDelayMs: g.retryDelayMs,
   };
 }
@@ -203,7 +212,7 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.19.1",
+  version: "2026.09.19.2",
   globalArguments: GlobalArgsSchema,
   checks: {
     "talosctl-available": {
@@ -229,7 +238,8 @@ export const model = {
       labels: ["policy"],
       execute: async (context: { globalArgs: GlobalArgs }) => {
         const p = context.globalArgs.talosconfig;
-        if (!p) return { pass: true };
+        if (!p || context.globalArgs.talosconfigContent) return { pass: true };
+        // an empty content string is "unset": the path still has to exist
         try {
           await Deno.stat(p);
           return { pass: true };
