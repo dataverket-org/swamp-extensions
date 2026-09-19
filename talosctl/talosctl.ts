@@ -22,6 +22,12 @@ export interface TalosctlOptions {
   talosctlPath: string;
   /** Path to a talosconfig; omitted means talosctl's default lookup. */
   talosconfig?: string;
+  /**
+   * A talosconfig's content; written to a private temporary file for the
+   * duration of each call and removed afterwards. Takes precedence over
+   * `talosconfig`. Lets the config come from a vault or another model's data.
+   */
+  talosconfigContent?: string;
   /** `--endpoints`; omitted means the talosconfig's endpoints. */
   endpoints?: string[];
   /** `--nodes`: the machines the command targets. */
@@ -166,6 +172,19 @@ export async function talosctl(
   args: string[],
   extra: { retries?: number; signal?: AbortSignal } = {},
 ): Promise<{ stdout: string; stderr: string }> {
+  if (opts.talosconfigContent) {
+    const path = await Deno.makeTempFile({ prefix: "talosconfig-" });
+    try {
+      await Deno.writeTextFile(path, opts.talosconfigContent);
+      return await talosctl(
+        { ...opts, talosconfig: path, talosconfigContent: undefined },
+        args,
+        extra,
+      );
+    } finally {
+      await Deno.remove(path).catch(() => {});
+    }
+  }
   const retries = extra.retries ?? 0;
   const delay = opts.retryDelayMs ?? 15000;
   const argv = [opts.talosctlPath, ...talosctlArgs(opts, args)];

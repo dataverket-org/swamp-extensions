@@ -1,23 +1,24 @@
 manifestVersion: 1
 name: "@dataverket/omni"
-version: "2026.09.19.1"
+version: "2026.09.19.2"
 description: >
-  Talos fleet discovery for swamp, via Sidero Omni, plus the disk layout of
-  every machine in a cluster.
+  Talos fleet discovery for swamp, via Sidero Omni.
 
   `@dataverket/omni/inventory` asks Omni for its fleet state and writes a
   typed inventory: one `node` per managed machine (hardware, network, Talos
   version, cluster role, connection and readiness), one `cluster` per
-  cluster, and a `summary` roll-up. `volumes` then reads one cluster's
-  machines through Omni's Talos proxy: disks, partitions by label,
-  unallocated space on the system disk and how full EPHEMERAL is, one
-  `volumeLayout` per node, the same shape `@dataverket/talosctl` produces on a
-  cluster without Omni.
+  cluster, and a `summary` roll-up. `talosconfig` mints one cluster's admin
+  talosconfig for the service account and stores it as a sensitive resource,
+  which is what `@dataverket/talosctl/node` needs to reach the machines
+  through Omni's proxy; every verb spoken to the Talos API lives on that
+  model, so a lab cluster on plain talosctl and an Omni fleet share one code
+  path.
 
-  Forked from `@mccormick/omni` (MIT). Read-only: `omnictl get`,
-  `omnictl talosconfig` and `talosctl get`/`usage` only, authenticated with
-  an Omni service account passed through the environment; the key comes from
-  a vault, is marked sensitive, and is redacted from logs and errors.
+  Forked from `@mccormick/omni` (MIT). The `volumes` method of 2026.09.19.1
+  moved to `@dataverket/talosctl/node`. Read-only against Omni: `omnictl get`
+  and `omnictl talosconfig` only, authenticated with an Omni service account
+  passed through the environment; the key comes from a vault, is marked
+  sensitive, and is redacted from logs and errors.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest
@@ -36,5 +37,5 @@ labels:
   - kubernetes
   - inventory
   - siderolabs
-  - volumes
+  - talosconfig
 dependencies: []

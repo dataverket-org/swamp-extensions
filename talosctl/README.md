@@ -29,15 +29,16 @@ added, and `reset` learned to wipe only named partitions.
 
 ### Targets
 
-| Global argument     | Default      | Meaning                                                                                       |
-| ------------------- | ------------ | --------------------------------------------------------------------------------------------- |
-| `endpoint`          | unset        | `--endpoints`; also the only node when `nodes` is unset. Leave unset with an Omni talosconfig |
-| `nodes`             | `[endpoint]` | `--nodes`: the machines every method addresses                                                |
-| `talosconfig`       | unset        | Path to a talosconfig; unset means talosctl's own lookup                                      |
-| `insecure`          | `false`      | `--insecure`, for machines in maintenance mode                                                |
-| `talosctlPath`      | `talosctl`   | Binary path when not on `PATH`                                                                |
-| `serviceAccountKey` | unset        | Omni service-account key for an Omni-issued talosconfig; supply via a vault expression        |
-| `retryDelayMs`      | `15000`      | Pause between retries of transient API errors                                                 |
+| Global argument      | Default      | Meaning                                                                                       |
+| -------------------- | ------------ | --------------------------------------------------------------------------------------------- |
+| `endpoint`           | unset        | `--endpoints`; also the only node when `nodes` is unset. Leave unset with an Omni talosconfig |
+| `nodes`              | `[endpoint]` | `--nodes`: the machines every method addresses                                                |
+| `talosconfig`        | unset        | Path to a talosconfig; unset means talosctl's own lookup                                      |
+| `talosconfigContent` | unset        | A talosconfig's content (sensitive); used via a private temp file, wins over `talosconfig`    |
+| `insecure`           | `false`      | `--insecure`, for machines in maintenance mode                                                |
+| `talosctlPath`       | `talosctl`   | Binary path when not on `PATH`                                                                |
+| `serviceAccountKey`  | unset        | Omni service-account key for an Omni-issued talosconfig; supply via a vault expression        |
+| `retryDelayMs`       | `15000`      | Pause between retries of transient API errors                                                 |
 
 A plain cluster: set `endpoint` (or `nodes`) and `talosconfig`:
 
@@ -49,12 +50,18 @@ swamp model create @dataverket/talosctl/node lab
 swamp model method run lab volumes
 ```
 
-An Omni-managed cluster: `omnictl talosconfig -c <cluster>` writes a config
-whose endpoints are Omni's proxy; set `talosconfig` to it, `nodes` to the
-machines' addresses, leave `endpoint` unset (with an explicit `nodes` list no
-`--endpoints` is passed, so the proxy is used), and set `serviceAccountKey` from
-a vault so talosctl authenticates without a browser. For Omni fleets
-`@dataverket/omni` does all of that by itself.
+An Omni-managed cluster: let `@dataverket/omni` mint the talosconfig and
+discover the nodes, and wire both in through CEL; leave `endpoint` unset (with
+an explicit `nodes` list no `--endpoints` is passed, so Omni's proxy is used)
+and set `serviceAccountKey` from a vault so talosctl authenticates without a
+browser:
+
+```yaml
+globalArguments:
+  nodes: ${{ data.findBySpec("omni", "node").filter(n, n.attributes.cluster == "prod" && size(n.attributes.nodeIps) > 0).map(n, n.attributes.nodeIps[0]) }}
+  talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
+  serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
+```
 
 ## `volumes`
 

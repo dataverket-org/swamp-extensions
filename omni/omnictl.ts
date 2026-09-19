@@ -1,10 +1,9 @@
 /**
- * `@dataverket/omni` — `omnictl` and `talosctl` subprocess transport.
+ * `@dataverket/omni` — `omnictl` subprocess transport.
  *
  * The inventory model reads Omni's COSI resources through the `omnictl` CLI
- * (`omnictl get <type> -o json`); the `volumes` method also mints a cluster
- * talosconfig (`omnictl talosconfig`) and reads every machine through Omni's
- * Talos proxy with `talosctl`. Both processes authenticate with the service
+ * (`omnictl get <type> -o json`) and mints cluster talosconfigs
+ * (`omnictl talosconfig`). The process authenticates with the service
  * account key in the environment (`OMNI_ENDPOINT` + `OMNI_SERVICE_ACCOUNT_KEY`),
  * so nothing touches an on-disk omniconfig or opens a browser. One injectable
  * seam — {@link __setRunner} — lets tests supply canned output.
@@ -12,7 +11,6 @@
  * @module
  */
 import { redactSecret } from "./util.ts";
-import { parseConcatJson } from "./talos_layout.ts";
 
 /**
  * A COSI resource as emitted by `omnictl get -o json`: every Omni resource is
@@ -40,8 +38,6 @@ export interface OmnictlOptions {
   insecureSkipTlsVerify: boolean;
   /** Path to (or name of) the `omnictl` binary. */
   omnictlPath: string;
-  /** Path to (or name of) the `talosctl` binary. */
-  talosctlPath: string;
 }
 
 /** Captured outcome of one CLI invocation. */
@@ -67,11 +63,44 @@ export function __setRunner(runner?: Runner): void {
 
 /**
  * Parse `omnictl get -o json` output: one pretty-printed JSON object per
- * resource, concatenated with no array wrapper. Same format as
- * `talosctl get -o json`, so one parser serves both.
+ * resource, concatenated with no array wrapper. A leading `[` is treated as
+ * a single array for forward compatibility; empty input yields an empty array.
  */
 export function parseOmnictlJson(stdout: string): CosiResource[] {
-  return parseConcatJson(stdout) as unknown as CosiResource[];
+  const text = stdout.trim();
+  if (text.length === 0) return [];
+  if (text.startsWith("[")) {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  }
+  const objects: CosiResource[] = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        objects.push(JSON.parse(text.slice(start, i + 1)) as CosiResource);
+        start = -1;
+      } else if (depth < 0) {
+        throw new Error("omnictl JSON output has an unbalanced closing brace");
+      }
+    }
+  }
+  if (depth !== 0) {
+    throw new Error("omnictl JSON output ended with unbalanced braces");
+  }
+  return objects;
 }
 
 /** Inherited variables the subprocesses keep; everything else is dropped. */
@@ -166,49 +195,35 @@ export async function getResources(
 }
 
 /**
- * Write the cluster's admin talosconfig for the service account to `path`
- * (`omnictl talosconfig -c <cluster> --merge=false --force <path>`). The
- * file's endpoints are Omni's proxy; talosctl still needs the key in the
- * environment to authenticate with it.
+ * Mint the cluster's admin talosconfig for the service account and return
+ * its content (`omnictl talosconfig -c <cluster> --merge=false --force` into a
+ * file in a private temporary directory, mode 0700, removed afterwards; the
+ * directory, not the file, carries the protection since omnictl may recreate
+ * the file). The file's endpoints are
+ * Omni's proxy; talosctl still needs the key in the environment to
+ * authenticate with it.
  */
-export async function writeTalosconfig(
+export async function mintTalosconfig(
   cluster: string,
-  path: string,
-  opts: OmnictlOptions,
-  signal?: AbortSignal,
-): Promise<void> {
-  const args = [
-    opts.omnictlPath,
-    "talosconfig",
-    "-c",
-    cluster,
-    "--merge=false",
-    "--force",
-    path,
-  ];
-  if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
-  await run(args, opts, signal);
-}
-
-/** Run `talosctl` against `nodes` through the given talosconfig. */
-export function talosctl(
-  talosconfig: string,
-  nodes: string[],
-  args: string[],
   opts: OmnictlOptions,
   signal?: AbortSignal,
 ): Promise<string> {
-  return run(
-    [
-      opts.talosctlPath,
-      "--talosconfig",
-      talosconfig,
-      "--nodes",
-      nodes.join(","),
-      ...args,
-    ],
-    opts,
-    signal,
-    args[0],
-  );
+  const dir = await Deno.makeTempDir({ prefix: "omni-talosconfig-" });
+  const path = `${dir}/talosconfig`;
+  try {
+    const args = [
+      opts.omnictlPath,
+      "talosconfig",
+      "-c",
+      cluster,
+      "--merge=false",
+      "--force",
+      path,
+    ];
+    if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
+    await run(args, opts, signal);
+    return await Deno.readTextFile(path);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
 }

@@ -1,43 +1,51 @@
 # @dataverket/omni
 
 Talos fleet discovery for [swamp](https://github.com/swamp-club/swamp), via
-[Sidero Omni](https://omni.siderolabs.com), plus the disk layout of every
-machine in a cluster.
+[Sidero Omni](https://omni.siderolabs.com).
 
 Forked from [`@mccormick/omni`](https://github.com/mccormickt/swamp-extensions)
 (MIT, copyright Tommy McCormick). The `discover` method and its `node`,
-`cluster` and `summary` resources are unchanged; `volumes` is added.
+`cluster` and `summary` resources are unchanged; `talosconfig` is added. Version
+2026.09.19.1 briefly carried a `volumes` method; it moved to
+`@dataverket/talosctl/node` in 2026.09.19.2, together with the `talosctlPath`
+argument, because everything spoken to the Talos API belongs on that model.
 
 ## Model type
 
 `@dataverket/omni/inventory`, one instance per Omni endpoint.
 
-| Method     | What it does                                                                                                                               |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `discover` | Every machine and cluster Omni manages: one `node` per machine, one `cluster` per cluster, one `summary`                                   |
-| `volumes`  | For one cluster (`--input cluster=<name>`): disks, partitions by label, unallocated space and EPHEMERAL usage, one `volumeLayout` per node |
+| Method        | What it does                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `discover`    | Every machine and cluster Omni manages: one `node` per machine, one `cluster` per cluster, one `summary`                  |
+| `talosconfig` | For one cluster (`--input cluster=<name>`): the admin talosconfig for the service account, stored as a sensitive resource |
 
-`volumes` fetches the cluster's machine identities from Omni for their node
-addresses, mints the cluster's admin talosconfig for the service account into a
-temporary file (`omnictl talosconfig`, never merged into `~/.talos/config`,
-removed afterwards), and runs `talosctl get disks`, `get discoveredvolumes` and
-`usage -d 1 /var` against all nodes at once through Omni's Talos proxy. The
-`volumeLayout` shape is shared with `@dataverket/talosctl/node`, so a lab
-cluster on plain talosctl and an Omni-managed one are queried the same way.
+The Talos API itself is not spoken to here. Give the stored talosconfig and the
+discovered node IPs to a `@dataverket/talosctl/node` model through CEL and run
+its `volumes`, `reset`, `upgrade` and the rest there:
+
+```yaml
+# models/@dataverket/talosctl/node/prod.yaml
+globalArguments:
+  nodes: ${{ data.findBySpec("omni", "node").filter(n, n.attributes.cluster == "prod" && size(n.attributes.nodeIps) > 0).map(n, n.attributes.nodeIps[0]) }}
+  talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
+  serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
+```
 
 ## Read-only and credential-safe
 
-Only `omnictl get`, `omnictl talosconfig`, `talosctl get` and `talosctl usage`
-are ever run. Both CLIs authenticate with the service account through the
-environment (`OMNI_ENDPOINT`, `OMNI_SERVICE_ACCOUNT_KEY`); nothing touches an
-on-disk omniconfig or opens a browser. The key is supplied through a vault,
-marked sensitive, and redacted from logs and error text. A read-only Omni role
-is sufficient.
+Only `omnictl get` and `omnictl talosconfig` are ever run, authenticated with
+the service account through the environment (`OMNI_ENDPOINT`,
+`OMNI_SERVICE_ACCOUNT_KEY`); nothing touches an on-disk omniconfig or opens a
+browser, and the minted talosconfig passes through a private temporary file that
+is removed at once. The key is supplied through a vault, marked sensitive, and
+redacted from logs and error text. A read-only Omni role is sufficient.
 
 ## Prerequisites
 
-`omnictl` and, for `volumes`, `talosctl` on `PATH` (or `omnictlPath` /
-`talosctlPath`). A service account:
+`omnictl` on `PATH` (or `omnictlPath`). A vault in the repository: the
+`talosconfig` resource's `content` is a sensitive field, and swamp refuses to
+run a method with sensitive output when no vault is configured. A service
+account:
 
 ```sh
 omnictl serviceaccount create swamp-omni-inventory
@@ -52,26 +60,23 @@ swamp model create @dataverket/omni/inventory omni
 #   endpoint: https://omni.example.net
 #   serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
 swamp model method run omni discover
-swamp model method run omni volumes --input cluster=prod
-swamp data query 'modelName == "omni" && specName == "volumeLayout" && isLatest' --json
+swamp model method run omni talosconfig --input cluster=prod
 ```
 
 ## Configuration
 
-| Global argument         | Required | Default    | Description                                               |
-| ----------------------- | -------- | ---------- | --------------------------------------------------------- |
-| `endpoint`              | yes      | —          | Omni API endpoint, e.g. `https://omni.example.net`        |
-| `serviceAccountKey`     | yes      | —          | `OMNI_SERVICE_ACCOUNT_KEY`; supply via a vault expression |
-| `insecureSkipTlsVerify` | no       | `false`    | Skip TLS verification (self-signed certs only)            |
-| `omnictlPath`           | no       | `omnictl`  | Path to the `omnictl` binary                              |
-| `talosctlPath`          | no       | `talosctl` | Path to the `talosctl` binary (`volumes` only)            |
+| Global argument         | Required | Default   | Description                                               |
+| ----------------------- | -------- | --------- | --------------------------------------------------------- |
+| `endpoint`              | yes      | —         | Omni API endpoint, e.g. `https://omni.example.net`        |
+| `serviceAccountKey`     | yes      | —         | `OMNI_SERVICE_ACCOUNT_KEY`; supply via a vault expression |
+| `insecureSkipTlsVerify` | no       | `false`   | Skip TLS verification (self-signed certs only)            |
+| `omnictlPath`           | no       | `omnictl` | Path to the `omnictl` binary                              |
 
 ## Consuming the data
 
 ```yaml
 allNodes: ${{ data.findBySpec("omni", "node") }}
 totalNodes: ${{ data.latest("omni", "summary").attributes.totalNodes }}
-workerEphemeral: ${{ data.latest("omni", "volume-wrkr-1").attributes.ephemeralUsedPercent }}
 ```
 
 ## License
