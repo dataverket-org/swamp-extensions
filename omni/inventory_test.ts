@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { model } from "./inventory.ts";
+import { clusterMembers, model } from "./inventory.ts";
 import { __setRunner, parseOmnictlJson } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
 
@@ -28,6 +28,24 @@ function makeContext() {
     },
   };
 }
+
+const identity = (id: string, cluster: string, name: string, ip: string) =>
+  JSON.stringify({
+    metadata: { id, labels: { "omni.sidero.dev/cluster": cluster } },
+    spec: { nodename: name, nodeips: [ip] },
+  });
+
+Deno.test("clusterMembers filters by cluster and sorts by hostname", () => {
+  const ids = parseOmnictlJson(
+    identity("m2", "prod", "wrkr-1", "10.0.0.3") +
+      identity("m1", "prod", "ctrl-1", "10.0.0.2") +
+      identity("m3", "lab", "x", "10.0.0.9"),
+  );
+  assertEquals(clusterMembers(ids, "prod").map((m) => [m.hostname, m.nodeIp]), [
+    ["ctrl-1", "10.0.0.2"],
+    ["wrkr-1", "10.0.0.3"],
+  ]);
+});
 
 Deno.test("parseOmnictlJson splits concatenated objects", () => {
   const rs = parseOmnictlJson(
@@ -84,6 +102,14 @@ Deno.test("a failing omnictl redacts the key from the error", async () => {
 Deno.test("talosconfig mints into a private temp file, stores the content, removes the file", async () => {
   let cfgPath = "";
   __setRunner(async (argv, env) => {
+    if (argv[1] === "get") {
+      return {
+        code: 0,
+        stderr: "",
+        stdout: identity("m1", "prod", "ctrl-1", "10.0.0.2") +
+          identity("m2", "prod", "wrkr-1", "10.0.0.3"),
+      };
+    }
     if (argv[1] !== "talosconfig") {
       return { code: 1, stdout: "", stderr: "unexpected" };
     }
@@ -101,6 +127,8 @@ Deno.test("talosconfig mints into a private temp file, stores the content, remov
     ]]);
     assertEquals(written[0].data.content, "context: prod\ncontexts: {}\n");
     assertEquals(written[0].data.endpoint, g.endpoint);
+    assertEquals(written[0].data.nodes, ["10.0.0.2", "10.0.0.3"]);
+    assertEquals(written[0].data.hostnames, ["ctrl-1", "wrkr-1"]);
     let exists = true;
     try {
       await Deno.stat(cfgPath);
@@ -123,6 +151,9 @@ Deno.test("talosconfig mints into a private temp file, stores the content, remov
 Deno.test("talosconfig removes the temp file when omnictl fails", async () => {
   let cfgPath = "";
   __setRunner((argv) => {
+    if (argv[1] === "get") {
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    }
     cfgPath = argv[6];
     return Promise.resolve({ code: 1, stdout: "", stderr: "no such cluster" });
   });

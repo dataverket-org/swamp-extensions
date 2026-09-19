@@ -14,19 +14,21 @@ argument, because everything spoken to the Talos API belongs on that model.
 
 `@dataverket/omni/inventory`, one instance per Omni endpoint.
 
-| Method        | What it does                                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `discover`    | Every machine and cluster Omni manages: one `node` per machine, one `cluster` per cluster, one `summary`                  |
-| `talosconfig` | For one cluster (`--input cluster=<name>`): the admin talosconfig for the service account, stored as a sensitive resource |
+| Method        | What it does                                                                                                                       |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `discover`    | Every machine and cluster Omni manages: one `node` per machine, one `cluster` per cluster, one `summary`                           |
+| `talosconfig` | For one cluster (`--input cluster=<name>`): its machines' node IPs and the admin talosconfig for the service account, one resource |
 
-The Talos API itself is not spoken to here. Give the stored talosconfig and the
-discovered node IPs to a `@dataverket/talosctl/node` model through CEL and run
-its `volumes`, `reset`, `upgrade` and the rest there:
+The Talos API itself is not spoken to here. Give the stored node IPs and
+talosconfig to a `@dataverket/talosctl/node` model through `data.latest` (the
+one data accessor swamp accepts in a model definition that a workflow runs;
+swamp-club Lab 2295) and run its `volumes`, `reset`, `upgrade` and the rest
+there:
 
 ```yaml
 # models/@dataverket/talosctl/node/prod.yaml
 globalArguments:
-  nodes: ${{ data.findBySpec("omni", "node").filter(n, n.attributes.cluster == "prod" && size(n.attributes.nodeIps) > 0).map(n, n.attributes.nodeIps[0]) }}
+  nodes: ${{ data.latest("omni", "talosconfig-prod").attributes.nodes }}
   talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
   serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
 ```
@@ -42,9 +44,10 @@ redacted from logs and error text. A read-only Omni role is sufficient.
 
 ## Prerequisites
 
-`omnictl` on `PATH` (or `omnictlPath`). A vault in the repository: the
-`talosconfig` resource's `content` is a sensitive field, and swamp refuses to
-run a method with sensitive output when no vault is configured. A service
+`omnictl` on `PATH` (or `omnictlPath`). The stored talosconfig is not a secret:
+it names Omni's proxy and the service account's identity, and is inert without
+`OMNI_SERVICE_ACCOUNT_KEY`, which stays in the vault. It is therefore an
+ordinary resource, and running `talosconfig` touches no vault. A service
 account:
 
 ```sh
