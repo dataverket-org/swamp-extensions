@@ -1,0 +1,36 @@
+manifestVersion: 1
+name: "@dataverket/talosctl"
+version: "2026.09.19.1"
+description: >
+  Talos Linux machines for swamp, through `talosctl`, with or without Omni.
+
+  One model type, `@dataverket/talosctl/node`, targets one or many nodes:
+  version, services and etcd members, the cluster kubeconfig, apply and
+  patch machine config, bootstrap, reboot, shutdown, reset (whole system
+  disk or only named partitions such as EPHEMERAL), upgrade, and the cluster
+  health check. `volumes` reads every node's disks, partitions by label,
+  unallocated space on the system disk and how full EPHEMERAL is, in one
+  execution, so a plan for user volumes starts from measured numbers.
+
+  Forked from `@magistr/talos-node` (MIT) and typed; the same methods are
+  offered by `@dataverket/omni` through Omni's proxy for Omni-managed fleets,
+  so a lab cluster on plain talosctl and a managed one share one data shape.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - node.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - talos
+  - kubernetes
+  - infrastructure
+  - volumes
+  - disks
+dependencies: []
