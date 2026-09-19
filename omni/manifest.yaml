@@ -1,0 +1,40 @@
+manifestVersion: 1
+name: "@dataverket/omni"
+version: "2026.09.19.1"
+description: >
+  Talos fleet discovery for swamp, via Sidero Omni, plus the disk layout of
+  every machine in a cluster.
+
+  `@dataverket/omni/inventory` asks Omni for its fleet state and writes a
+  typed inventory: one `node` per managed machine (hardware, network, Talos
+  version, cluster role, connection and readiness), one `cluster` per
+  cluster, and a `summary` roll-up. `volumes` then reads one cluster's
+  machines through Omni's Talos proxy: disks, partitions by label,
+  unallocated space on the system disk and how full EPHEMERAL is, one
+  `volumeLayout` per node, the same shape `@dataverket/talosctl` produces on a
+  cluster without Omni.
+
+  Forked from `@mccormick/omni` (MIT). Read-only: `omnictl get`,
+  `omnictl talosconfig` and `talosctl get`/`usage` only, authenticated with
+  an Omni service account passed through the environment; the key comes from
+  a vault, is marked sensitive, and is redacted from logs and errors.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - inventory.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - omni
+  - talos
+  - kubernetes
+  - inventory
+  - siderolabs
+  - volumes
+dependencies: []
