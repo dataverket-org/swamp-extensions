@@ -6,7 +6,7 @@
  * tracks their health. `discover` asks Omni for that fleet state and writes a
  * typed inventory — one `node` per machine, one `cluster` per cluster, and a
  * `summary` roll-up. `talosconfig` mints one cluster's admin talosconfig for
- * the service account and stores it as a sensitive resource, which is what a
+ * the service account and stores it, with the node IPs, as a resource, which is what a
  * `@dataverket/talosctl/node` model needs to speak to the machines through
  * Omni's proxy; everything said to the Talos API itself lives on that model.
  *
@@ -104,9 +104,9 @@ export const TalosconfigSchema = z.object({
     "Node IP of every machine in the cluster that has one, sorted by hostname",
   ),
   hostnames: z.array(z.string()).describe("Hostnames in the same order"),
-  content: z.string().describe("The talosconfig YAML").meta({
-    sensitive: true,
-  }),
+  content: z.string().describe(
+    "The talosconfig YAML: Omni's proxy endpoint and the service account's identity, inert without OMNI_SERVICE_ACCOUNT_KEY",
+  ),
   timestamp: z.string(),
 });
 
@@ -150,7 +150,7 @@ export function clusterMembers(
  */
 export const model = {
   type: "@dataverket/omni/inventory",
-  version: "2026.09.19.3",
+  version: "2026.09.19.4",
   globalArguments: GlobalArgs,
   resources: {
     node: {
@@ -173,7 +173,7 @@ export const model = {
     },
     talosconfig: {
       description:
-        "How to reach one cluster: its admin talosconfig for the service account (content, sensitive) and its machines' node IPs; a talosctl model takes both by CEL",
+        "How to reach one cluster: its admin talosconfig for the service account and its machines' node IPs; a talosctl model takes both by CEL. The config carries an identity, not a key",
       schema: TalosconfigSchema,
       lifetime: "30d" as const,
       garbageCollection: 5,
@@ -254,7 +254,7 @@ export const model = {
     },
     talosconfig: {
       description:
-        "Mint one cluster's admin talosconfig for the service account and store it with the cluster's node IPs as a talosconfig resource (content is sensitive). Nothing is written to ~/.talos/config. Read-only against Omni.",
+        "Mint one cluster's admin talosconfig for the service account and store it with the cluster's node IPs as a talosconfig resource. The config names an identity and Omni's proxy, no key; nothing is written to ~/.talos/config. Read-only against Omni.",
       arguments: TalosconfigArgs,
       execute: async (
         args: z.infer<typeof TalosconfigArgs>,
