@@ -21,7 +21,7 @@ function makeContext() {
     written,
     context: {
       globalArgs: g,
-      logger: { info() {}, warn() {} },
+      logger: { info() {}, warning() {} },
       writeResource(spec: string, name: string, data: Record<string, unknown>) {
         written.push({ spec, name, data });
         return Promise.resolve({ name });
@@ -182,6 +182,46 @@ Deno.test("a failing omnictl redacts the key from the error", async () => {
       Error,
       "[REDACTED]",
     );
+  } finally {
+    __setRunner();
+  }
+});
+
+Deno.test("volumes removes the temp talosconfig when talosctl fails", async () => {
+  let cfgPath = "";
+  __setRunner((argv) => {
+    const l = argv.join(" ");
+    if (l.includes(" get clustermachineidentity ")) {
+      return Promise.resolve({
+        code: 0,
+        stderr: "",
+        stdout: identity("m1", "prod", "ctrl-1", "10.0.0.2"),
+      });
+    }
+    if (argv[1] === "talosconfig") {
+      cfgPath = argv[6];
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    }
+    return Promise.resolve({
+      code: 1,
+      stdout: "",
+      stderr: "rpc error: Unavailable",
+    });
+  });
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () => model.methods.volumes.execute({ cluster: "prod" }, context),
+      Error,
+      "failed (exit 1): rpc error: Unavailable",
+    );
+    let exists = true;
+    try {
+      await Deno.stat(cfgPath);
+    } catch {
+      exists = false;
+    }
+    assertEquals(exists, false);
   } finally {
     __setRunner();
   }

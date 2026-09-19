@@ -2,19 +2,27 @@ import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model, options, parseEtcdMembers, parseServices } from "./node.ts";
 import { talosctlArgs } from "./talosctl.ts";
 import { fail, installFake, makeContext } from "./test_support.ts";
+import { talosctl as runTalosctl } from "./talosctl.ts";
 
 Deno.test("options targets nodes, falls back to endpoint, refuses neither", () => {
   assertEquals(
-    options({ endpoint: "10.0.0.1", insecure: false, talosctlPath: "t" }).nodes,
+    options({
+      endpoint: "10.0.0.1",
+      insecure: false,
+      talosctlPath: "t",
+      retryDelayMs: 0,
+    }).nodes,
     ["10.0.0.1"],
   );
   const o = options({
     nodes: ["a", "b"],
+    endpoint: "https://omni.example.net",
     talosconfig: "/tmp/tc",
     insecure: false,
     talosctlPath: "t",
+    retryDelayMs: 0,
   });
-  assertEquals(o.endpoints, undefined);
+  assertEquals(o.endpoints, undefined, "nodes given: no --endpoints");
   assertEquals(talosctlArgs(o, ["get", "disks"]), [
     "get",
     "disks",
@@ -25,7 +33,7 @@ Deno.test("options targets nodes, falls back to endpoint, refuses neither", () =
   ]);
   let threw = false;
   try {
-    options({ insecure: false, talosctlPath: "t" });
+    options({ insecure: false, talosctlPath: "t", retryDelayMs: 0 });
   } catch {
     threw = true;
   }
@@ -89,12 +97,10 @@ Deno.test("volumes writes one layout per node from four reads", async () => {
   try {
     await model.methods.volumes.execute({}, context);
     assertEquals(written.map((w) => [w.spec, w.name]), [
-      ["volumeLayout", "one"],
-      ["volumeLayout", "two"],
-    ]);
+      ["volumeLayout", "volume-one"],
+    ], "n2 has no usage row and is skipped");
     assertEquals(written[0].data.systemDiskUnallocatedBytes, 10);
     assertEquals(written[0].data.ephemeralUsedPercent, 50);
-    assertEquals(written[1].data.ephemeralSizeBytes, 0);
     assertEquals(fake.calls.every((c) => c.args.includes("n1,n2")), true);
   } finally {
     fake.restore();
@@ -133,6 +139,54 @@ Deno.test("a failing talosctl surfaces its stderr", async () => {
       Error,
       "permission denied",
     );
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("transient errors are retried the requested number of times", async () => {
+  let n = 0;
+  const fake = installFake(() => {
+    n++;
+    return n < 3 ? fail("rpc error: connection refused") : "ok";
+  });
+  try {
+    const r = await runTalosctl(
+      { talosctlPath: "t", nodes: ["a"], retryDelayMs: 0 },
+      ["version"],
+      { retries: 5 },
+    );
+    assertEquals(r.stdout, "ok");
+    assertEquals(n, 3);
+    n = 0;
+    await assertRejects(
+      () =>
+        runTalosctl({ talosctlPath: "t", nodes: ["a"], retryDelayMs: 0 }, [
+          "version",
+        ], { retries: 1 }),
+      Error,
+      "connection refused",
+    );
+    assertEquals(n, 2, "gives up after retries");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("the service-account key reaches the environment and never the error", async () => {
+  const fake = installFake(() => fail("denied for KEY123"));
+  const { context } = makeContext({
+    nodes: ["a"],
+    serviceAccountKey: "KEY123",
+    retryDelayMs: 0,
+  });
+  try {
+    await assertRejects(
+      () => model.methods.version.execute({}, context),
+      Error,
+      "[REDACTED]",
+    );
+    assertEquals(fake.calls[0].env.OMNI_SERVICE_ACCOUNT_KEY, "KEY123");
   } finally {
     fake.restore();
   }

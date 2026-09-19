@@ -48,7 +48,12 @@ export function makeContext(g: Partial<GlobalArgs> = {}): {
     data: Record<string, unknown>;
   }[] = [];
   const context: ModelContext = {
-    globalArgs: { insecure: false, talosctlPath: "talosctl", ...g },
+    globalArgs: {
+      insecure: false,
+      talosctlPath: "talosctl",
+      retryDelayMs: 0,
+      ...g,
+    },
     logger: { info() {}, warning() {} },
     writeResource(spec, name, data): Promise<DataHandle> {
       written.push({ spec, name, data });

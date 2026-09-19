@@ -1,9 +1,10 @@
 /**
  * `@dataverket/omni` — what is on a Talos machine's disks, from three
  * `talosctl` reads: `get disks`, `get discoveredvolumes` and `usage /var`.
- * Pure parsing and shaping; no I/O. The `talos` extension in this repository
- * carries the original (`talosctl/layout.ts`), kept in sync by hand,
- * because each extension is packaged from its own directory.
+ * Pure parsing and shaping; no I/O. The `talosctl` extension in this
+ * repository carries the original (`talosctl/layout.ts`); `layout_sync_test.ts`
+ * fails when the two bodies drift, because each extension is packaged from its
+ * own directory.
  *
  * @module
  */
@@ -26,7 +27,7 @@ export const PartitionSchema = z.object({
   parentDevPath: z.string(),
   index: z.number().int(),
   label: z.string().describe(
-    "Partition label: EPHEMERAL, STATE, u-<name>, ...",
+    "Partition label: EPHEMERAL, STATE, u-<name>, ...; empty when unlabeled",
   ),
   filesystem: z.string().describe("Probed filesystem, or empty"),
   sizeBytes: z.number(),
@@ -144,12 +145,12 @@ export function buildLayout(
   timestamp: string,
 ): VolumeLayout {
   const partitions: z.infer<typeof PartitionSchema>[] = volumes
-    .filter((v) => v.spec.partition_label !== undefined)
+    .filter((v) => v.spec.partition_index !== undefined)
     .map((v) => ({
       devPath: String(v.spec.dev_path),
       parentDevPath: String(v.spec.parent_dev_path ?? ""),
       index: Number(v.spec.partition_index ?? 0),
-      label: String(v.spec.partition_label),
+      label: String(v.spec.partition_label ?? ""),
       filesystem: String(v.spec.name ?? ""),
       sizeBytes: Number(v.spec.size ?? 0),
     }))
@@ -199,6 +200,36 @@ export function buildLayout(
       .map((p) => p.label.slice(2)),
     timestamp,
   };
+}
+
+/**
+ * Normalize a string into a safe `writeResource` instance name: lowercase,
+ * non-alphanumeric runs collapsed to `-`, trimmed, never empty.
+ */
+export function sanitizeInstanceName(raw: string): string {
+  const cleaned = raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
+    /^-+|-+$/g,
+    "",
+  );
+  return cleaned === "" ? "unnamed" : cleaned;
+}
+
+/**
+ * Why a node cannot be laid out from what talosctl returned, or `null` when
+ * it can. A node with no disk records, no STATE partition, or no usage row
+ * must be skipped rather than written as an empty disk.
+ */
+export function layoutProblem(
+  disks: TalosRecord[],
+  volumes: TalosRecord[],
+  usage: Usage | undefined,
+): string | null {
+  if (disks.length === 0) return "no disk records";
+  if (!volumes.some((v) => v.spec.partition_label === "STATE")) {
+    return "no STATE partition";
+  }
+  if (usage === undefined) return "no /var usage row";
+  return null;
 }
 
 /** Hostname of a node from its `get hostname -o json` record, or the address. */

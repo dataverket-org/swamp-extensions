@@ -1,7 +1,9 @@
 MIT License
 
-Copyright (c) 2026 Jan Ivar Beddari Copyright (c) 2026 Tommy McCormick (original
-work: @mccormick/omni, https://github.com/mccormickt/swamp-extensions)
+Copyright (c) 2026 Jan Ivar Beddari
+
+Copyright (c) 2026 Tommy McCormick (original work: @mccormick/omni,
+https://github.com/mccormickt/swamp-extensions)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

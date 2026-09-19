@@ -37,6 +37,7 @@ import { assertHttpsUrl } from "./util.ts";
 import {
   buildLayout,
   forNode,
+  layoutProblem,
   parseConcatJson,
   parseUsage,
   VolumeLayoutSchema,
@@ -74,7 +75,7 @@ export interface MethodContext {
   signal?: AbortSignal;
   logger: {
     info(message: string, props?: Record<string, unknown>): void;
-    warn(message: string, props?: Record<string, unknown>): void;
+    warning(message: string, props?: Record<string, unknown>): void;
   };
   writeResource(
     specName: string,
@@ -243,7 +244,7 @@ export const model = {
           },
         );
         for (const note of merged.summary.notes) {
-          context.logger.warn("omni: {note}", { note });
+          context.logger.warning("omni: {note}", { note });
         }
         return { dataHandles: handles };
       },
@@ -298,11 +299,20 @@ export const model = {
           const ts = new Date().toISOString();
           const handles: DataHandle[] = [];
           for (const m of members) {
+            const d = forNode(disks, m.nodeIp), v = forNode(volumes, m.nodeIp);
+            const problem = layoutProblem(d, v, usage[m.nodeIp]);
+            if (problem) {
+              context.logger.warning("{host}: skipped, {problem}", {
+                host: m.hostname,
+                problem,
+              });
+              continue;
+            }
             const layout = buildLayout(
               m.hostname,
               m.nodeIp,
-              forNode(disks, m.nodeIp),
-              forNode(volumes, m.nodeIp),
+              d,
+              v,
               usage[m.nodeIp],
               ts,
             );
@@ -322,6 +332,9 @@ export const model = {
                 layout,
               ),
             );
+          }
+          if (handles.length === 0) {
+            throw new Error("no machine returned a usable disk layout");
           }
           return { dataHandles: handles };
         } finally {

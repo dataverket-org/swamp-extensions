@@ -1,7 +1,9 @@
 MIT License
 
-Copyright (c) 2026 Jan Ivar Beddari Copyright (c) 2026 magistr (original work:
-@magistr/talos-node, https://github.com/umag/swamp-workspace)
+Copyright (c) 2026 Jan Ivar Beddari
+
+Copyright (c) 2026 magistr (original work: @magistr/talos-node,
+https://github.com/umag/swamp-workspace)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

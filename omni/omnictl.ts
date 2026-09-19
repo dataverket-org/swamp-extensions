@@ -12,6 +12,7 @@
  * @module
  */
 import { redactSecret } from "./util.ts";
+import { parseConcatJson } from "./talos_layout.ts";
 
 /**
  * A COSI resource as emitted by `omnictl get -o json`: every Omni resource is
@@ -65,56 +66,32 @@ export function __setRunner(runner?: Runner): void {
 }
 
 /**
- * Parse `omnictl get -o json` (and `talosctl get -o json`) output: one
- * pretty-printed JSON object per resource, concatenated with no array
- * wrapper. A leading `[` is treated as a single array for forward
- * compatibility; empty input yields an empty array.
+ * Parse `omnictl get -o json` output: one pretty-printed JSON object per
+ * resource, concatenated with no array wrapper. Same format as
+ * `talosctl get -o json`, so one parser serves both.
  */
 export function parseOmnictlJson(stdout: string): CosiResource[] {
-  const text = stdout.trim();
-  if (text.length === 0) return [];
-  if (text.startsWith("[")) {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : [parsed];
-  }
-  const objects: CosiResource[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        objects.push(JSON.parse(text.slice(start, i + 1)) as CosiResource);
-        start = -1;
-      } else if (depth < 0) {
-        throw new Error("omnictl JSON output has an unbalanced closing brace");
-      }
-    }
-  }
-  if (depth !== 0) {
-    throw new Error("omnictl JSON output ended with unbalanced braces");
-  }
-  return objects;
+  return parseConcatJson(stdout) as unknown as CosiResource[];
+}
+
+/** Inherited variables the subprocesses keep; everything else is dropped. */
+const KEEP_ENV = ["PATH", "HOME", "TMPDIR", "USER"];
+
+/** The subprocess environment: a short allow-list plus the Omni auth. */
+export function buildEnv(
+  extra: Record<string, string>,
+  base: Record<string, string> = Deno.env.toObject(),
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of KEEP_ENV) if (base[k] !== undefined) env[k] = base[k];
+  return { ...env, ...extra };
 }
 
 const defaultRunner: Runner = async (argv, env, signal) => {
   const command = new Deno.Command(argv[0], {
     args: argv.slice(1),
-    env: { ...Deno.env.toObject(), ...env },
+    env,
+    clearEnv: true,
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
@@ -148,20 +125,28 @@ export function authEnv(opts: OmnictlOptions): Record<string, string> {
   };
 }
 
-/** Run one command; a non-zero exit throws with the redacted stderr. */
+/**
+ * Run one command; a non-zero exit throws with the redacted stderr, labelled
+ * `<binary> <label>` (the subcommand, not whatever flag comes first).
+ */
 export async function run(
   argv: string[],
   opts: OmnictlOptions,
   signal?: AbortSignal,
+  label = argv[1],
 ): Promise<string> {
-  const r = await (testRunner ?? defaultRunner)(argv, authEnv(opts), signal);
+  const r = await (testRunner ?? defaultRunner)(
+    argv,
+    buildEnv(authEnv(opts)),
+    signal,
+  );
   if (r.code !== 0) {
     const text = redactSecret(
       (r.stderr || r.stdout).trim(),
       opts.serviceAccountKey,
     );
     throw new Error(
-      `${argv[0]} ${argv[1]} failed (exit ${r.code}): ${
+      `${argv[0]} ${label} failed (exit ${r.code}): ${
         text || "no stderr output"
       }`,
     );
@@ -224,5 +209,6 @@ export function talosctl(
     ],
     opts,
     signal,
+    args[0],
   );
 }

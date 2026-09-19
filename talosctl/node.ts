@@ -20,8 +20,10 @@ import {
   buildLayout,
   forNode,
   hostnameOf,
+  layoutProblem,
   parseConcatJson,
   parseUsage,
+  sanitizeInstanceName,
   VolumeLayoutSchema,
 } from "./layout.ts";
 
@@ -41,6 +43,12 @@ export const GlobalArgsSchema = z.object({
   ),
   talosctlPath: z.string().default("talosctl").describe(
     "Path to the talosctl binary; override when it is not on PATH",
+  ),
+  serviceAccountKey: z.string().optional().describe(
+    "Omni service-account key for an Omni-issued talosconfig (OMNI_SERVICE_ACCOUNT_KEY); supply via a vault expression",
+  ).meta({ sensitive: true }),
+  retryDelayMs: z.number().int().min(0).default(15000).describe(
+    "Pause between retries of transient API errors",
   ),
 });
 /** {@link GlobalArgsSchema} */
@@ -71,22 +79,29 @@ export interface MethodResult {
   dataHandles: DataHandle[];
 }
 
-/** Translate global arguments into transport options; throws with no target. */
+/**
+ * Translate global arguments into transport options; throws with no target.
+ * `--endpoints` is only emitted when `endpoint` stands alone: with an
+ * explicit `nodes` list the talosconfig's endpoints (Omni's proxy, say) are
+ * what should be used.
+ */
 export function options(g: GlobalArgs, insecure?: boolean): TalosctlOptions {
-  const nodes = g.nodes && g.nodes.length > 0
-    ? g.nodes
-    : g.endpoint
-    ? [g.endpoint]
-    : [];
+  const explicit = g.nodes !== undefined && g.nodes.length > 0;
+  const nodes = explicit ? g.nodes! : g.endpoint ? [g.endpoint] : [];
   if (nodes.length === 0) {
     throw new Error("set globalArguments.nodes or globalArguments.endpoint");
   }
+  const env: Record<string, string> = {};
+  if (g.serviceAccountKey) env.OMNI_SERVICE_ACCOUNT_KEY = g.serviceAccountKey;
   return {
     talosctlPath: g.talosctlPath,
     talosconfig: g.talosconfig,
-    endpoints: g.endpoint ? [g.endpoint] : undefined,
+    endpoints: !explicit && g.endpoint ? [g.endpoint] : undefined,
     nodes,
     insecure: insecure ?? g.insecure,
+    env,
+    secrets: g.serviceAccountKey ? [g.serviceAccountKey] : [],
+    retryDelayMs: g.retryDelayMs,
   };
 }
 
@@ -278,18 +293,22 @@ export const model = {
           const { stdout } = await talosctl({ ...opts, nodes: [node] }, [
             "version",
             "--json",
-          ]);
+          ], { signal: context.signal });
           const data = JSON.parse(stdout);
           const ver = data.version ?? data.server?.version ?? {};
           handles.push(
-            await context.writeResource("version", `version-${node}`, {
-              node,
-              tag: ver.tag ?? "unknown",
-              sha: ver.sha,
-              arch: ver.arch,
-              platform: data.platform?.name,
-              timestamp: now(),
-            }),
+            await context.writeResource(
+              "version",
+              `version-${sanitizeInstanceName(node)}`,
+              {
+                node,
+                tag: ver.tag ?? "unknown",
+                sha: ver.sha,
+                arch: ver.arch,
+                platform: data.platform?.name,
+                timestamp: now(),
+              },
+            ),
           );
         }
         return { dataHandles: handles };
@@ -304,14 +323,18 @@ export const model = {
       ): Promise<MethodResult> => {
         const { stdout } = await talosctl(options(context.globalArgs), [
           "services",
-        ]);
+        ], { signal: context.signal });
         const handles: DataHandle[] = [];
         for (const s of parseServices(stdout)) {
           handles.push(
-            await context.writeResource("service", `${s.node}-${s.id}`, {
-              ...s,
-              timestamp: now(),
-            }),
+            await context.writeResource(
+              "service",
+              `service-${sanitizeInstanceName(`${s.node}-${s.id}`)}`,
+              {
+                ...s,
+                timestamp: now(),
+              },
+            ),
           );
         }
         return { dataHandles: handles };
@@ -327,14 +350,18 @@ export const model = {
         const { stdout } = await talosctl(options(context.globalArgs), [
           "etcd",
           "members",
-        ]);
+        ], { signal: context.signal });
         const handles: DataHandle[] = [];
         for (const m of parseEtcdMembers(stdout)) {
           handles.push(
-            await context.writeResource("etcdMember", m.hostname, {
-              ...m,
-              timestamp: now(),
-            }),
+            await context.writeResource(
+              "etcdMember",
+              `etcd-${sanitizeInstanceName(m.hostname)}`,
+              {
+                ...m,
+                timestamp: now(),
+              },
+            ),
           );
         }
         return { dataHandles: handles };
@@ -350,7 +377,7 @@ export const model = {
         const { stdout } = await talosctl(options(context.globalArgs), [
           "kubeconfig",
           "-",
-        ]);
+        ], { signal: context.signal });
         const handle = await context.writeResource("kubeconfig", "main", {
           kubeconfig: stdout,
           timestamp: now(),
@@ -383,11 +410,20 @@ export const model = {
         const ts = now();
         const handles: DataHandle[] = [];
         for (const node of opts.nodes) {
+          const d = forNode(disks, node), v = forNode(volumes, node);
+          const problem = layoutProblem(d, v, usage[node]);
+          if (problem) {
+            context.logger.warning("{node}: skipped, {problem}", {
+              node,
+              problem,
+            });
+            continue;
+          }
           const layout = buildLayout(
             hostnameOf(hostnames, node),
             node,
-            forNode(disks, node),
-            forNode(volumes, node),
+            d,
+            v,
             usage[node],
             ts,
           );
@@ -403,10 +439,13 @@ export const model = {
           handles.push(
             await context.writeResource(
               "volumeLayout",
-              layout.hostname,
+              `volume-${sanitizeInstanceName(layout.hostname)}`,
               layout,
             ),
           );
+        }
+        if (handles.length === 0) {
+          throw new Error("no targeted node returned a usable disk layout");
         }
         return { dataHandles: handles };
       },
@@ -602,7 +641,7 @@ export const model = {
         const { stdout } = await talosctl(
           options(context.globalArgs),
           ["health", "--wait-timeout", args.waitTimeout],
-          { retries: 20, signal: context.signal },
+          { signal: context.signal },
         );
         return await resultOf(
           context,
