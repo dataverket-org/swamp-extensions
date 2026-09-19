@@ -25,6 +25,7 @@ import {
   SummarySchema,
 } from "./schema.ts";
 import {
+  type CosiResource,
   getResources,
   mintTalosconfig,
   type OmnictlOptions,
@@ -91,15 +92,57 @@ const TalosconfigArgs = z.object({
   cluster: z.string().min(1).describe("Omni cluster name"),
 });
 
-/** A cluster's admin talosconfig for the service account. */
+/**
+ * How to reach one cluster: its admin talosconfig for the service account,
+ * and the machines behind Omni's proxy. `nodes` is what a talosctl model
+ * takes as its target list.
+ */
 export const TalosconfigSchema = z.object({
   cluster: z.string(),
   endpoint: z.string().describe("Omni endpoint the config routes through"),
+  nodes: z.array(z.string()).describe(
+    "Node IP of every machine in the cluster that has one, sorted by hostname",
+  ),
+  hostnames: z.array(z.string()).describe("Hostnames in the same order"),
   content: z.string().describe("The talosconfig YAML").meta({
     sensitive: true,
   }),
   timestamp: z.string(),
 });
+
+/** One machine of a cluster as `ClusterMachineIdentity` names it. */
+export interface Member {
+  machineId: string;
+  hostname: string;
+  nodeIp: string;
+}
+
+/** Members of `cluster` with a node IP, from `clustermachineidentity`, by hostname. */
+export function clusterMembers(
+  identities: CosiResource[],
+  cluster: string,
+): Member[] {
+  const out: Member[] = [];
+  for (const r of identities) {
+    if ((r.metadata.labels ?? {})["omni.sidero.dev/cluster"] !== cluster) {
+      continue;
+    }
+    const ips = Array.isArray(r.spec.nodeips)
+      ? (r.spec.nodeips as unknown[]).filter((v): v is string =>
+        typeof v === "string"
+      )
+      : [];
+    if (ips.length === 0) continue;
+    out.push({
+      machineId: r.metadata.id,
+      hostname: typeof r.spec.nodename === "string" && r.spec.nodename !== ""
+        ? r.spec.nodename
+        : r.metadata.id,
+      nodeIp: ips[0],
+    });
+  }
+  return out.sort((a, b) => a.hostname.localeCompare(b.hostname));
+}
 
 /**
  * `@dataverket/omni/inventory` — discovers every Talos machine and cluster an
@@ -107,7 +150,7 @@ export const TalosconfigSchema = z.object({
  */
 export const model = {
   type: "@dataverket/omni/inventory",
-  version: "2026.09.19.2",
+  version: "2026.09.19.3",
   globalArguments: GlobalArgs,
   resources: {
     node: {
@@ -130,7 +173,7 @@ export const model = {
     },
     talosconfig: {
       description:
-        "One cluster's admin talosconfig for the service account; feed it to a talosctl model as talosconfigContent",
+        "How to reach one cluster: its admin talosconfig for the service account (content, sensitive) and its machines' node IPs; a talosctl model takes both by CEL",
       schema: TalosconfigSchema,
       lifetime: "30d" as const,
       garbageCollection: 5,
@@ -211,7 +254,7 @@ export const model = {
     },
     talosconfig: {
       description:
-        "Mint one cluster's admin talosconfig for the service account and store it as a sensitive talosconfig resource. Nothing is written to ~/.talos/config. Read-only against Omni.",
+        "Mint one cluster's admin talosconfig for the service account and store it with the cluster's node IPs as a talosconfig resource (content is sensitive). Nothing is written to ~/.talos/config. Read-only against Omni.",
       arguments: TalosconfigArgs,
       execute: async (
         args: z.infer<typeof TalosconfigArgs>,
@@ -221,17 +264,24 @@ export const model = {
         context.logger.info("omni: minting talosconfig for {cluster}", {
           cluster: args.cluster,
         });
-        const content = await mintTalosconfig(
-          args.cluster,
-          opts,
-          context.signal,
-        );
+        const [content, identities] = await Promise.all([
+          mintTalosconfig(args.cluster, opts, context.signal),
+          getResources("clustermachineidentity", opts, context.signal),
+        ]);
+        const members = clusterMembers(identities, args.cluster);
+        if (members.length === 0) {
+          throw new Error(
+            `cluster ${args.cluster} has no machines with node IPs in Omni`,
+          );
+        }
         const handle = await context.writeResource(
           "talosconfig",
           `talosconfig-${sanitizeInstanceName(args.cluster)}`,
           {
             cluster: args.cluster,
             endpoint: opts.endpoint,
+            nodes: members.map((m) => m.nodeIp),
+            hostnames: members.map((m) => m.hostname),
             content,
             timestamp: new Date().toISOString(),
           },

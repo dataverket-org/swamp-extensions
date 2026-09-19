@@ -58,7 +58,7 @@ browser:
 
 ```yaml
 globalArguments:
-  nodes: ${{ data.findBySpec("omni", "node").filter(n, n.attributes.cluster == "prod" && size(n.attributes.nodeIps) > 0).map(n, n.attributes.nodeIps[0]) }}
+  nodes: ${{ data.latest("omni", "talosconfig-prod").attributes.nodes }}
   talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
   serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
 ```

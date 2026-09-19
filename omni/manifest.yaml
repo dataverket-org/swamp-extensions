@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/omni"
-version: "2026.09.19.2"
+version: "2026.09.19.3"
 description: >
   Talos fleet discovery for swamp, via Sidero Omni.
 
@@ -8,9 +8,9 @@ description: >
   typed inventory: one `node` per managed machine (hardware, network, Talos
   version, cluster role, connection and readiness), one `cluster` per
   cluster, and a `summary` roll-up. `talosconfig` mints one cluster's admin
-  talosconfig for the service account and stores it as a sensitive resource,
-  which is what `@dataverket/talosctl/node` needs to reach the machines
-  through Omni's proxy; every verb spoken to the Talos API lives on that
+  talosconfig for the service account and stores it, with the cluster's node
+  IPs, as one resource: everything `@dataverket/talosctl/node` needs to reach
+  the machines through Omni's proxy; every verb spoken to the Talos API lives on that
   model, so a lab cluster on plain talosctl and an Omni fleet share one code
   path.
 
