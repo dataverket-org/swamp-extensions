@@ -1,5 +1,5 @@
 /**
- * `@dataverket/omni` — `omnictl` subprocess transport.
+ * `@dataverket/omnictl` — `omnictl` subprocess transport.
  *
  * The inventory model reads Omni's COSI resources through the `omnictl` CLI
  * (`omnictl get <type> -o json`) and mints cluster talosconfigs
@@ -226,4 +226,91 @@ export async function mintTalosconfig(
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+}
+
+/** True when omnictl's failure text says the resource does not exist. */
+function isNotFound(message: string): boolean {
+  return /not found|doesn't exist|does not exist|NotFound/i.test(message);
+}
+
+/**
+ * Fetch one resource by type and id, or `null` when Omni has none. Any other
+ * failure throws as {@link run} does.
+ */
+export async function getResource(
+  resourceType: string,
+  id: string,
+  opts: OmnictlOptions,
+  signal?: AbortSignal,
+): Promise<CosiResource | null> {
+  const args = [opts.omnictlPath, "get", resourceType, id, "-o", "json"];
+  if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
+  try {
+    const out = parseOmnictlJson(await run(args, opts, signal));
+    return out[0] ?? null;
+  } catch (err) {
+    if (err instanceof Error && isNotFound(err.message)) return null;
+    throw err;
+  }
+}
+
+/**
+ * `omnictl apply -f` one resource, written as JSON (valid YAML) into a file
+ * in a private temporary directory that is removed afterwards. With `dryRun`
+ * omnictl validates and prints what it would do but changes nothing; the
+ * output is returned either way.
+ */
+export async function applyResource(
+  resource: CosiResource,
+  opts: OmnictlOptions,
+  signal?: AbortSignal,
+  dryRun = false,
+): Promise<string> {
+  const dir = await Deno.makeTempDir({ prefix: "omnictl-apply-" });
+  const path = `${dir}/resource.json`;
+  try {
+    await Deno.writeTextFile(path, JSON.stringify(resource, null, 2));
+    const args = [opts.omnictlPath, "apply", "-f", path];
+    if (dryRun) args.push("--dry-run");
+    if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
+    return await run(args, opts, signal);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+}
+
+/** `omnictl delete <type> <id>`; waits for the deletion to complete. */
+export async function deleteResource(
+  resourceType: string,
+  id: string,
+  opts: OmnictlOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  const args = [opts.omnictlPath, "delete", resourceType, id];
+  if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
+  await run(args, opts, signal);
+}
+
+/**
+ * `omnictl cluster machine delete <id> --timeout <d>`: Omni drains the node,
+ * wipes the machine and returns it to the unallocated pool; the command waits
+ * for that to finish. Never passes `--force` or `--force-etcd-leave`.
+ */
+export async function clusterMachineDelete(
+  id: string,
+  timeout: string,
+  opts: OmnictlOptions,
+  signal?: AbortSignal,
+): Promise<string> {
+  const args = [
+    opts.omnictlPath,
+    "cluster",
+    "machine",
+    "delete",
+    id,
+    "--timeout",
+    timeout,
+  ];
+  if (opts.insecureSkipTlsVerify) args.push("--insecure-skip-tls-verify");
+  return await run(args, opts, signal, "cluster machine delete");
 }

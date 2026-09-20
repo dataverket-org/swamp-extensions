@@ -9,7 +9,7 @@ independently:
 | ------------ | ----------------------- | ------------------------------------------------------------------------ |
 | `openstack/` | `@dataverket/openstack` | Nova, Cinder, Neutron, Glance and Keystone through the `openstack` CLI   |
 | `talosctl/`  | `@dataverket/talosctl`  | Talos machines through `talosctl`, with or without Omni; fork of `@magistr/talos-node` (MIT) plus `volumes` |
-| `omni/`      | `@dataverket/omni`      | Talos fleet inventory via Omni, plus a minted talosconfig per cluster; fork of `@mccormick/omni` (MIT) |
+| `omnictl/`   | `@dataverket/omnictl`   | Omni through `omnictl`: fleet inventory and join tokens (Reader), config patches and machine-set membership (Operator); fork of `@mccormick/omni` (MIT) |
 
 Develop against a swamp repository by loading every extension from source:
 

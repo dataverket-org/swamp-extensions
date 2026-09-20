@@ -1,5 +1,5 @@
 /**
- * `@dataverket/omni` — Talos node inventory resource schemas.
+ * `@dataverket/omnictl` — Talos node inventory resource schemas.
  *
  * The `inventory` model writes three resource kinds: one `node` per machine
  * Omni manages, one `cluster` per cluster, and a single `summary` roll-up.
