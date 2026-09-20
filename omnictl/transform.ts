@@ -1,5 +1,5 @@
 /**
- * `@dataverket/omni` — pure transforms that fold Omni's COSI resources into the
+ * `@dataverket/omnictl` — pure transforms that fold Omni's COSI resources into the
  * inventory schema.
  *
  * Omni splits one machine's state across several resources: `MachineStatus`

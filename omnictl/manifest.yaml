@@ -1,0 +1,49 @@
+manifestVersion: 1
+name: "@dataverket/omnictl"
+version: "2026.09.20.1"
+description: >
+  Sidero Omni for swamp, through `omnictl`. Two model types, two roles.
+
+  `@dataverket/omnictl/inventory` reads: `discover` writes one `node` per
+  managed machine (hardware, network, Talos version, cluster role, connection
+  and readiness), one `cluster` per cluster and a `summary`; `talosconfig`
+  mints one cluster's admin talosconfig for the service account and stores it
+  with the cluster's node IPs, which is everything `@dataverket/talosctl/node`
+  needs to reach the machines through Omni's proxy; `joinTokens` lists the
+  join tokens by fingerprint, state and use. A Reader service account.
+
+  `@dataverket/omnictl/cluster` writes: `applyPatch` creates or updates a
+  ConfigPatch scoped to a machine, a machine set or a cluster; `addMachine`
+  puts a machine into a machine set by its MachineSetNode; `removeMachine`
+  is `omnictl cluster machine delete`, which drains, wipes and waits;
+  `forgetMachine` deletes the machine's SideroLink Link once it is out of
+  every cluster. Every apply takes `dryRun`. An Operator service account, on
+  its own model instance with its own vault key.
+
+  Forked from `@mccormick/omni` (MIT) as `@dataverket/omni`; renamed after the
+  CLI it wraps. The key comes from a vault, is marked sensitive, and is
+  redacted from logs and errors.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - inventory.ts
+  - cluster.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - omni
+  - talos
+  - kubernetes
+  - inventory
+  - siderolabs
+  - talosconfig
+  - omnictl
+  - machine-set
+  - config-patch
+dependencies: []

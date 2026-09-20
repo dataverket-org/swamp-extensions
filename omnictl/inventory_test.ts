@@ -1,5 +1,10 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { clusterMembers, model } from "./inventory.ts";
+import {
+  clusterMembers,
+  decodeJoinTokenState,
+  fingerprint,
+  model,
+} from "./inventory.ts";
 import { __setRunner, parseOmnictlJson } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
 
@@ -174,4 +179,54 @@ Deno.test("talosconfig removes the temp file when omnictl fails", async () => {
   } finally {
     __setRunner();
   }
+});
+
+Deno.test("joinTokens stores name, state and default flag and never the token", async () => {
+  const token = "v2:Zm9vYmFy-the-secret-token";
+  __setRunner((argv) => {
+    if (argv[1] === "get" && argv[2] === "jointokenstatus") {
+      return Promise.resolve({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          metadata: { id: token, namespace: "default" },
+          spec: {
+            name: "initial",
+            state: 1,
+            isdefault: true,
+            usecount: 6,
+            expirationtime: "",
+          },
+        }) + JSON.stringify({
+          metadata: { id: "old-token", namespace: "default" },
+          spec: { name: "old", state: "REVOKED", usecount: 0 },
+        }),
+      });
+    }
+    return Promise.resolve({ code: 1, stdout: "", stderr: "unexpected" });
+  });
+  const { context, written } = makeContext();
+  try {
+    const r = await model.methods.joinTokens.execute({}, context);
+    assertEquals(r.dataHandles.length, 2);
+    assertEquals(written.map((w) => w.name), [
+      "jointoken-initial",
+      "jointoken-old",
+    ]);
+    assertEquals(written[0].data.state, "active");
+    assertEquals(written[0].data.isDefault, true);
+    assertEquals(written[0].data.useCount, 6);
+    assertEquals(written[0].data.expirationTime, null);
+    assertEquals(written[0].data.fingerprint, await fingerprint(token));
+    assertEquals(written[1].data.state, "revoked");
+    assertEquals(JSON.stringify(written).includes(token), false);
+  } finally {
+    __setRunner();
+  }
+});
+
+Deno.test("decodeJoinTokenState maps integers and names", () => {
+  assertEquals(decodeJoinTokenState(2), "revoked");
+  assertEquals(decodeJoinTokenState("EXPIRED"), "expired");
+  assertEquals(decodeJoinTokenState(undefined), "unknown");
 });

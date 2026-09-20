@@ -1,5 +1,5 @@
 /**
- * `@dataverket/omni/inventory` — Talos fleet discovery for swamp, via Omni.
+ * `@dataverket/omnictl/inventory` — Talos fleet discovery for swamp, via Omni.
  *
  * Omni (https://omni.siderolabs.com) is the control plane for fleets of Talos
  * Linux machines: it registers every machine, assigns machines to clusters, and
@@ -24,69 +24,15 @@ import {
   sanitizeInstanceName,
   SummarySchema,
 } from "./schema.ts";
-import {
-  type CosiResource,
-  getResources,
-  mintTalosconfig,
-  type OmnictlOptions,
-} from "./omnictl.ts";
+import { type CosiResource, getResources, mintTalosconfig } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
-import { assertHttpsUrl } from "./util.ts";
-
-/** Global arguments for the Omni inventory model. */
-const GlobalArgs = z.object({
-  endpoint: z.string().describe(
-    "Omni API endpoint, e.g. https://omni.example.net",
-  ),
-  serviceAccountKey: z.string().describe(
-    "Omni service-account key (OMNI_SERVICE_ACCOUNT_KEY); supply via " +
-      '${{ vault.get("omni", "OMNI_SERVICE_ACCOUNT_KEY") }}',
-  ).meta({ sensitive: true }),
-  insecureSkipTlsVerify: z.boolean().default(false).describe(
-    "Skip TLS verification for the Omni API (use only for self-signed certs)",
-  ),
-  omnictlPath: z.string().default("omnictl").describe(
-    "Path to the omnictl binary; override when it is not on PATH",
-  ),
-});
-/** {@link GlobalArgs} */
-export type GlobalArgsData = z.infer<typeof GlobalArgs>;
-
-/** Handle returned by `writeResource`. */
-export interface DataHandle {
-  name: string;
-}
-/** The subset of the swamp method context the model uses. */
-export interface MethodContext {
-  globalArgs: GlobalArgsData;
-  signal?: AbortSignal;
-  logger: {
-    info(message: string, props?: Record<string, unknown>): void;
-    warning(message: string, props?: Record<string, unknown>): void;
-  };
-  writeResource(
-    specName: string,
-    name: string,
-    data: Record<string, unknown>,
-  ): Promise<DataHandle>;
-}
-/** What every `execute` returns. */
-export interface MethodResult {
-  dataHandles: DataHandle[];
-}
-
-function optionsOf(g: GlobalArgsData): OmnictlOptions {
-  const endpoint = assertHttpsUrl(g.endpoint, "endpoint");
-  if (!g.serviceAccountKey) {
-    throw new Error("serviceAccountKey is required to query Omni");
-  }
-  return {
-    endpoint,
-    serviceAccountKey: g.serviceAccountKey,
-    insecureSkipTlsVerify: g.insecureSkipTlsVerify,
-    omnictlPath: g.omnictlPath,
-  };
-}
+import {
+  type DataHandle,
+  GlobalArgs,
+  type MethodContext,
+  type MethodResult,
+  optionsOf,
+} from "./common.ts";
 
 const TalosconfigArgs = z.object({
   cluster: z.string().min(1).describe("Omni cluster name"),
@@ -109,6 +55,77 @@ export const TalosconfigSchema = z.object({
   ),
   timestamp: z.string(),
 });
+
+/**
+ * One Omni join token as `JoinTokenStatus` reports it. The token is the
+ * resource ID and is a secret: only a SHA-256 fingerprint is stored.
+ */
+export const JoinTokenSchema = z.object({
+  name: z.string().describe("Name given when the token was created"),
+  fingerprint: z.string().describe(
+    "First 12 hex characters of the SHA-256 of the token; the token itself is never stored",
+  ),
+  state: z.string().describe("active, revoked, expired or unknown"),
+  isDefault: z.boolean().describe(
+    "Whether new installation media and kernel args use this token",
+  ),
+  useCount: z.number().int().describe("Machines that have joined with it"),
+  expirationTime: z.string().nullable().describe(
+    "RFC 3339, null when the token never expires",
+  ),
+  warnings: z.array(z.string()).default([]),
+  timestamp: z.string(),
+});
+
+/** Omni `JoinTokenStatusSpec.State` enum values. */
+const JOIN_TOKEN_STATES: Record<number, string> = {
+  0: "unknown",
+  1: "active",
+  2: "revoked",
+  3: "expired",
+};
+
+/** Map a `JoinTokenStatusSpec.State` integer or name to its lowercase name. */
+export function decodeJoinTokenState(state: unknown): string {
+  if (typeof state === "number") return JOIN_TOKEN_STATES[state] ?? "unknown";
+  if (typeof state === "string" && state !== "") return state.toLowerCase();
+  return "unknown";
+}
+
+/** SHA-256 of `text`, hex, first 12 characters. */
+export async function fingerprint(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+}
+
+/** Fold one `JoinTokenStatus` resource into the stored shape, without the token. */
+export async function joinTokenFromStatus(
+  r: CosiResource,
+  timestamp: string,
+): Promise<z.infer<typeof JoinTokenSchema>> {
+  const spec = r.spec;
+  return {
+    name: typeof spec.name === "string" ? spec.name : "",
+    fingerprint: await fingerprint(r.metadata.id),
+    state: decodeJoinTokenState(spec.state),
+    isDefault: spec.isdefault === true,
+    useCount: typeof spec.usecount === "number" ? spec.usecount : 0,
+    expirationTime: typeof spec.expirationtime === "string" &&
+        spec.expirationtime !== ""
+      ? spec.expirationtime
+      : null,
+    warnings: Array.isArray(spec.warnings)
+      ? spec.warnings.filter((w): w is string => typeof w === "string")
+      : [],
+    timestamp,
+  };
+}
 
 /** One machine of a cluster as `ClusterMachineIdentity` names it. */
 export interface Member {
@@ -145,12 +162,12 @@ export function clusterMembers(
 }
 
 /**
- * `@dataverket/omni/inventory` — discovers every Talos machine and cluster an
+ * `@dataverket/omnictl/inventory` — discovers every Talos machine and cluster an
  * Omni instance manages, and mints per-cluster talosconfigs. Read-only.
  */
 export const model = {
-  type: "@dataverket/omni/inventory",
-  version: "2026.09.19.4",
+  type: "@dataverket/omnictl/inventory",
+  version: "2026.09.20.1",
   globalArguments: GlobalArgs,
   resources: {
     node: {
@@ -178,8 +195,52 @@ export const model = {
       lifetime: "30d" as const,
       garbageCollection: 5,
     },
+    joinToken: {
+      description:
+        "One Omni join token: name, state, default flag, how many machines joined with it, expiry. A fingerprint stands in for the token",
+      schema: JoinTokenSchema,
+      lifetime: "30d" as const,
+      garbageCollection: 5,
+    },
   },
   methods: {
+    joinTokens: {
+      description:
+        "List Omni's join tokens as joinToken resources: which is default, which are revoked or expired, and how many machines each has joined. The token itself is never stored, only a SHA-256 fingerprint. Read-only against Omni.",
+      arguments: z.object({}),
+      execute: async (
+        _rawArgs: unknown,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const opts = optionsOf(context.globalArgs);
+        context.logger.info("omni: listing join tokens at {endpoint}", {
+          endpoint: opts.endpoint,
+        });
+        const statuses = await getResources(
+          "jointokenstatus",
+          opts,
+          context.signal,
+        );
+        const timestamp = new Date().toISOString();
+        const handles: DataHandle[] = [];
+        for (const r of statuses) {
+          const token = await joinTokenFromStatus(r, timestamp);
+          handles.push(
+            await context.writeResource(
+              "joinToken",
+              `jointoken-${
+                sanitizeInstanceName(token.name || token.fingerprint)
+              }`,
+              token,
+            ),
+          );
+        }
+        context.logger.info("omni: {count} join tokens", {
+          count: handles.length,
+        });
+        return { dataHandles: handles };
+      },
+    },
     discover: {
       description:
         "Query Omni for every managed Talos machine and cluster and write " +

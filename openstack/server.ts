@@ -54,6 +54,9 @@ export const ServerSchema = z.object({
   powerState: z.string().describe("RUNNING, SHUTDOWN, PAUSED, ..."),
   hostname: z.string(),
   availabilityZone: z.string(),
+  hostId: z.string().describe(
+    "Nova host hash: equal for servers on the same hypervisor within one project, empty when the cloud hides it",
+  ),
   addresses: z.record(z.string(), z.array(z.string())).describe(
     "Network name to the IP addresses on it",
   ),
@@ -128,6 +131,7 @@ export function normalizeServer(raw: Raw): Server {
       : str(power).toUpperCase(),
     hostname: str(raw["OS-EXT-SRV-ATTR:hostname"]),
     availabilityZone: str(raw["OS-EXT-AZ:availability_zone"]),
+    hostId: str(raw.hostId),
     addresses,
     ipAddresses: Object.values(addresses).flat(),
     imageName: image.name,
@@ -279,13 +283,13 @@ const RebootArgs = z.object({
 /** Nova server model. */
 export const model = {
   type: "@dataverket/openstack/server",
-  version: "2026.09.18.1",
+  version: "2026.09.20.1",
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {
     server: {
       description:
-        "A Nova server: state, addresses, image, flavor, keypair, groups and attached volumes",
+        "A Nova server: state, addresses, host hash, image, flavor, keypair, groups and attached volumes",
       schema: ServerSchema,
       lifetime: "infinite" as const,
       garbageCollection: 10,

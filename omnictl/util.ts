@@ -1,5 +1,5 @@
 /**
- * `@dataverket/omni` — URL validation and secret-redaction helpers.
+ * `@dataverket/omnictl` — URL validation and secret-redaction helpers.
  *
  * The `inventory` model shells out to `omnictl`; these helpers cover what the
  * subprocess boundary does not: validating the operator-supplied Omni endpoint

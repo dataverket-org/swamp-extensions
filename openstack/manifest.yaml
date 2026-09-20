@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/openstack"
-version: "2026.09.18.1"
+version: "2026.09.20.1"
 description: >
   OpenStack for swamp, through the official `openstack` CLI.
 

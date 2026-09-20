@@ -22,6 +22,10 @@ Deno.test("normalizeServer shapes the 10.3.0 server show output", () => {
   assertEquals(s.vmState, "active");
   assertEquals(s.taskState, "");
   assertEquals(s.availabilityZone, "zone-a");
+  assertEquals(
+    s.hostId,
+    "5576ffc29a3b73a627059d86980f0b8eb70b0cdde14516f63cda4668",
+  );
   assertEquals(s.addresses, { "private-net": ["192.0.2.10", "203.0.113.20"] });
   assertEquals(s.ipAddresses, ["192.0.2.10", "203.0.113.20"]);
   assertEquals(s.imageName, "Debian GNU/Linux 13 (Trixie)");
