@@ -10,8 +10,6 @@ Modifications, 2026-09-20, Jan Ivar Beddari (dataverket):
   `sops decrypt --extract`, lists keys from the file without decrypting, and
   deletes with `sops unset`. Upstream decrypted the whole file to plaintext on
   every write and re-encrypted every value.
-- A second provider, `@dataverket/sops-age-files`, keeps one encrypted file per
-  key so that a writer holding only the recipients' public keys can add secrets.
 - `sops` is invoked with an argument vector, never through a shell; secret
   values reach it on stdin or through a private temporary directory, never as an
   argument. `ageKeyFile` is optional and, when empty, leaves the caller's

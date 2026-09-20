@@ -10,7 +10,7 @@ independently:
 | `openstack/` | `@dataverket/openstack` | Nova, Cinder, Neutron, Glance and Keystone through the `openstack` CLI   |
 | `talosctl/`  | `@dataverket/talosctl`  | Talos machines through `talosctl`, with or without Omni; fork of `@magistr/talos-node` (MIT) plus `volumes` |
 | `omnictl/`   | `@dataverket/omnictl`   | Omni through `omnictl`: fleet inventory and join tokens (Reader), config patches and machine-set membership (Operator); fork of `@mccormick/omni` (MIT) |
-| `sops-age/`  | `@dataverket/sops-age`  | SOPS + age vaults: one file changed with `sops set`, or one file per secret for write-only producers; fork of `@zocc/sops-age` (Apache-2.0) |
+| `sops-age/`  | `@dataverket/sops-age`  | SOPS + age vault: one file, changed one value at a time with `sops set`, listed without a key, deleted with `sops unset`; fork of `@zocc/sops-age` (Apache-2.0) |
 
 Develop against a swamp repository by loading every extension from source:
 
