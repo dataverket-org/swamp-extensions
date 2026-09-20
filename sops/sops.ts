@@ -11,6 +11,7 @@
  * @module
  */
 import { z } from "npm:zod@4";
+import { resolve } from "jsr:@std/path@1.0.8";
 
 /** What both providers need to know about the key material and the binary. */
 export const CommonConfig = z.object({
@@ -33,11 +34,18 @@ export interface RunResult {
   stdout: string;
   stderr: string;
 }
+/** How one invocation is spawned. */
+export interface RunOptions {
+  /** Text handed to sops on stdin; none when undefined. */
+  stdin?: string;
+  /** Working directory; sops looks for `.sops.yaml` upward from here. */
+  cwd?: string;
+}
 /** Spawns sops; replaceable for tests. */
 export type Runner = (
   argv: string[],
   env: Record<string, string>,
-  stdin?: string,
+  opts?: RunOptions,
 ) => Promise<RunResult>;
 
 let testRunner: Runner | undefined;
@@ -46,10 +54,12 @@ export function __setRunner(runner?: Runner): void {
   testRunner = runner;
 }
 
-const defaultRunner: Runner = async (argv, env, stdin) => {
+const defaultRunner: Runner = async (argv, env, opts = {}) => {
+  const { stdin, cwd } = opts;
   const command = new Deno.Command(argv[0], {
     args: argv.slice(1),
     env,
+    cwd,
     stdin: stdin === undefined ? "null" : "piped",
     stdout: "piped",
     stderr: "piped",
@@ -89,12 +99,12 @@ export function sopsEnv(cfg: CommonConfigData): Record<string, string> {
 export async function sops(
   cfg: CommonConfigData,
   args: string[],
-  stdin?: string,
+  opts?: RunOptions,
 ): Promise<string> {
   const r = await (testRunner ?? defaultRunner)(
     [cfg.sopsPath, ...args],
     sopsEnv(cfg),
-    stdin,
+    opts,
   );
   if (r.code !== 0) {
     throw new Error(
@@ -114,7 +124,11 @@ export function indexOf(key: string): string {
 /**
  * Encrypt `plain` (a JSON object) to the configured recipients into `target`,
  * through a plaintext file in a private temporary directory, mode 0700,
- * removed afterwards. Public keys only: no identity is needed.
+ * removed afterwards. Public keys only: no identity is needed. sops runs
+ * with that directory as its working directory and an absolute target, so
+ * the caller's `.sops.yaml`, whose creation rules would otherwise have to
+ * match the temporary file, is never consulted: the recipients are the
+ * configured ones and nothing else.
  */
 export async function encryptJson(
   cfg: CommonConfigData,
@@ -136,9 +150,9 @@ export async function encryptJson(
       "--output-type",
       "json",
       "--output",
-      target,
+      resolve(target),
       path,
-    ]);
+    ], { cwd: dir });
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
@@ -158,7 +172,7 @@ export async function extractValue(
     "json",
     "--extract",
     indexOf(key),
-    file,
+    resolve(file),
   ]);
 }
 
