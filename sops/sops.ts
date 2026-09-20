@@ -1,5 +1,5 @@
 /**
- * `@dataverket/sops-age` — the `sops` subprocess both providers share.
+ * `@dataverket/sops` — the `sops` subprocess: argument vectors, private temp files.
  *
  * Every call is an argument vector, never a shell string. A secret value is
  * handed to sops on stdin (`sops set --value-stdin`) or through a plaintext
@@ -121,7 +121,7 @@ export async function encryptJson(
   plain: Record<string, string>,
   target: string,
 ): Promise<void> {
-  const dir = await Deno.makeTempDir({ prefix: "sops-age-" });
+  const dir = await Deno.makeTempDir({ prefix: "sops-vault-" });
   const path = `${dir}/plain.json`;
   try {
     await Deno.writeTextFile(path, JSON.stringify(plain, null, 2), {

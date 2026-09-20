@@ -7,7 +7,7 @@ export async function scratchAge(): Promise<
     cleanup: () => Promise<void>;
   }
 > {
-  const dir = await Deno.makeTempDir({ prefix: "sops-age-test-" });
+  const dir = await Deno.makeTempDir({ prefix: "sops-vault-test-" });
   const keyFile = `${dir}/key.txt`;
   const gen = await new Deno.Command("age-keygen", {
     args: ["-o", keyFile],
