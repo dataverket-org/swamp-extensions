@@ -14,4 +14,6 @@ Modifications, 2026-09-20, Jan Ivar Beddari (dataverket):
 - `sops` is invoked with an argument vector, never through a shell; secret
   values reach it through a private temporary directory, never as an
   argument. `ageKeyFile` is optional and, when empty, leaves the caller's
-  `SOPS_AGE_KEY_FILE` alone.
+  `SOPS_AGE_KEY_FILE` alone. Encryption runs from the temporary directory
+  with an absolute target, so a `.sops.yaml` in the repository is never
+  consulted; the configured recipients are the only ones.

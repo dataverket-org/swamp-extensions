@@ -63,3 +63,32 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name: "put ignores a .sops.yaml in the working directory whose rules match nothing",
+  ignore: !tools,
+  fn: async () => {
+    const a = await scratchAge();
+    const before = Deno.cwd();
+    try {
+      await Deno.writeTextFile(
+        `${a.dir}/.sops.yaml`,
+        "creation_rules:\n  - path_regex: ^never/.*$\n    age: age1nothing\n",
+      );
+      Deno.chdir(a.dir);
+      const p = vault.createProvider("cwd", {
+        secretsDir: "vaults/x",
+        ageKeyFile: a.keyFile,
+        agePublicKey: a.recipient,
+      });
+      await p.put("k", "v");
+      assertEquals(await p.get("k"), "v");
+      const enc = JSON.parse(await Deno.readTextFile("vaults/x/k.enc.json"));
+      assertEquals(enc.sops.age.length, 1);
+      assertEquals(enc.sops.age[0].recipient, a.recipient);
+    } finally {
+      Deno.chdir(before);
+      await a.cleanup();
+    }
+  },
+});
