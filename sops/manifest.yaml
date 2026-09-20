@@ -1,0 +1,48 @@
+manifestVersion: 1
+name: "@dataverket/sops"
+version: "2026.09.20.1"
+description: >
+  SOPS + age vault for swamp: one encrypted file per secret.
+
+  `put` encrypts `{"value": …}` to the configured age recipients into
+  `<secretsDir>/<key>.enc.json` and needs nothing but their public keys, so
+  a writer can store a value for readers whose identities it does not hold:
+  a human without the cluster key, or a workflow that mints a credential.
+  `get` decrypts one file, `list` walks the directory without decrypting,
+  `delete` removes the file. A key with `/` becomes a directory path; git
+  history is per secret, and no write touches any other secret.
+
+  Forked from `@zocc/sops-age` (Apache-2.0), see NOTICE.md; that provider
+  keeps every secret in one file and decrypts it all to write. sops runs
+  with an argument vector, never a shell; values reach it through a private
+  temporary directory, never as an argument. `ageKeyFile` is optional: empty
+  leaves the caller's SOPS_AGE_KEY_FILE and age plugins in charge of
+  decryption, so a YubiKey identity works unchanged. `swamp vault migrate
+  <vault> --to-type @dataverket/sops` splits an existing single-file vault.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models: []
+workflows: []
+vaults:
+  - files.ts
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+  - NOTICE.md
+platforms:
+  - linux-x86_64
+  - linux-aarch64
+  - darwin-x86_64
+  - darwin-aarch64
+labels:
+  - sops
+  - age
+  - secrets
+  - vault
+  - encryption
+  - local
+  - git
+dependencies: []
