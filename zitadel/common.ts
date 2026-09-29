@@ -19,8 +19,9 @@ export const GlobalArgsSchema = z.object({
   ),
   keyJson: z.string().optional().meta({ sensitive: true }).describe(
     "Service-user machine key JSON (keyId, key, userId), from a vault: " +
-      "${{ vault.get(<vault>, zitadel/key_json) }}. Use keyJsonFile instead " +
-      "to keep the value out of the definition entirely.",
+      "${{ vault.get('<vault>', 'zitadel/key_json') }} — quote the arguments, " +
+      "which is the spelling swamp model validate recognizes. Use keyJsonFile " +
+      "instead to keep the value out of the definition entirely.",
   ),
   keyJsonFile: z.string().optional().describe(
     "Path to the service user's machine key JSON, read at call time; " +

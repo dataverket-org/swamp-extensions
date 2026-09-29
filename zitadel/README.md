@@ -129,7 +129,7 @@ bearer token is stored anywhere.
 type: "@dataverket/zitadel/project"
 globalArguments:
   apiUrl: https://zitadel.example.org
-  keyJson: ${{ vault.get(infra, zitadel/key_json) }}
+  keyJson: "${{ vault.get('infra', 'zitadel/key_json') }}"
 ```
 
 Or keep the value out of the repository entirely and name a file instead, which
@@ -140,6 +140,11 @@ globalArguments:
   apiUrl: https://zitadel.example.org
   keyJsonFile: ~/.config/zitadel/admin.json
 ```
+
+Quote the arguments to `vault.get`: `swamp model validate` only recognizes a
+quoted vault expression, and warns that an unquoted one is "passed to the method
+unchanged" — swamp's resolver does take a bare token verbatim, so the unquoted
+form works, but the warning is noise you do not want in a repository.
 
 Give one or the other, never both; the `credential-named` check says so before a
 method runs, and `reachable` proves the key authenticates. `orgId` sets the
