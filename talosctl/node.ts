@@ -94,6 +94,18 @@ export interface MethodResult {
 }
 
 /**
+ * The talosctl binary, defaulted as the schema does. A check runs with the
+ * definition's global arguments as written, without the schema's defaults
+ * applied, so a definition that never mentions talosctlPath leaves it
+ * undefined there; spawning with that is what "missing field `cmd`" means.
+ * Methods get the defaults, so this only matters to a check, and having one
+ * place for the fallback keeps the two from drifting.
+ */
+export function talosctlPathOf(g: Partial<GlobalArgs>): string {
+  return g.talosctlPath || "talosctl";
+}
+
+/**
  * The Omni service-account key, read from the file when one is named and
  * taken from the argument otherwise; undefined when neither is set, which is
  * the plain-talosctl case where the talosconfig carries a client certificate.
@@ -125,7 +137,7 @@ export function options(g: GlobalArgs, insecure?: boolean): TalosctlOptions {
   const env: Record<string, string> = {};
   if (key) env.OMNI_SERVICE_ACCOUNT_KEY = key;
   return {
-    talosctlPath: g.talosctlPath,
+    talosctlPath: talosctlPathOf(g),
     talosconfig: g.talosconfig,
     talosconfigContent: g.talosconfigContent,
     context: g.talosContext,
@@ -238,12 +250,18 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.29.1",
+  version: "2026.09.29.2",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
       description:
         "serviceAccountKeyFile added; serviceAccountKey unchanged where set",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.2",
+      description:
+        "talosctl-available defaults talosctlPath itself; no schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -255,7 +273,7 @@ export const model = {
       execute: async (context: { globalArgs: GlobalArgs }) => {
         try {
           await talosctl(
-            { talosctlPath: context.globalArgs.talosctlPath, nodes: [] },
+            { talosctlPath: talosctlPathOf(context.globalArgs), nodes: [] },
             ["version", "--client"],
           );
           return { pass: true };

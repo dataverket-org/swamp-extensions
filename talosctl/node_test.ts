@@ -4,14 +4,16 @@ import {
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
 import {
+  type GlobalArgs,
   model,
   options,
   parseEtcdMembers,
   parseServices,
   serviceAccountKey,
+  talosctlPathOf,
 } from "./node.ts";
 import { talosctlArgs } from "./talosctl.ts";
-import { fail, installFake, makeContext } from "./test_support.ts";
+import { fail, installFake, makeContext, ok } from "./test_support.ts";
 import { talosctl as runTalosctl } from "./talosctl.ts";
 
 Deno.test("options targets nodes, falls back to endpoint, refuses neither", () => {
@@ -82,6 +84,23 @@ Deno.test("talosContext names the context instead of inheriting the current one"
     false,
     "no context given: talosctl keeps its own lookup",
   );
+});
+
+Deno.test("the live check spawns talosctl even without the schema default", async () => {
+  // A check sees the definition's global arguments as written, with no schema
+  // defaults applied: a definition that never names talosctlPath leaves it
+  // undefined, and spawning with that is what "missing field `cmd`" was.
+  const fake = installFake(() => ok("v1.14.0"));
+  try {
+    const result = await model.checks["talosctl-available"].execute(
+      { globalArgs: {} as GlobalArgs },
+    );
+    assertEquals(result.pass, true);
+    assertEquals(fake.calls[0].args[0], "version");
+    assertEquals(talosctlPathOf({}), "talosctl");
+  } finally {
+    fake.restore();
+  }
 });
 
 Deno.test("parseServices and parseEtcdMembers read the tables", () => {
