@@ -72,7 +72,7 @@ Deno.test("the credential check wants exactly one source named", async () => {
 Deno.test("reachable passes over an unresolved vault expression", async () => {
   const result = await checks.reachable.execute({
     globalArgs: fakeGlobalArgs({
-      keyJson: "${{ vault.get(infra, zitadel/key_json) }}",
+      keyJson: "${{ vault.get('infra', 'zitadel/key_json') }}",
     }),
   });
   assertEquals(result.pass, true);

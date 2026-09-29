@@ -42,7 +42,7 @@ const ActionsSecretPutArgs = z.object({
     "Secret name as the workflow reads it, e.g. COSIGN_PRIVATE_KEY.",
   ),
   value: z.string().min(1).meta({ sensitive: true }).describe(
-    "Secret value. Supply via vault: ${{ vault.get(<vault>, <key>) }}. Never recorded.",
+    "Secret value. Supply via vault: ${{ vault.get('<vault>', '<key>') }} — quoted, which is the spelling swamp model validate recognizes. Never recorded.",
   ),
 });
 

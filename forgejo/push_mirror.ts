@@ -58,7 +58,7 @@ const PushMirrorEnsureArgs = z.object({
     "Username sent with the token; GitHub accepts any non-empty value for a PAT.",
   ),
   remotePassword: z.string().min(1).meta({ sensitive: true }).describe(
-    "Token for the remote. Supply via vault: ${{ vault.get(<vault>, <key>) }}. Sent once to Forgejo, never recorded.",
+    "Token for the remote. Supply via vault: ${{ vault.get('<vault>', '<key>') }} — quoted, which is the spelling swamp model validate recognizes. Sent once to Forgejo, never recorded.",
   ),
   interval: z.string().regex(/^\d+[hms]([0-9hms]*)$|^0s$/).default("8h0m0s")
     .describe(
