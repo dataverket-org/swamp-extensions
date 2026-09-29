@@ -14,6 +14,7 @@ independently:
 | `forgejo/`   | `@dataverket/forgejo`   | Forgejo past one repository, extending `@thomas/forgejo`: Actions secrets, runners, push mirrors, PR assignment, repository delete |
 | `github/`    | `@dataverket/github`    | Repository settings `@goodcraft/github` does not reach: branches, default-branch convergence, verify-first delete |
 | `flux/`      | `@dataverket/flux`      | A reconcile with `--reset` for Flux HelmReleases stuck at `RetriesExceeded`, extending `@ginger_pappa/flux/helmrelease` |
+| `zitadel/`   | `@dataverket/zitadel`   | Zitadel over its API: projects, applications, users, grants and orgs, one model type each; fork of `@thomas/zitadel` (MIT) widened to full CRUD |
 
 Develop against a swamp repository by loading every extension from source:
 

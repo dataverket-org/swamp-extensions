@@ -1,0 +1,164 @@
+# Copy this into a repository's workflows/ after `swamp workflow create
+# zitadel-selftest`, keeping the id that command assigned — swamp assigns
+# workflow ids and this one is only here to be read.
+id: 44dce7c5-981b-4f9f-9cc1-161f0128d045
+name: zitadel-selftest
+tags:
+  purpose: smoke
+jobs:
+  - name: provision
+    description: >-
+      What decision 015 needs in Zitadel: a project for the cluster, the two
+      groups its RBAC binds, an application for kubelogin, and a service user
+      for automation. Every step is a find-or-create, so a second run changes
+      nothing.
+    steps:
+      - name: project
+        description: The cluster's project
+        task:
+          type: model_method
+          modelIdOrName: zitadel-project
+          methodName: ensure
+          inputs:
+            name: kubernetes
+            roleAssertion: true
+        dependsOn: []
+      - name: role-admins
+        description: The group that administers the cluster
+        task:
+          type: model_method
+          modelIdOrName: zitadel-project
+          methodName: roleEnsure
+          inputs:
+            project: kubernetes
+            roleKey: kube-admins
+            displayName: Kubernetes administrators
+        dependsOn:
+          - step: project
+            condition:
+              type: succeeded
+      - name: role-readers
+        description: The group that reads it
+        task:
+          type: model_method
+          modelIdOrName: zitadel-project
+          methodName: roleEnsure
+          inputs:
+            project: kubernetes
+            roleKey: kube-readers
+            displayName: Kubernetes readers
+        dependsOn:
+          - step: project
+            condition:
+              type: succeeded
+      - name: app
+        description: The OIDC client kubelogin drives
+        task:
+          type: model_method
+          modelIdOrName: zitadel-app
+          methodName: ensureOidc
+          inputs:
+            project: kubernetes
+            name: kubelogin
+            appType: native
+            authMethod: none
+            redirectUris: ["http://localhost:8000", "http://localhost:18000"]
+        dependsOn:
+          - step: project
+            condition:
+              type: succeeded
+      - name: service-user
+        description: What automation authenticates as
+        task:
+          type: model_method
+          modelIdOrName: zitadel-user
+          methodName: ensureMachine
+          inputs:
+            username: svc-kubernetes
+            name: Kubernetes automation
+        dependsOn: []
+      - name: grant
+        description: The service user's roles on the project
+        task:
+          type: model_method
+          modelIdOrName: zitadel-grant
+          methodName: ensure
+          inputs:
+            user: svc-kubernetes
+            project: kubernetes
+            roleKeys: ["kube-admins"]
+        dependsOn:
+          - step: service-user
+            condition:
+              type: succeeded
+          - step: role-admins
+            condition:
+              type: succeeded
+      - name: assert-project
+        description: The project is there and asserts roles into tokens
+        task:
+          type: assert
+          expr: >-
+            data.latest("zitadel-project", "project-kubernetes").attributes.state == "active" &&
+            data.latest("zitadel-project", "project-kubernetes").attributes.roleAssertion == true
+          message: the cluster project is missing, inactive, or does not assert roles into tokens
+          severity: high
+        dependsOn:
+          - step: project
+            condition:
+              type: succeeded
+      - name: assert-app
+        description: The client is a public native client, named by project and app
+        task:
+          type: assert
+          expr: >-
+            data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.appType == "native" &&
+            data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.authMethod == "none"
+          message: the kubelogin client is not the public native client kubelogin needs
+          severity: high
+        dependsOn:
+          - step: app
+            condition:
+              type: succeeded
+      - name: assert-roles
+        description: Both groups exist under the names RBAC will bind
+        task:
+          type: assert
+          expr: >-
+            data.latest("zitadel-project", "role-kubernetes-kube-admins").attributes.key == "kube-admins" &&
+            data.latest("zitadel-project", "role-kubernetes-kube-readers").attributes.key == "kube-readers"
+          message: the groups the ClusterRoleBindings name are not both there
+          severity: high
+        dependsOn:
+          - step: role-admins
+            condition:
+              type: succeeded
+          - step: role-readers
+            condition:
+              type: succeeded
+      - name: assert-grant
+        description: The service user holds the administrator role, and only that
+        task:
+          type: assert
+          expr: >-
+            data.latest("zitadel-grant", "grant-svc-kubernetes-kubernetes").attributes.roleKeys == ["kube-admins"]
+          message: the service user does not hold exactly the administrator role
+          severity: high
+        dependsOn:
+          - step: grant
+            condition:
+              type: succeeded
+      - name: assert-machine
+        description: Automation authenticates as a machine, never as a person
+        task:
+          type: assert
+          expr: >-
+            data.latest("zitadel-user", "user-svc-kubernetes").attributes.type == "machine"
+          message: the automation identity is not a machine user
+          severity: high
+        dependsOn:
+          - step: service-user
+            condition:
+              type: succeeded
+    dependsOn: []
+version: 1

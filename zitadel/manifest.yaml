@@ -1,0 +1,81 @@
+manifestVersion: 1
+name: "@dataverket/zitadel"
+version: "2026.09.29.1"
+description: >
+  Zitadel for swamp, over its API: seven model types, one per resource, with
+  the whole life cycle of each.
+
+  `@dataverket/zitadel/project` lists, reads, creates, renames, deactivates and
+  deletes projects, and defines their roles. `@dataverket/zitadel/app` covers a
+  project's applications: OIDC clients and API resource servers, their
+  configuration, a careful redirect-allowlist change that cannot clobber the
+  rest of a shared client, client-secret rotation, application keys, and
+  deactivate or delete. `@dataverket/zitadel/user` is human and machine users
+  over the v2 user service: find-or-create, update, deactivate, lock, delete,
+  personal access tokens, keys, client secrets, metadata, and a password reset
+  that mints a link rather than taking a password.
+  `@dataverket/zitadel/grant` is the roles a user holds on a project, and
+  `@dataverket/zitadel/org` reads the organizations and their managers.
+  `@dataverket/zitadel/action` covers v2 actions: the targets an instance calls
+  out to, their signing and public keys, and the executions that bind a
+  condition — a request, a response, an event or a named function — to the
+  targets it calls, with a catalog method that says which conditions this
+  instance will accept. `@dataverket/zitadel/settings` reads the login,
+  lockout, password, branding, domain, legal and security settings in force for
+  an organization or the instance, each saying whether it is the
+  organization's own or inherited, and writes the two that v2 exposes.
+
+  Projects also carry their grants to other organizations, and the members who
+  administer them; users carry their authentication factors and
+  identity-provider links, which is what "does this person actually have MFA"
+  is asked with.
+
+  Every hard delete re-reads the resource first, refuses unless a `confirm`
+  argument repeats its live name, and takes `dryRun`; deactivating stays the
+  reversible path and the docs say so. Every secret the extension mints — client
+  secret, token, key JSON, reset code — is emitted exactly once into a spec
+  marked sensitive, so swamp vaults it and it never reaches a log.
+
+  Authentication is a JWT private-key service account: the key is named by the
+  definition, as a vault value (`keyJson`) or as a file read at call time
+  (`keyJsonFile`), and exchanged per run for a short-lived token. Users speak
+  the v2 API, which is the supported surface on Zitadel v4; projects,
+  applications, roles and grants speak v1 Management, where v2 is still beta.
+
+  Forked from `@thomas/zitadel` (MIT, copyright Thomas Elliott), which is one
+  type and machine identities only, and widened to full CRUD across five types.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - org.ts
+  - project.ts
+  - app.ts
+  - user.ts
+  - grant.ts
+  - action.ts
+  - settings.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - zitadel
+  - actions
+  - webhooks
+  - settings
+  - policies
+  - mfa
+  - oidc
+  - iam
+  - auth
+  - identity
+  - users
+  - projects
+  - applications
+  - service-accounts
+  - admin
+dependencies: []
