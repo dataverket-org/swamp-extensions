@@ -1,5 +1,15 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { model, options, parseEtcdMembers, parseServices } from "./node.ts";
+import {
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@1.0.13";
+import {
+  model,
+  options,
+  parseEtcdMembers,
+  parseServices,
+  serviceAccountKey,
+} from "./node.ts";
 import { talosctlArgs } from "./talosctl.ts";
 import { fail, installFake, makeContext } from "./test_support.ts";
 import { talosctl as runTalosctl } from "./talosctl.ts";
@@ -38,6 +48,40 @@ Deno.test("options targets nodes, falls back to endpoint, refuses neither", () =
     threw = true;
   }
   assertEquals(threw, true);
+});
+
+Deno.test("talosContext names the context instead of inheriting the current one", () => {
+  const o = options({
+    nodes: ["a"],
+    talosconfig: "/tmp/tc",
+    talosContext: "dataverket-prod",
+    insecure: false,
+    talosctlPath: "t",
+    retryDelayMs: 0,
+  });
+  assertEquals(o.context, "dataverket-prod");
+  assertEquals(talosctlArgs(o, ["version"]), [
+    "version",
+    "--nodes",
+    "a",
+    "--talosconfig",
+    "/tmp/tc",
+    "--context",
+    "dataverket-prod",
+  ]);
+  assertEquals(
+    talosctlArgs(
+      options({
+        nodes: ["a"],
+        insecure: false,
+        talosctlPath: "t",
+        retryDelayMs: 0,
+      }),
+      ["version"],
+    ).includes("--context"),
+    false,
+    "no context given: talosctl keeps its own lookup",
+  );
 });
 
 Deno.test("parseServices and parseEtcdMembers read the tables", () => {
@@ -190,6 +234,56 @@ Deno.test("the service-account key reaches the environment and never the error",
   } finally {
     fake.restore();
   }
+});
+
+Deno.test("a key file reaches the environment and never the error", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "talosctl-key-" });
+  const path = `${dir}/reader.key`;
+  await Deno.writeTextFile(path, "KEY123\n");
+  const fake = installFake(() => fail("denied for KEY123"));
+  const { context } = makeContext({
+    nodes: ["a"],
+    serviceAccountKeyFile: path,
+    retryDelayMs: 0,
+  });
+  try {
+    await assertRejects(
+      () => model.methods.version.execute({}, context),
+      Error,
+      "[REDACTED]",
+    );
+    assertEquals(fake.calls[0].env.OMNI_SERVICE_ACCOUNT_KEY, "KEY123");
+  } finally {
+    fake.restore();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("the key file and the key value are mutually exclusive", () => {
+  assertThrows(
+    () =>
+      serviceAccountKey({
+        serviceAccountKeyFile: "/tmp/reader.key",
+        serviceAccountKey: "KEY123",
+        insecure: false,
+        talosctlPath: "t",
+        retryDelayMs: 0,
+      }),
+    Error,
+    "not both",
+  );
+});
+
+Deno.test("neither is no Omni key at all, which is the plain talosctl case", () => {
+  assertEquals(
+    options({
+      nodes: ["a"],
+      insecure: false,
+      talosctlPath: "t",
+      retryDelayMs: 0,
+    }).env?.OMNI_SERVICE_ACCOUNT_KEY,
+    undefined,
+  );
 });
 
 Deno.test("talosconfigContent is materialized per call and removed afterwards", async () => {

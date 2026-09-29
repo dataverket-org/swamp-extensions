@@ -29,6 +29,45 @@ export function assertHttpsUrl(raw: string, label: string): string {
 }
 
 /**
+ * Expand a leading `~/` from `HOME`, so a definition can name a key file the
+ * way an operator does. Any other path is returned unchanged.
+ */
+function expandHome(path: string): string {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  const home = Deno.env.get("HOME");
+  if (!home) throw new Error(`cannot expand ~ in ${path}: HOME is not set`);
+  return home + path.slice(1);
+}
+
+/**
+ * Read a secret out of a file named by a global argument, at call time. This
+ * is how a definition points at a short-lived credential an operator's session
+ * wrote without carrying the value itself: the path is not a secret, the file
+ * is, and the file is expected to be mode 0600 and to expire. The content is
+ * trimmed, since a file written by a shell usually ends in a newline, and an
+ * empty file is an error rather than an empty credential.
+ */
+export function readSecretFile(rawPath: string, label: string): string {
+  const path = expandHome(rawPath);
+  let text: string;
+  try {
+    text = Deno.readTextFileSync(path);
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      throw new Error(`${label}: ${path} does not exist`);
+    }
+    if (err instanceof Deno.errors.PermissionDenied) {
+      throw new Error(`${label}: ${path} is not readable`);
+    }
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`${label}: ${path} could not be read: ${reason}`);
+  }
+  const value = text.trim();
+  if (value.length === 0) throw new Error(`${label}: ${path} is empty`);
+  return value;
+}
+
+/**
  * Mask every occurrence of `secret` in `text` with `[REDACTED]`. The Omni
  * service-account key is a long opaque base64 string, so exact-substring
  * replacement is both sufficient and complete. An empty `secret` is a no-op.

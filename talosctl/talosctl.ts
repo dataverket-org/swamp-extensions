@@ -28,6 +28,12 @@ export interface TalosctlOptions {
    * `talosconfig`. Lets the config come from a vault or another model's data.
    */
   talosconfigContent?: string;
+  /**
+   * `--context`: the talosconfig context to use. Omitted means the config's
+   * current context, which is whatever was selected last and not something a
+   * definition controls.
+   */
+  context?: string;
   /** `--endpoints`; omitted means the talosconfig's endpoints. */
   endpoints?: string[];
   /** `--nodes`: the machines the command targets. */
@@ -63,6 +69,45 @@ let testRunner: Runner | undefined;
 /** Install a fake runner (tests only); call with no argument to restore. */
 export function __setRunner(runner?: Runner): void {
   testRunner = runner;
+}
+
+/**
+ * Expand a leading `~/` from `HOME`, so a definition can name a key file the
+ * way an operator does. Any other path is returned unchanged.
+ */
+function expandHome(path: string): string {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  const home = Deno.env.get("HOME");
+  if (!home) throw new Error(`cannot expand ~ in ${path}: HOME is not set`);
+  return home + path.slice(1);
+}
+
+/**
+ * Read a secret out of a file named by a global argument, at call time. This
+ * is how a definition points at a short-lived credential an operator's session
+ * wrote without carrying the value itself: the path is not a secret, the file
+ * is, and the file is expected to be mode 0600 and to expire. The content is
+ * trimmed, since a file written by a shell usually ends in a newline, and an
+ * empty file is an error rather than an empty credential.
+ */
+export function readSecretFile(rawPath: string, label: string): string {
+  const path = expandHome(rawPath);
+  let text: string;
+  try {
+    text = Deno.readTextFileSync(path);
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      throw new Error(`${label}: ${path} does not exist`);
+    }
+    if (err instanceof Deno.errors.PermissionDenied) {
+      throw new Error(`${label}: ${path} is not readable`);
+    }
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`${label}: ${path} could not be read: ${reason}`);
+  }
+  const value = text.trim();
+  if (value.length === 0) throw new Error(`${label}: ${path} is empty`);
+  return value;
 }
 
 /** Mask every occurrence of each secret in `text` with `[REDACTED]`. */
@@ -143,6 +188,7 @@ export function talosctlArgs(
   }
   if (opts.nodes.length > 0) full.push("--nodes", opts.nodes.join(","));
   if (opts.talosconfig) full.push("--talosconfig", opts.talosconfig);
+  if (opts.context) full.push("--context", opts.context);
   return full;
 }
 

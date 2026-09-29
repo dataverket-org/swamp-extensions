@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/talosctl"
-version: "2026.09.19.2"
+version: "2026.09.29.1"
 description: >
   Talos Linux machines for swamp, through `talosctl`, with or without Omni.
 
@@ -16,7 +16,11 @@ description: >
   fleet, `@dataverket/omni` supplies the node addresses and a minted
   talosconfig as data; this model takes the config as content
   (`talosconfigContent`) and speaks to the machines through Omni's proxy, so
-  a lab cluster on plain talosctl and a managed one share one code path.
+  a lab cluster on plain talosctl and a managed one share one code path. A
+  definition names its own context (`talosContext`) and its own Omni key,
+  either as a file read at call time (`serviceAccountKeyFile`) or as a
+  vaulted value (`serviceAccountKey`), so nothing depends on which context
+  was selected last.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest

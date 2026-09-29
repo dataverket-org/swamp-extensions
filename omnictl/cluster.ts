@@ -172,7 +172,15 @@ const nodeName = (machine: string) =>
  */
 export const model = {
   type: "@dataverket/omnictl/cluster",
-  version: "2026.09.20.1",
+  version: "2026.09.29.1",
+  upgrades: [
+    {
+      toVersion: "2026.09.29.1",
+      description:
+        "serviceAccountKeyFile added; serviceAccountKey unchanged where set",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgs,
   resources: {
     configPatch: {

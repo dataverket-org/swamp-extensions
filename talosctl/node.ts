@@ -8,7 +8,9 @@
  *
  * Targets: `nodes` is the list of machines a method addresses (`--nodes`);
  * `endpoint` is where the API is reached (`--endpoints`) and doubles as the
- * only node when `nodes` is not given. With an Omni-issued talosconfig leave
+ * only node when `nodes` is not given. `talosContext` names the context in the
+ * talosconfig (`--context`); without it talosctl uses whichever context is
+ * current, which a definition does not control. With an Omni-issued talosconfig leave
  * `endpoint` unset: the config already points at Omni's proxy, and `nodes`
  * are the machines' addresses. A talosconfig can also be given as content
  * (`talosconfigContent`, from a vault or from `@dataverket/omni`'s
@@ -18,7 +20,7 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import { talosctl, type TalosctlOptions } from "./talosctl.ts";
+import { readSecretFile, talosctl, type TalosctlOptions } from "./talosctl.ts";
 import {
   buildLayout,
   forNode,
@@ -41,6 +43,9 @@ export const GlobalArgsSchema = z.object({
   talosconfig: z.string().optional().describe(
     "Path to a talosconfig; defaults to talosctl's own lookup",
   ),
+  talosContext: z.string().optional().describe(
+    "Context in the talosconfig to use (--context), e.g. the cluster's name; without it talosctl uses the config's current context, which is whatever was selected last",
+  ),
   talosconfigContent: z.string().optional().describe(
     'A talosconfig\'s content, e.g. ${{ data.latest("omni", "talosconfig-<cluster>").attributes.content }}; used through a private temporary file, takes precedence over talosconfig',
   ).meta({ sensitive: true }),
@@ -50,8 +55,11 @@ export const GlobalArgsSchema = z.object({
   talosctlPath: z.string().default("talosctl").describe(
     "Path to the talosctl binary; override when it is not on PATH",
   ),
+  serviceAccountKeyFile: z.string().optional().describe(
+    "Path to a file holding the Omni service-account key, read at call time, e.g. ~/.talos/omni/<name>.key, for a key an operator's session writes and rotates; the path is not a secret, so the definition carries no value",
+  ),
   serviceAccountKey: z.string().optional().describe(
-    "Omni service-account key for an Omni-issued talosconfig (OMNI_SERVICE_ACCOUNT_KEY); supply via a vault expression",
+    "Omni service-account key for an Omni-issued talosconfig (OMNI_SERVICE_ACCOUNT_KEY) as a value, for a key the process owns; supply via a vault expression. Mutually exclusive with serviceAccountKeyFile",
   ).meta({ sensitive: true }),
   retryDelayMs: z.number().int().min(0).default(15000).describe(
     "Pause between retries of transient API errors",
@@ -86,6 +94,22 @@ export interface MethodResult {
 }
 
 /**
+ * The Omni service-account key, read from the file when one is named and
+ * taken from the argument otherwise; undefined when neither is set, which is
+ * the plain-talosctl case where the talosconfig carries a client certificate.
+ * Both at once is a mistake worth naming rather than resolving by precedence.
+ */
+export function serviceAccountKey(g: GlobalArgs): string | undefined {
+  if (g.serviceAccountKeyFile && g.serviceAccountKey) {
+    throw new Error("set serviceAccountKeyFile or serviceAccountKey, not both");
+  }
+  if (g.serviceAccountKeyFile) {
+    return readSecretFile(g.serviceAccountKeyFile, "serviceAccountKeyFile");
+  }
+  return g.serviceAccountKey;
+}
+
+/**
  * Translate global arguments into transport options; throws with no target.
  * `--endpoints` is only emitted when `endpoint` stands alone: with an
  * explicit `nodes` list the talosconfig's endpoints (Omni's proxy, say) are
@@ -97,17 +121,19 @@ export function options(g: GlobalArgs, insecure?: boolean): TalosctlOptions {
   if (nodes.length === 0) {
     throw new Error("set globalArguments.nodes or globalArguments.endpoint");
   }
+  const key = serviceAccountKey(g);
   const env: Record<string, string> = {};
-  if (g.serviceAccountKey) env.OMNI_SERVICE_ACCOUNT_KEY = g.serviceAccountKey;
+  if (key) env.OMNI_SERVICE_ACCOUNT_KEY = key;
   return {
     talosctlPath: g.talosctlPath,
     talosconfig: g.talosconfig,
     talosconfigContent: g.talosconfigContent,
+    context: g.talosContext,
     endpoints: !explicit && g.endpoint ? [g.endpoint] : undefined,
     nodes,
     insecure: insecure ?? g.insecure,
     env,
-    secrets: [g.serviceAccountKey, g.talosconfigContent].filter((
+    secrets: [key, g.talosconfigContent].filter((
       s,
     ): s is string => Boolean(s)),
     retryDelayMs: g.retryDelayMs,
@@ -212,7 +238,15 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.19.2",
+  version: "2026.09.29.1",
+  upgrades: [
+    {
+      toVersion: "2026.09.29.1",
+      description:
+        "serviceAccountKeyFile added; serviceAccountKey unchanged where set",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks: {
     "talosctl-available": {

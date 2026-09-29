@@ -37,7 +37,7 @@ there:
 globalArguments:
   nodes: ${{ data.latest("omni", "talosconfig-prod").attributes.nodes }}
   talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
-  serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
+  serviceAccountKeyFile: ~/.talos/omni/reader.key
 ```
 
 ### `@dataverket/omnictl/cluster`
@@ -60,7 +60,7 @@ it once with a new Operator key to see the resources before applying them.
 ```sh
 swamp model create @dataverket/omnictl/cluster omni-cluster
 #   endpoint: https://omni.example.net
-#   serviceAccountKey: ${{ vault.get("infra", "omni/operator_service_account_key") }}
+#   serviceAccountKeyFile: ~/.talos/omni/operator.key
 swamp model method run omni-cluster applyPatch \
   --input id=500-wrkr-4-storage --input machine=<uuid> --input data="$(cat patch.yaml)" --input dryRun=true
 swamp model method run omni-cluster addMachine \
@@ -100,19 +100,32 @@ omnictl serviceaccount create --use-user-role=false --role Operator omni-operato
 swamp extension pull @dataverket/omnictl
 swamp model create @dataverket/omnictl/inventory omni
 #   endpoint: https://omni.example.net
-#   serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
+#   serviceAccountKeyFile: ~/.talos/omni/reader.key
 swamp model method run omni discover
 swamp model method run omni talosconfig --input cluster=prod
 ```
 
 ## Configuration
 
-| Global argument         | Required | Default   | Description                                               |
-| ----------------------- | -------- | --------- | --------------------------------------------------------- |
-| `endpoint`              | yes      | —         | Omni API endpoint, e.g. `https://omni.example.net`        |
-| `serviceAccountKey`     | yes      | —         | `OMNI_SERVICE_ACCOUNT_KEY`; supply via a vault expression |
-| `insecureSkipTlsVerify` | no       | `false`   | Skip TLS verification (self-signed certs only)            |
-| `omnictlPath`           | no       | `omnictl` | Path to the `omnictl` binary                              |
+The service-account key is given one of two ways, never both.
+`serviceAccountKeyFile` names a file the key is read from at call time, which is
+how a definition points at a short-lived key an operator's session wrote without
+holding the value itself; a leading `~/` expands from `HOME`, a missing or empty
+file is an error, and the content is trimmed. `serviceAccountKey` takes the
+value directly, from a vault expression, for a key a process owns with no
+operator session behind it:
+
+```yaml
+serviceAccountKey: ${{ vault.get("infra", "omni/service_account_key") }}
+```
+
+| Global argument         | Required       | Default   | Description                                                                                              |
+| ----------------------- | -------------- | --------- | -------------------------------------------------------------------------------------------------------- |
+| `endpoint`              | yes            | —         | Omni API endpoint, e.g. `https://omni.example.net`                                                       |
+| `serviceAccountKeyFile` | one of the two | —         | Path to a file holding the key, read at call time, `~/` expanded; for a key an operator's session writes |
+| `serviceAccountKey`     | one of the two | —         | `OMNI_SERVICE_ACCOUNT_KEY` as a value, for a key the process owns; supply via a vault expression         |
+| `insecureSkipTlsVerify` | no             | `false`   | Skip TLS verification (self-signed certs only)                                                           |
+| `omnictlPath`           | no             | `omnictl` | Path to the `omnictl` binary                                                                             |
 
 ## Consuming the data
 
