@@ -1,9 +1,14 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.13";
 import {
   type ApiCall,
   branchesList,
   type Caller,
   defaultBranchEnsure,
+  extension,
   repoDelete,
 } from "./repo_settings.ts";
 
@@ -168,4 +173,65 @@ Deno.test("repoDelete deletes an existing repository, reports an absent one, and
     Error,
     "refusing to delete",
   );
+});
+
+const ghChecks = extension.checks[0];
+const ctx = (o: Record<string, unknown>) => ({ globalArgs: o as never });
+
+Deno.test("github-token-accepted needs a token and an owner before reaching out", async () => {
+  // no fetch installed: a network call here would throw rather than return
+  const noToken = await ghChecks["github-token-accepted"].execute(
+    ctx({ owner: "acme" }),
+  );
+  assertEquals(noToken.pass, false);
+  assertStringIncludes(noToken.errors![0], "token is not set");
+  const noOwner = await ghChecks["github-token-accepted"].execute(
+    ctx({ token: "t" }),
+  );
+  assertEquals(noOwner.pass, false);
+  assertStringIncludes(noOwner.errors![0], "owner is not set");
+});
+
+Deno.test("github-token-accepted checks the owner too, without the schema's baseUrl default", async () => {
+  const seen: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (input: string | URL | Request) => {
+    const url = String(input);
+    seen.push(url);
+    return Promise.resolve(
+      new Response(JSON.stringify({ login: "someone" }), { status: 200 }),
+    );
+  };
+  try {
+    // baseUrl absent, as a check receives it; fetchCaller supplies the default
+    const args = { token: "t", owner: "acme" };
+    assertEquals(Object.hasOwn(args, "baseUrl"), false);
+    const r = await ghChecks["github-token-accepted"].execute(ctx(args));
+    assertEquals(r.pass, true);
+    assertEquals(seen[0], "https://api.github.com/user");
+    assertEquals(seen[1], "https://api.github.com/users/acme");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("github-token-accepted fails with GitHub's message when the owner is unreachable", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (input: string | URL | Request) =>
+    Promise.resolve(
+      String(input).includes("/users/")
+        ? new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+        })
+        : new Response(JSON.stringify({ login: "someone" }), { status: 200 }),
+    );
+  try {
+    const r = await ghChecks["github-token-accepted"].execute(
+      ctx({ token: "t", owner: "ghost" }),
+    );
+    assertEquals(r.pass, false);
+    assertStringIncludes(r.errors![0], "Not Found");
+  } finally {
+    globalThis.fetch = original;
+  }
 });

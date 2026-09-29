@@ -53,6 +53,27 @@ Argument names are the schemas' own;
 `swamp model type describe @thomas/forgejo --json` lists them once both packages
 are pulled.
 
+## Pre-flight checks
+
+| Check                    | Label    | Proves                                                                                                                                                                                                   |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `forgejo-api-url-shape`  | `policy` | `apiUrl` is set, is http(s), and is the forge's base URL without a trailing `/api/v1` — every path here already starts with it, so a doubled one gives `/api/v1/api/v1/...` and a 404 that names nothing |
+| `forgejo-token-accepted` | `live`   | The forge answers and the token is still accepted, reported as the login it belongs to                                                                                                                   |
+
+These run before any mutating method, which matters here because several delete.
+Skip them with `--skip-check-label live` offline, or by name.
+
+The shape check runs first and the live one stands down when it fails, so a
+mistyped URL is reported once as what it is rather than a second time as a 404.
+Note that `@thomas/forgejo` has a `reachable` check of its own covering the same
+ground as `forgejo-token-accepted`; both are kept because they fail
+independently.
+
+**A token is never echoed.** Forgejo answers a rejected credential with
+`access token does not exist [sha: <the token>]`, putting the value in the
+response body. The transport masks it as it parses, so neither a check nor a
+method can carry it into an error, a record or a log.
+
 ## Push mirrors are not pull mirrors
 
 Upstream's `mirror_ensure` sets up a _pull_ mirror: Forgejo fetching from

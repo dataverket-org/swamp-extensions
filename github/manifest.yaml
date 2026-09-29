@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/github"
-version: "2026.09.29.1"
+version: "2026.09.29.2"
 description: >
   Repository settings for swamp that `@goodcraft/github`'s `ensureRepo` does
   not cover, as an extension to it.

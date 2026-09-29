@@ -82,6 +82,45 @@ export function summarize(
   };
 }
 
+/** One spawned command's outcome. */
+export interface SpawnResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+/** Spawns a command; replaceable so checks and methods are testable. */
+export type Spawn = (
+  bin: string,
+  args: string[],
+  signal?: AbortSignal,
+) => Promise<SpawnResult>;
+
+const defaultSpawn: Spawn = async (bin, args, signal) => {
+  const out = await new Deno.Command(bin, {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+    signal,
+  }).output();
+  return {
+    success: out.success,
+    stdout: new TextDecoder().decode(out.stdout),
+    stderr: new TextDecoder().decode(out.stderr),
+  };
+};
+
+let testSpawn: Spawn | undefined;
+/** Install a fake spawn (tests only); call with no argument to restore. */
+export function __setSpawn(s?: Spawn): void {
+  testSpawn = s;
+}
+
+/**
+ * Run `bin` and return stdout, or throw with its stderr. A binary that is
+ * not on PATH throws Deno.errors.NotFound from the spawn itself, which is a
+ * message naming nothing an operator can act on; the checks below turn that
+ * into a named failure before a method ever gets here.
+ */
 async function run(
   bin: string,
   args: string[],
@@ -92,23 +131,68 @@ async function run(
   if (g.kubeconfig) full.push("--kubeconfig", g.kubeconfig);
   if (g.context) full.push("--context", g.context);
   full.push(...args);
-  const out = await new Deno.Command(bin, {
-    args: full,
-    stdout: "piped",
-    stderr: "piped",
-    signal,
-  }).output();
-  const stdout = new TextDecoder().decode(out.stdout);
-  const stderr = new TextDecoder().decode(out.stderr);
+  const out = await (testSpawn ?? defaultSpawn)(bin, full, signal);
+  const { stdout, stderr } = out;
   if (!out.success) {
     throw new Error(`${bin} ${args[0]} failed: ${(stderr || stdout).trim()}`);
   }
   return stdout;
 }
 
+/**
+ * Spawn `bin` with a version argument and report why it could not be run.
+ * A binary missing from PATH surfaces as Deno.errors.NotFound, whose own
+ * message names neither the binary nor what to do, so it is restated here.
+ */
+export async function cliProblem(
+  bin: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const out = await (testSpawn ?? defaultSpawn)(bin, args, signal);
+    if (!out.success) {
+      return `${bin} ${args.join(" ")} failed: ${
+        (out.stderr || out.stdout).trim()
+      }`;
+    }
+    return undefined;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return `${bin} is not on PATH; install it or put it on the PATH this repository runs with`;
+    }
+    return `${bin} could not be run: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  }
+}
+
 /** Adds `reset` to `@ginger_pappa/flux/helmrelease`. */
 export const extension = {
   type: "@ginger_pappa/flux/helmrelease",
+  checks: [{
+    "flux-cli-available": {
+      description: "The flux binary runs and reports its version",
+      labels: ["live"],
+      execute: async (context: { signal?: AbortSignal }) => {
+        const problem = await cliProblem("flux", ["--version"], context.signal);
+        return problem ? { pass: false, errors: [problem] } : { pass: true };
+      },
+    },
+    "kubectl-cli-available": {
+      description:
+        "The kubectl binary runs and reports its client version; reset reads the object back with it",
+      labels: ["live"],
+      execute: async (context: { signal?: AbortSignal }) => {
+        const problem = await cliProblem(
+          "kubectl",
+          ["version", "--client"],
+          context.signal,
+        );
+        return problem ? { pass: false, errors: [problem] } : { pass: true };
+      },
+    },
+  }],
   resources: {
     resetResult: {
       description:

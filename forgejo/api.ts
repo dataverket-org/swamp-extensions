@@ -31,6 +31,24 @@ export interface GlobalArgs {
   httpTimeoutMs?: number;
 }
 
+/**
+ * Mask the token wherever the forge echoes it back. Forgejo answers a bad
+ * credential with `access token does not exist [sha: <the token>]`, so the
+ * value arrives inside the response body and would otherwise reach an error
+ * message, a check's output and the log. Masking here covers every caller,
+ * because this is the one place a response becomes data.
+ */
+/** Below this length a "token" is not a credential, and masking it corrupts text. */
+const MIN_REDACTABLE = 8;
+
+export function redactToken(text: string, token: string): string {
+  // Short enough to be a substring of ordinary prose is short enough to
+  // mangle it: a token of "t" would turn "Not Found" into "No[REDACTED] Found".
+  // Nothing that short is a real credential, so leave it alone.
+  if (!token || token.length < MIN_REDACTABLE) return text;
+  return text.split(token).join("[REDACTED]");
+}
+
 /** A {@link Caller} over `fetch` against `apiUrl`, authenticated with the token. */
 export function fetchCaller(g: GlobalArgs, signal?: AbortSignal): Caller {
   return async (c) => {
@@ -58,9 +76,9 @@ export function fetchCaller(g: GlobalArgs, signal?: AbortSignal): Caller {
       let parsed: Record<string, unknown> = {};
       if (text) {
         try {
-          parsed = JSON.parse(text);
+          parsed = JSON.parse(redactToken(text, g.token));
         } catch {
-          parsed = { raw: text };
+          parsed = { raw: redactToken(text, g.token) };
         }
       }
       return { status: res.status, body: parsed };

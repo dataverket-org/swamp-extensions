@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.09.29.1"
+version: "2026.09.29.2"
 description: >
   Forgejo operations for swamp that reach past a single repository, as
   extensions to `@thomas/forgejo`.
@@ -18,7 +18,9 @@ description: >
   Forgejo has no undelete.
 
   Install alongside `@thomas/forgejo`; the methods land on its model types and
-  read its `apiUrl` and token. No secret value is recorded or logged: the
+  read its `apiUrl` and token. Two pre-flight checks come with them: a policy
+  check that `apiUrl` is the forge's base URL without a trailing `/api/v1`,
+  and a live one that the token is still accepted. No secret value is recorded or logged: the
   registration token is marked sensitive, so swamp vaults it and records a
   reference, and a mirror's remote credential is sent to Forgejo once and
   never stored.
@@ -27,6 +29,7 @@ paths:
   base: manifest
 models:
   - actions.ts
+  - checks.ts
   - push_mirror.ts
   - pr_assign.ts
   - repo_delete.ts

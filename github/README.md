@@ -28,6 +28,22 @@ swamp model method run gh default_branch_ensure \
   --arg repo=example-repo --arg branch=main
 ```
 
+## Pre-flight check
+
+| Check                   | Label  | Proves                                                                                                            |
+| ----------------------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
+| `github-token-accepted` | `live` | The API answers, the token is still accepted, and it can see the model's `owner` — which every path is built from |
+
+It runs before any mutating method, `repo_delete` included, so a stale token is
+a refusal rather than a failure part-way through. Skip it offline with
+`--skip-check-label live`.
+
+The check reads `baseUrl` the way the methods do: a check receives the
+definition as written, with none of the schema's defaults applied, so `baseUrl`
+is undefined there even though the schema gives it `https://api.github.com`. The
+transport supplies that fallback itself, in one place, so a check and a method
+cannot disagree about where they are pointed.
+
 ## Why the default branch matters
 
 GitHub refuses a mirror push from a repository whose default branch is not one

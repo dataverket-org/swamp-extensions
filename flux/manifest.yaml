@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/flux"
-version: "2026.09.29.1"
+version: "2026.09.29.2"
 description: >
   A reconcile with `--reset` for Flux HelmReleases, as an extension to
   `@ginger_pappa/flux/helmrelease`.
@@ -12,6 +12,10 @@ description: >
   runs the reconcile that clears them, waits for the attempt, reads the object
   back and records readiness, the newest Helm history status and both failure
   counters, so the outcome is a record and not a log line.
+
+  Two live pre-flight checks confirm `flux` and `kubectl` can be run before a
+  reconcile starts, so a missing binary is a named refusal instead of a spawn
+  error part-way through.
 
   Same shape as the base type, deliberately: `flux` and `kubectl` are run by
   name from PATH exactly as `@ginger_pappa/flux` runs them, and the model's

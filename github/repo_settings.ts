@@ -38,6 +38,23 @@ export interface GlobalArgs {
   baseUrl?: string;
 }
 
+/**
+ * Mask the token wherever the API echoes it back. GitHub itself answers a bad
+ * credential without repeating it, but a proxy or a self-hosted endpoint in
+ * front of `baseUrl` may not, and this is the one place a response becomes
+ * data, so masking here covers every caller.
+ */
+/** Below this length a "token" is not a credential, and masking it corrupts text. */
+const MIN_REDACTABLE = 8;
+
+export function redactToken(text: string, token: string): string {
+  // Short enough to be a substring of ordinary prose is short enough to
+  // mangle it: a token of "t" would turn "Not Found" into "No[REDACTED] Found".
+  // Nothing that short is a real credential, so leave it alone.
+  if (!token || token.length < MIN_REDACTABLE) return text;
+  return text.split(token).join("[REDACTED]");
+}
+
 /** A {@link Caller} over `fetch` against api.github.com (or `baseUrl`). */
 export function fetchCaller(g: GlobalArgs, signal?: AbortSignal): Caller {
   const base = (g.baseUrl ?? "https://api.github.com").replace(/\/+$/, "");
@@ -53,7 +70,7 @@ export function fetchCaller(g: GlobalArgs, signal?: AbortSignal): Caller {
       body: c.body !== undefined ? JSON.stringify(c.body) : undefined,
       signal,
     });
-    const text = await res.text();
+    const text = redactToken(await res.text(), g.token);
     let body: unknown = {};
     if (text) {
       try {
@@ -246,6 +263,50 @@ interface Ctx {
 /** Extension adding branch listing and default-branch convergence to @goodcraft/github. */
 export const extension = {
   type: "@goodcraft/github",
+  checks: [{
+    "github-token-accepted": {
+      description:
+        "api.github.com answers and the token is still accepted for the model's owner",
+      labels: ["live"],
+      execute: async (
+        context: { globalArgs: GlobalArgs; signal?: AbortSignal },
+      ) => {
+        // A check receives the definition as written, without the schema's
+        // defaults, so baseUrl is undefined here even though the schema gives
+        // it https://api.github.com. fetchCaller supplies that fallback
+        // itself, which is why it can be used unchanged.
+        if (!context.globalArgs.token) {
+          return { pass: false, errors: ["globalArguments.token is not set"] };
+        }
+        if (!context.globalArgs.owner) {
+          return { pass: false, errors: ["globalArguments.owner is not set"] };
+        }
+        try {
+          const api = fetchCaller(context.globalArgs, context.signal);
+          const me = (await call(api, { method: "GET", path: "/user" }))
+            .body as Record<string, unknown>;
+          if (typeof me.login !== "string" || !me.login) {
+            return {
+              pass: false,
+              errors: ["GitHub answered /user without a login"],
+            };
+          }
+          // the owner is what every path is built from; a token that works but
+          // cannot see the owner fails later, in the middle of a method
+          await call(api, {
+            method: "GET",
+            path: `/users/${encodeURIComponent(context.globalArgs.owner)}`,
+          });
+          return { pass: true };
+        } catch (err) {
+          return {
+            pass: false,
+            errors: [err instanceof Error ? err.message : String(err)],
+          };
+        }
+      },
+    },
+  }],
   resources: {
     repoDelete: {
       description: "A repository deletion under the model's owner.",

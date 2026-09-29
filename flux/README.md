@@ -27,6 +27,17 @@ swamp model method run releases reset \
 swamp data query 'modelName == "releases" && specName == "resetResult" && isLatest' --json
 ```
 
+## Pre-flight checks
+
+| Check                   | Label  | Proves                                                                 |
+| ----------------------- | ------ | ---------------------------------------------------------------------- |
+| `flux-cli-available`    | `live` | `flux --version` runs                                                  |
+| `kubectl-cli-available` | `live` | `kubectl version --client` runs; `reset` reads the object back with it |
+
+A binary missing from PATH otherwise surfaces as a spawn error part-way through
+the method, whose message names neither the binary nor what to do. These name
+it. Skip them with `--skip-check-label live`.
+
 ## Why it is needed
 
 helm-controller counts install and upgrade failures. Past the limit a
