@@ -42,6 +42,20 @@ added, and `reset` learned to wipe only named partitions.
 | `serviceAccountKey`     | unset        | Omni service-account key as a value, for a key the process owns; supply via a vault expression. Mutually exclusive with the file  |
 | `retryDelayMs`          | `15000`      | Pause between retries of transient API errors                                                                                     |
 
+### Checks
+
+| Check                  | Label    | What it proves                                                                                                                      |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `talosctl-available`   | `live`   | The binary at `talosctlPath` runs and reports its client version                                                                    |
+| `talosconfig-exists`   | `policy` | The file named by `talosconfig` exists, when one is named and no `talosconfigContent` overrides it                                  |
+| `omni-key-readable`    | `policy` | The Omni key resolves as a method would: the file exists, is readable and is not empty, and the file and the value are not both set |
+| `talos-context-exists` | `live`   | `talosContext` is one of the talosconfig's contexts; the failure names the contexts there are instead                               |
+
+The last two answer the two ways a definition passes its binary check and still
+cannot reach a machine: an operator's sitting expired without rewriting the key
+file, and a context that is not in the config. Neither reads a node, and neither
+puts a key's value in its output.
+
 A plain cluster: set `endpoint` (or `nodes`) and `talosconfig`:
 
 ```sh

@@ -218,6 +218,23 @@ export function parseEtcdMembers(stdout: string) {
   return out;
 }
 
+/**
+ * Parse `talosctl config contexts`: CURRENT NAME ENDPOINTS rows, where the
+ * current context carries a `*` in the first column and every other row
+ * starts with blanks. Trimming the line and dropping a lone `*` leaves the
+ * name first either way.
+ */
+export function parseContexts(stdout: string): string[] {
+  const out = [];
+  for (const line of stdout.trim().split("\n").slice(1)) {
+    const p = line.trim().split(/\s+/);
+    if (p[0] === "*") p.shift();
+    if (p.length === 0 || p[0] === "") continue;
+    out.push(p[0]);
+  }
+  return out;
+}
+
 const ApplyArgs = z.object({
   configFile: z.string().describe("Path to the machine config YAML file"),
   mode: z.enum(["auto", "reboot", "no-reboot", "staged"]).default("auto"),
@@ -250,7 +267,7 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.29.2",
+  version: "2026.09.29.3",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -262,6 +279,12 @@ export const model = {
       toVersion: "2026.09.29.2",
       description:
         "talosctl-available defaults talosctlPath itself; no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.29.3",
+      description:
+        "omni-key-readable and talos-context-exists checks added; no schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -297,6 +320,67 @@ export const model = {
           return { pass: true };
         } catch {
           return { pass: false, errors: [`talosconfig not found: ${p}`] };
+        }
+      },
+    },
+    "omni-key-readable": {
+      description:
+        "The Omni service-account key is readable when the definition names one",
+      labels: ["policy"],
+      // deno-lint-ignore require-await
+      execute: async (context: { globalArgs: GlobalArgs }) => {
+        // serviceAccountKey resolves the same way a method does: it rejects
+        // the file and the value set together, and names the path — never the
+        // value — when the file is missing, unreadable or empty. An operator's
+        // sitting that has expired without rewriting the file reads as empty.
+        try {
+          serviceAccountKey(context.globalArgs);
+          return { pass: true };
+        } catch (err) {
+          return {
+            pass: false,
+            errors: [err instanceof Error ? err.message : String(err)],
+          };
+        }
+      },
+    },
+    "talos-context-exists": {
+      description:
+        "The named talosContext is one of the talosconfig's contexts",
+      labels: ["live"],
+      execute: async (context: { globalArgs: GlobalArgs }) => {
+        const g = context.globalArgs;
+        // Without talosContext talosctl uses whichever context is current,
+        // which the definition does not control and cannot check.
+        if (!g.talosContext) return { pass: true };
+        try {
+          // Deliberately without --context: asking for the missing one only
+          // reports that it is missing, while the full list says what to
+          // name instead. No node and no Omni key: this reads a local file.
+          const { stdout } = await talosctl({
+            talosctlPath: talosctlPathOf(g),
+            talosconfig: g.talosconfig,
+            talosconfigContent: g.talosconfigContent,
+            nodes: [],
+            // the content is sensitive wherever it came from, and this is the
+            // one path that reaches talosctl without going through options()
+            secrets: g.talosconfigContent ? [g.talosconfigContent] : [],
+            retryDelayMs: g.retryDelayMs,
+          }, ["config", "contexts"]);
+          const names = parseContexts(stdout);
+          if (names.includes(g.talosContext)) return { pass: true };
+          return {
+            pass: false,
+            errors: [
+              `talosContext "${g.talosContext}" is not in the talosconfig; ` +
+              `it has ${names.length > 0 ? names.join(", ") : "no contexts"}`,
+            ],
+          };
+        } catch (err) {
+          return {
+            pass: false,
+            errors: [err instanceof Error ? err.message : String(err)],
+          };
         }
       },
     },

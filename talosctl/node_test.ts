@@ -1,12 +1,14 @@
 import {
   assertEquals,
   assertRejects,
+  assertStringIncludes,
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
 import {
   type GlobalArgs,
   model,
   options,
+  parseContexts,
   parseEtcdMembers,
   parseServices,
   serviceAccountKey,
@@ -101,6 +103,132 @@ Deno.test("the live check spawns talosctl even without the schema default", asyn
   } finally {
     fake.restore();
   }
+});
+
+Deno.test("parseContexts reads the names either side of the current marker", () => {
+  assertEquals(
+    parseContexts(
+      "CURRENT   NAME        ENDPOINTS\n" +
+        "*         fabrikk     https://omni.example.com\n" +
+        "          lab         192.0.2.10\n",
+    ),
+    ["fabrikk", "lab"],
+  );
+  assertEquals(parseContexts("CURRENT   NAME        ENDPOINTS\n"), []);
+});
+
+Deno.test("talos-context-exists accepts a named context the config has", async () => {
+  const fake = installFake(() =>
+    ok(
+      "CURRENT   NAME        ENDPOINTS\n" +
+        "*         fabrikk     https://omni.example.com\n" +
+        "          lab         192.0.2.10\n",
+    )
+  );
+  try {
+    const result = await model.checks["talos-context-exists"].execute(
+      { globalArgs: { talosContext: "lab" } as GlobalArgs },
+    );
+    assertEquals(result.pass, true);
+    // listed without --context: the missing one would only report itself
+    assertEquals(fake.calls[0].args, ["config", "contexts"]);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("talos-context-exists names the contexts there are instead", async () => {
+  const fake = installFake(() =>
+    ok(
+      "CURRENT   NAME        ENDPOINTS\n" +
+        "*         fabrikk     https://omni.example.com\n" +
+        "          lab         192.0.2.10\n",
+    )
+  );
+  try {
+    const result = await model.checks["talos-context-exists"].execute(
+      { globalArgs: { talosContext: "gone" } as GlobalArgs },
+    );
+    assertEquals(result.pass, false);
+    assertStringIncludes(result.errors![0], '"gone" is not in the talosconfig');
+    assertStringIncludes(result.errors![0], "fabrikk, lab");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("talos-context-exists redacts the talosconfig out of a failure", async () => {
+  const secret = "SECRET-TALOSCONFIG-BODY";
+  const fake = installFake(() => fail(`bad config: ${secret}`));
+  try {
+    const result = await model.checks["talos-context-exists"].execute({
+      globalArgs: {
+        talosContext: "lab",
+        talosconfigContent: secret,
+      } as GlobalArgs,
+    });
+    assertEquals(result.pass, false);
+    assertEquals(result.errors![0].includes(secret), false);
+    assertStringIncludes(result.errors![0], "[REDACTED]");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("talos-context-exists passes when no context is named at all", async () => {
+  const fake = installFake(() => undefined);
+  try {
+    const result = await model.checks["talos-context-exists"].execute(
+      { globalArgs: {} as GlobalArgs },
+    );
+    assertEquals(result.pass, true);
+    assertEquals(fake.calls.length, 0);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("omni-key-readable reads the key file and never reports its value", async () => {
+  const path = await Deno.makeTempFile();
+  await Deno.writeTextFile(path, "the-key-value\n");
+  try {
+    const good = await model.checks["omni-key-readable"].execute(
+      { globalArgs: { serviceAccountKeyFile: path } as GlobalArgs },
+    );
+    assertEquals(good.pass, true);
+
+    await Deno.writeTextFile(path, "   \n");
+    const empty = await model.checks["omni-key-readable"].execute(
+      { globalArgs: { serviceAccountKeyFile: path } as GlobalArgs },
+    );
+    assertEquals(empty.pass, false);
+    assertStringIncludes(empty.errors![0], "is empty");
+  } finally {
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("omni-key-readable catches a missing file, both set, and neither", async () => {
+  const missing = await model.checks["omni-key-readable"].execute(
+    { globalArgs: { serviceAccountKeyFile: "/nope/absent.key" } as GlobalArgs },
+  );
+  assertEquals(missing.pass, false);
+  assertStringIncludes(missing.errors![0], "does not exist");
+
+  const both = await model.checks["omni-key-readable"].execute({
+    globalArgs: {
+      serviceAccountKeyFile: "/nope/absent.key",
+      serviceAccountKey: "v",
+    } as GlobalArgs,
+  });
+  assertEquals(both.pass, false);
+  assertStringIncludes(both.errors![0], "not both");
+
+  // plain talosctl: the talosconfig carries a client certificate
+  const neither = await model.checks["omni-key-readable"].execute(
+    { globalArgs: {} as GlobalArgs },
+  );
+  assertEquals(neither.pass, true);
 });
 
 Deno.test("parseServices and parseEtcdMembers read the tables", () => {
