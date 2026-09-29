@@ -1,0 +1,39 @@
+manifestVersion: 1
+name: "@dataverket/flux"
+version: "2026.09.29.1"
+description: >
+  A reconcile with `--reset` for Flux HelmReleases, as an extension to
+  `@ginger_pappa/flux/helmrelease`.
+
+  Upstream can reconcile a HelmRelease but cannot clear its failure counters.
+  A release whose first install timed out reaches `RetriesExceeded` and stays
+  failed for good, even when every workload it created is healthy, because
+  helm-controller will not try again until the counters are reset. `reset`
+  runs the reconcile that clears them, waits for the attempt, reads the object
+  back and records readiness, the newest Helm history status and both failure
+  counters, so the outcome is a record and not a log line.
+
+  Same shape as the base type, deliberately: `flux` and `kubectl` are run by
+  name from PATH exactly as `@ginger_pappa/flux` runs them, and the model's
+  namespace, kubeconfig and context are honoured. A failed attempt is recorded
+  rather than hidden — what the object says afterwards is what is stored.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - reset.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - flux
+  - fluxcd
+  - helm
+  - helmrelease
+  - kubernetes
+  - gitops
+dependencies: []

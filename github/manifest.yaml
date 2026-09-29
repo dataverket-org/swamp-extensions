@@ -1,0 +1,40 @@
+manifestVersion: 1
+name: "@dataverket/github"
+version: "2026.09.29.1"
+description: >
+  Repository settings for swamp that `@goodcraft/github`'s `ensureRepo` does
+  not cover, as an extension to it.
+
+  Three methods: `branches_list` reports the branches a repository has and
+  which one is default, `default_branch_ensure` converges the default branch,
+  and `repo_delete` removes a repository verify-first. The second reports
+  unchanged when the default already matches and refuses to point at a branch
+  the repository does not have, so the failure names the cause rather than
+  leaving a repository pointed at nothing. The third is a no-op for a
+  repository already absent, and `expectMirrorOf` refuses one whose
+  description does not mention the given text.
+
+  This is what a push mirror needs. GitHub rejects a mirror push from a
+  repository whose default branch is not the one being pushed, with "refusing
+  to delete the current branch", and the fix is to converge GitHub's default
+  first. Talks to the GitHub REST API with the model's token, which is never
+  recorded.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - repo_settings.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - github
+  - git
+  - forge
+  - branches
+  - mirroring
+dependencies: []

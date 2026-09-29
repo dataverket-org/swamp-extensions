@@ -11,6 +11,9 @@ independently:
 | `talosctl/`  | `@dataverket/talosctl`  | Talos machines through `talosctl`, with or without Omni; fork of `@magistr/talos-node` (MIT) plus `volumes` |
 | `omnictl/`   | `@dataverket/omnictl`   | Omni through `omnictl`: fleet inventory and join tokens (Reader), config patches and machine-set membership (Operator); fork of `@mccormick/omni` (MIT) |
 | `sops/`      | `@dataverket/sops`      | SOPS + age vault, one encrypted file per secret, writable with public keys only; fork of `@zocc/sops-age` (Apache-2.0) |
+| `forgejo/`   | `@dataverket/forgejo`   | Forgejo past one repository, extending `@thomas/forgejo`: Actions secrets, runners, push mirrors, PR assignment, repository delete |
+| `github/`    | `@dataverket/github`    | Repository settings `@goodcraft/github` does not reach: branches, default-branch convergence, verify-first delete |
+| `flux/`      | `@dataverket/flux`      | A reconcile with `--reset` for Flux HelmReleases stuck at `RetriesExceeded`, extending `@ginger_pappa/flux/helmrelease` |
 
 Develop against a swamp repository by loading every extension from source:
 
