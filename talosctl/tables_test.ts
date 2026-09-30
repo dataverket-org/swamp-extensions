@@ -12,13 +12,13 @@ import {
 // Omni, 2026-09-30; trailing blanks are as talosctl prints them.
 const ETCD_STATUS =
   "NODE         MEMBER             DB SIZE   IN USE           LEADER             RAFT INDEX   RAFT TERM   RAFT APPLIED INDEX   LEARNER   PROTOCOL   STORAGE   ERRORS\n" +
-  "10.0.0.103   2b19778d2f904766   30 MB     10 MB (35.30%)   2b19778d2f904766   15427147     18          15427147             false     3.7.1      3.7.0     \n" +
-  "error from node 10.0.0.144: rpc error: code = Unimplemented desc = etcd status is only available on control plane nodes\n";
+  "192.0.2.13   0123456789abcdef   30 MB     10 MB (35.30%)   0123456789abcdef   15427147     18          15427147             false     3.7.1      3.7.0     \n" +
+  "error from node 192.0.2.44: rpc error: code = Unimplemented desc = etcd status is only available on control plane nodes\n";
 
 const PROCESSES =
   "NODE         PID      STATE   THREADS   CPU-TIME     VIRTMEM   RESMEM   LABEL                                   COMMAND\n" +
-  "10.0.0.103   814      S       14        1748564.50   12 GB     128 MB   system_u:system_r:etcd_t:s0             /usr/local/bin/etcd --advertise-client-urls=https://10.0.0.103:2379 --auto-tls=false\n" +
-  "10.0.0.103   1        S       18        36535.50     1.5 GB    158 MB   system_u:system_r:init_t:s0             /sbin/init\n";
+  "192.0.2.13   814      S       14        1748564.50   12 GB     128 MB   system_u:system_r:etcd_t:s0             /usr/local/bin/etcd --advertise-client-urls=https://192.0.2.13:2379 --auto-tls=false\n" +
+  "192.0.2.13   1        S       18        36535.50     1.5 GB    158 MB   system_u:system_r:init_t:s0             /sbin/init\n";
 
 Deno.test("columnStarts splits on two spaces, not on the one inside a name", () => {
   assertEquals(columnStarts("NODE   DB SIZE   IN USE"), [0, 7, 17]);
@@ -39,7 +39,7 @@ Deno.test("parseTable gives the last column the rest of the line", () => {
   assertEquals(rows[0]["VIRTMEM"], "12 GB");
   assertEquals(
     rows[0]["COMMAND"],
-    "/usr/local/bin/etcd --advertise-client-urls=https://10.0.0.103:2379 --auto-tls=false",
+    "/usr/local/bin/etcd --advertise-client-urls=https://192.0.2.13:2379 --auto-tls=false",
   );
   assertEquals(rows[1]["LABEL"], "system_u:system_r:init_t:s0");
 });
@@ -57,14 +57,14 @@ Deno.test("parseSize reads SI and binary units, and rejects the rest", () => {
 
 Deno.test("parseLogs strips the node prefix and reads both kinds of ts", () => {
   const lines = parseLogs(
-    '10.0.0.103: {"level":"warn","ts":"2026-09-30T11:16:14.526388Z","msg":"ignored streaming request; ID mismatch"}\n' +
-      '10.0.0.144: {"ts":1790766762840.1804,"msg":"Error syncing pod, skipping"}\n' +
-      "10.0.0.144: plain text without a time\n",
+    '192.0.2.13: {"level":"warn","ts":"2026-09-30T11:16:14.526388Z","msg":"ignored streaming request; ID mismatch"}\n' +
+      '192.0.2.44: {"ts":1790766762840.1804,"msg":"Error syncing pod, skipping"}\n' +
+      "192.0.2.44: plain text without a time\n",
   );
   assertEquals(lines.map((l) => l.node), [
-    "10.0.0.103",
-    "10.0.0.144",
-    "10.0.0.144",
+    "192.0.2.13",
+    "192.0.2.44",
+    "192.0.2.44",
   ]);
   assertEquals(lines[0].ts, Date.parse("2026-09-30T11:16:14.526388Z"));
   assertEquals(lines[1].ts, 1790766762840.1804);

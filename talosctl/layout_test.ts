@@ -8,18 +8,18 @@ import {
 
 Deno.test("parseConcatJson splits concatenated objects and keeps node", () => {
   const rs = parseConcatJson(
-    `{\n "metadata": {"id": "a"}, "node": "10.0.0.1", "spec": {"x": "{"}\n}\n{"metadata": {"id": "b"}, "spec": {}}`,
+    `{\n "metadata": {"id": "a"}, "node": "192.0.2.1", "spec": {"x": "{"}\n}\n{"metadata": {"id": "b"}, "spec": {}}`,
   );
   assertEquals(rs.map((r) => r.metadata.id), ["a", "b"]);
-  assertEquals(rs[0].node, "10.0.0.1");
+  assertEquals(rs[0].node, "192.0.2.1");
   assertEquals(parseConcatJson("  "), []);
 });
 
 Deno.test("parseUsage reads multi-node and single-node tables", () => {
   const multi = parseUsage(
-    "NODE         SIZE         NAME\n10.0.0.129   1229582341   lib\n10.0.0.129   40816889     log\n10.0.0.129   9293         system\n10.0.0.129   1270408591   .\n",
+    "NODE         SIZE         NAME\n192.0.2.29   1229582341   lib\n192.0.2.29   40816889     log\n192.0.2.29   9293         system\n192.0.2.29   1270408591   .\n",
   );
-  assertEquals(multi["10.0.0.129"], {
+  assertEquals(multi["192.0.2.29"], {
     total: 1270408591,
     lib: 1229582341,
     log: 40816889,
@@ -69,7 +69,7 @@ Deno.test("buildLayout computes unallocated space and EPHEMERAL usage", () => {
   ];
   const l = buildLayout(
     "wrkr-1",
-    "10.0.0.3",
+    "192.0.2.3",
     disks,
     vols,
     { total: 7 * GiB, lib: 6 * GiB, log: 1 * GiB },

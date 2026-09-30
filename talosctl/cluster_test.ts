@@ -90,7 +90,7 @@ Deno.test("with no control plane among the targets, etcd calls say so", async ()
     await assertRejects(
       () => model.methods.etcdStatus.execute({}, context),
       Error,
-      "no control plane among the reachable targets",
+      "no control plane among the targets",
     );
   } finally {
     fake.restore();
@@ -235,6 +235,97 @@ Deno.test("processes keeps the executable and drops every argument", async () =>
     assertEquals(procs[0].cpuSeconds, 12.5);
     assertEquals(procs[0].residentBytes, 2e6);
     assertEquals(JSON.stringify(written).includes("hunter2"), false);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("serviceLogs writes nothing when one node fails for a reason other than a missing service", async () => {
+  const fake = cluster([], (args) => {
+    if (args[0] !== "logs") return undefined;
+    if (nodeOf(args) === "cp2") {
+      return fail("rpc error: code = PermissionDenied");
+    }
+    return `${nodeOf(args)}: {"ts":"${new Date().toISOString()}","msg":"x"}`;
+  });
+  const { context, written } = makeContext(ALL);
+  try {
+    await assertRejects(
+      () =>
+        model.methods.serviceLogs.execute({
+          service: "etcd",
+          tail: 10,
+          keep: 1,
+        }, context),
+      Error,
+      "cp2: ",
+    );
+    assertEquals(written.length, 0);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("etcdStatus records a control plane that is down as unreachable, so no stale record stays latest", async () => {
+  const fake = cluster(
+    ["cp2"],
+    (args) =>
+      args[0] === "etcd"
+        ? "NODE   MEMBER   DB SIZE   IN USE   LEADER   ERRORS\n" +
+          `${nodeOf(args)}    aa       1 MB      1 MB     aa       \n`
+        : undefined,
+  );
+  const { context, written } = makeContext(ALL);
+  try {
+    await model.methods.etcdStatus.execute({}, context);
+    const byName = Object.fromEntries(written.map((w) => [w.name, w.data]));
+    assertEquals(byName["etcd-status-cp1"].reachable, true);
+    assertEquals(byName["etcd-status-cp2"].reachable, false);
+    assertStringIncludes(
+      String(byName["etcd-status-cp2"].error),
+      "machine type unknown",
+    );
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("processes says when it cut the list", async () => {
+  const fake = cluster(
+    [],
+    (args) =>
+      args[0] === "processes"
+        ? "NODE   PID   STATE   THREADS   CPU-TIME   VIRTMEM   RESMEM   LABEL   COMMAND\n" +
+          "cp1    1     S       1         2.00       1 MB      1 MB     x       /a\n" +
+          "cp1    2     S       1         1.00       1 MB      1 MB     x       /b\n"
+        : undefined,
+  );
+  const { context, written } = makeContext({ nodes: ["cp1"] });
+  try {
+    await model.methods.processes.execute({ sort: "cpu", top: 1 }, context);
+    assertEquals(written[0].data.total, 2);
+    assertEquals(written[0].data.truncated, true);
+    assertEquals((written[0].data.processes as unknown[]).length, 1);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("an invalid match names the argument instead of throwing a bare SyntaxError", async () => {
+  const fake = cluster([], () => "");
+  const { context } = makeContext({ nodes: ["cp1"] });
+  try {
+    await assertRejects(
+      () =>
+        model.methods.serviceLogs.execute({
+          service: "etcd",
+          tail: 10,
+          keep: 1,
+          match: "(",
+        }, context),
+      Error,
+      "match is not a valid regular expression",
+    );
   } finally {
     fake.restore();
   }

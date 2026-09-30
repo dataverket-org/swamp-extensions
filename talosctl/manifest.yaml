@@ -8,9 +8,10 @@ description: >
   version, services, etcd members and status, service logs, top processes,
   the cluster kubeconfig, apply and patch machine config, bootstrap, reboot,
   shutdown, reset (whole system disk or only named partitions such as
-  EPHEMERAL), upgrade, and the cluster health check. Every method takes
-  `nodes`, a subset of the definition's targets, so a fleet definition can
-  reboot one machine; etcd and health go only to control planes. `volumes`
+  EPHEMERAL), upgrade, and the cluster health check. Every method but
+  health takes `nodes`, a subset of the definition's targets, so a fleet
+  definition can reboot one machine; etcd and health go only to control
+  planes. `volumes`
   reads every node's disks, partitions by label, unallocated space on the
   system disk and how full EPHEMERAL is, in one execution, so a plan for user
   volumes starts from measured numbers.

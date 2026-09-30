@@ -6,8 +6,8 @@ Talos Linux machines for [swamp](https://github.com/swamp-club/swamp), through
 Forked from [`@magistr/talos-node`](https://github.com/umag/swamp-workspace)
 (MIT, copyright magistr) and typed. The upstream methods are kept; `volumes`,
 `etcdStatus`, `serviceLogs` and `processes` are added, `reset` learned to wipe
-only named partitions, and every method takes `nodes` to address fewer machines
-than the definition names.
+only named partitions, and every method takes `nodes` (`health` takes one
+`node`) to address fewer machines than the definition names.
 
 ## Model type
 
@@ -65,8 +65,8 @@ A plain cluster: set `endpoint` (or `nodes`) and `talosconfig`:
 
 ```sh
 swamp model create @dataverket/talosctl/node lab
-#   endpoint: 10.5.0.2
-#   nodes: [10.5.0.2, 10.5.0.3]
+#   endpoint: 192.0.2.2
+#   nodes: [192.0.2.2, 192.0.2.3]
 #   talosconfig: ~/.talos/lab
 swamp model method run lab volumes
 ```
@@ -88,13 +88,13 @@ globalArguments:
 ## Fewer nodes than the definition names
 
 A definition names a whole cluster, and a method addresses all of it unless a
-call says otherwise. Every method takes `nodes`, which must be a subset of the
-definition's targets: an argument can shrink what a definition reaches, never
-widen it. This is what makes lifecycle methods safe to use on a fleet
-definition: `reboot` without `nodes` reboots every machine.
+call says otherwise. Every method but `health` takes `nodes`, which must be a
+subset of the definition's targets: an argument can shrink what a definition
+reaches, never widen it. This is what makes lifecycle methods safe to use on a
+fleet definition: `reboot` without `nodes` reboots every machine.
 
 ```sh
-swamp model method run lab reboot --input 'nodes=["10.5.0.3"]'
+swamp model method run lab reboot --input 'nodes=["192.0.2.3"]'
 swamp model method run lab etcdStatus
 ```
 
@@ -102,10 +102,12 @@ swamp model method run lab etcdStatus
 so they read each target's `machinetype` first and go only where it says
 `controlplane`. Each node is asked on its own, so a worker in the list, or a
 control plane that is rebooting, leaves the others' answers intact: an
-`etcdStatus` for an unreachable control plane is written with
-`reachable: false`. `health` runs from the first control plane, or from `node`.
-Through Omni's proxy its etcd check needs more than a Reader identity; Omni
-reports cluster health on its own.
+`etcdStatus` for an unreachable control plane, and for any target that cannot
+say what kind of machine it is, is written with `reachable: false`, so a stale
+healthy record never outlives a node that went down. `health` runs from the
+first control plane, or from `node`. Through Omni's proxy we have seen its etcd
+check refused (`PermissionDenied`) for both Reader and Operator service
+accounts; Omni reports cluster health on its own.
 
 ## `serviceLogs`
 
@@ -118,6 +120,9 @@ times, and the newest `keep` matching lines. After a restart, a node that kept
 running still holds its old lines, so ask for a window rather than a tail count
 when the question is "has this stopped":
 
+The stored lines are raw log content and marked sensitive; `keep: 0` stores none
+and keeps only the counts.
+
 ```sh
 swamp model method run lab serviceLogs --input service=etcd \
   --input tail=2000 --input 'match=ID mismatch' --input sinceSeconds=300
@@ -125,8 +130,9 @@ swamp model method run lab serviceLogs --input service=etcd \
 
 ## `processes`
 
-`talosctl processes --sort cpu|rss` on every target; the newest `top` rows per
-node, with CPU seconds, virtual and resident bytes and the SELinux label. Only a
+`talosctl processes --sort cpu|rss` on every target; the first `top` rows per
+node in that order, with CPU seconds, virtual and resident bytes and the SELinux
+label, and `total` and `truncated` to say how many the node had. Only a
 command's first word is kept: arguments can carry secrets.
 
 ## `volumes`

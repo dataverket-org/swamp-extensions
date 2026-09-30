@@ -21,12 +21,12 @@ import { talosctl as runTalosctl } from "./talosctl.ts";
 Deno.test("options targets nodes, falls back to endpoint, refuses neither", () => {
   assertEquals(
     options({
-      endpoint: "10.0.0.1",
+      endpoint: "192.0.2.1",
       insecure: false,
       talosctlPath: "t",
       retryDelayMs: 0,
     }).nodes,
-    ["10.0.0.1"],
+    ["192.0.2.1"],
   );
   const o = options({
     nodes: ["a", "b"],
@@ -234,13 +234,13 @@ Deno.test("omni-key-readable catches a missing file, both set, and neither", asy
 Deno.test("parseServices and parseEtcdMembers read the tables", () => {
   assertEquals(
     parseServices(
-      "NODE SERVICE STATE HEALTH LAST CHANGE\n10.0.0.1 apid Running OK 1m\n",
+      "NODE SERVICE STATE HEALTH LAST CHANGE\n192.0.2.1 apid Running OK 1m\n",
     ),
-    [{ node: "10.0.0.1", id: "apid", state: "Running", health: "OK" }],
+    [{ node: "192.0.2.1", id: "apid", state: "Running", health: "OK" }],
   );
   assertEquals(
     parseEtcdMembers(
-      "NODE ID HOSTNAME PEER CLIENT LEARNER\n10.0.0.1 abc ctrl-1 https://p:2380 https://c:2379 false\n",
+      "NODE ID HOSTNAME PEER CLIENT LEARNER\n192.0.2.1 abc ctrl-1 https://p:2380 https://c:2379 false\n",
     )[0].hostname,
     "ctrl-1",
   );
@@ -300,7 +300,7 @@ Deno.test("volumes writes one layout per node from four reads", async () => {
 
 Deno.test("reset passes graceful, reboot and the labels to wipe", async () => {
   const fake = installFake(() => "");
-  const { context } = makeContext({ endpoint: "10.0.0.5" });
+  const { context } = makeContext({ endpoint: "192.0.2.5" });
   try {
     await model.methods.reset.execute(
       { graceful: true, reboot: true, systemLabelsToWipe: ["EPHEMERAL"] },
@@ -312,9 +312,9 @@ Deno.test("reset passes graceful, reboot and the labels to wipe", async () => {
       "--system-labels-to-wipe",
       "EPHEMERAL",
       "--endpoints",
-      "10.0.0.5",
+      "192.0.2.5",
       "--nodes",
-      "10.0.0.5",
+      "192.0.2.5",
     ]);
   } finally {
     fake.restore();
@@ -323,7 +323,7 @@ Deno.test("reset passes graceful, reboot and the labels to wipe", async () => {
 
 Deno.test("a failing talosctl surfaces its stderr", async () => {
   const fake = installFake(() => fail("rpc error: permission denied"));
-  const { context } = makeContext({ endpoint: "10.0.0.5" });
+  const { context } = makeContext({ endpoint: "192.0.2.5" });
   try {
     await assertRejects(
       () => model.methods.version.execute({}, context),

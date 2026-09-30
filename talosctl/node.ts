@@ -234,14 +234,17 @@ export function isControlPlaneType(type: unknown): boolean {
 }
 
 /**
- * The targeted nodes that are control planes, in target order, read from each
- * node's `machinetype` resource. A node that does not answer is left out with
- * a warning, so a control plane mid-reboot does not stop a call to the others.
+ * Each target's machine type, read from its `machinetype` resource, one node at
+ * a time: the control planes in target order, and the targets that did not
+ * answer with the reason, since a node that is down cannot say what it is.
  */
-export async function controlPlanes(
+export async function machineTypes(
   opts: TalosctlOptions,
-  context: Pick<ModelContext, "logger" | "signal">,
-): Promise<string[]> {
+  context: Pick<ModelContext, "signal">,
+): Promise<{
+  controlPlanes: string[];
+  unknown: { node: string; error: string }[];
+}> {
   const types = await perNode(opts, async (one) => {
     const { stdout } = await talosctl(one, [
       "get",
@@ -251,21 +254,42 @@ export async function controlPlanes(
     ], { signal: context.signal });
     return parseConcatJson(stdout)[0]?.spec;
   });
-  const out: string[] = [];
+  const controlPlanes: string[] = [];
+  const unknown: { node: string; error: string }[] = [];
   for (const t of types) {
-    if (!t.ok) {
-      context.logger.warning(
-        "{node}: machine type unknown, left out: {error}",
-        {
-          node: t.node,
-          error: t.error,
-        },
-      );
-    } else if (isControlPlaneType(t.value)) out.push(t.node);
+    if (!t.ok) unknown.push({ node: t.node, error: t.error });
+    else if (isControlPlaneType(t.value)) controlPlanes.push(t.node);
+  }
+  return { controlPlanes, unknown };
+}
+
+/**
+ * The targeted nodes that are control planes, in target order. A node that
+ * does not answer is left out with a warning, so a control plane mid-reboot
+ * does not stop a call to the others; with none left, the error carries every
+ * node's reason, so an expired key does not read as a missing control plane.
+ */
+export async function controlPlanes(
+  opts: TalosctlOptions,
+  context: Pick<ModelContext, "logger" | "signal">,
+): Promise<string[]> {
+  const { controlPlanes: out, unknown } = await machineTypes(opts, context);
+  for (const u of unknown) {
+    context.logger.warning("{node}: machine type unknown, left out: {error}", {
+      node: u.node,
+      error: u.error,
+    });
   }
   if (out.length === 0) {
     throw new Error(
-      `no control plane among the reachable targets (${opts.nodes.join(", ")})`,
+      `no control plane among the reachable targets (${
+        opts.nodes.join(", ")
+      })` +
+        (unknown.length > 0
+          ? `; unanswered: ${
+            unknown.map((u) => `${u.node}: ${u.error}`).join("; ")
+          }`
+          : ""),
     );
   }
   return out;
@@ -307,7 +331,7 @@ const ResultSchema = z.object({
 const EtcdStatusSchema = z.object({
   node: z.string(),
   reachable: z.boolean().describe(
-    "false when the control plane did not answer; the fields below are then absent",
+    "false when the control plane did not answer, or when a target did not answer what kind of machine it is; the fields below are then absent",
   ),
   error: z.string().optional(),
   member: z.string().optional(),
@@ -345,8 +369,8 @@ const ServiceLogSchema = z.object({
   ),
   newest: z.string().optional(),
   lines: z.array(z.string()).describe(
-    "The newest `keep` matching lines, oldest first",
-  ),
+    "The newest `keep` matching lines, oldest first; raw log content, so sensitive",
+  ).meta({ sensitive: true }),
   timestamp: z.string(),
 });
 const ProcessSchema = z.object({
@@ -366,6 +390,9 @@ const ProcessSchema = z.object({
 const ProcessesSchema = z.object({
   node: z.string(),
   sort: z.enum(["cpu", "rss"]),
+  top: z.number().describe("How many processes were asked for"),
+  total: z.number().describe("How many processes the node reported"),
+  truncated: z.boolean().describe("true when processes holds fewer than total"),
   processes: z.array(ProcessSchema),
   timestamp: z.string(),
 });
@@ -786,15 +813,23 @@ export const model = {
     },
     etcdStatus: {
       description:
-        "The etcd status of every control plane among the targets: member, leader, raft index and term, database size, errors. One etcdStatus per control plane; one that does not answer is recorded as unreachable. Read-only.",
+        "The etcd status of every control plane among the targets: member, leader, raft index and term, database size, errors. One etcdStatus per control plane; one that does not answer, and any target that cannot say what kind of machine it is, is recorded as unreachable, so a stale healthy record never outlives a node that went down. Read-only.",
       arguments: NodesOnly,
       execute: async (
         args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
         const opts = narrow(options(context.globalArgs), args.nodes);
-        const cps = await controlPlanes(opts, context);
-        const results = await perNode({ ...opts, nodes: cps }, async (one) => {
+        const { controlPlanes: cps, unknown } = await machineTypes(
+          opts,
+          context,
+        );
+        if (cps.length === 0 && unknown.length === 0) {
+          throw new Error(
+            `no control plane among the targets (${opts.nodes.join(", ")})`,
+          );
+        }
+        const answered = await perNode({ ...opts, nodes: cps }, async (one) => {
           const { stdout } = await talosctl(one, ["etcd", "status"], {
             signal: context.signal,
           });
@@ -802,6 +837,14 @@ export const model = {
           if (!row) throw new Error("etcd status printed no row");
           return etcdStatusRecord(row);
         });
+        const results: PerNode<ReturnType<typeof etcdStatusRecord>>[] = [
+          ...answered,
+          ...unknown.map((u) => ({
+            node: u.node,
+            ok: false as const,
+            error: `machine type unknown: ${u.error}`,
+          })),
+        ];
         const ts = now();
         const handles: DataHandle[] = [];
         for (const r of results) {
@@ -822,6 +865,13 @@ export const model = {
             ),
           );
         }
+        context.logger.info(
+          "etcd status of {count} control planes, {down} unreachable",
+          {
+            count: results.length,
+            down: results.filter((r) => !r.ok).length,
+          },
+        );
         return { dataHandles: handles };
       },
     },
@@ -830,7 +880,7 @@ export const model = {
         "The last lines of one service's log on every targeted node, with how many fall inside a time window and match a pattern. One serviceLog per node; a node where the service does not exist is skipped. Read-only.",
       arguments: z.object({
         nodes: NodesArg,
-        service: z.string().min(1).describe(
+        service: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/).describe(
           "Talos service or container log, e.g. etcd, kubelet, apid",
         ),
         tail: z.number().int().min(1).max(10000).default(500).describe(
@@ -858,7 +908,16 @@ export const model = {
         context: ModelContext,
       ): Promise<MethodResult> => {
         const opts = narrow(options(context.globalArgs), args.nodes);
-        const pattern = args.match ? new RegExp(args.match) : undefined;
+        let pattern: RegExp | undefined;
+        try {
+          pattern = args.match ? new RegExp(args.match) : undefined;
+        } catch (err) {
+          throw new Error(
+            `match is not a valid regular expression: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
         const results = await perNode(opts, async (one) => {
           const { stdout } = await talosctl(one, [
             "logs",
@@ -871,18 +930,23 @@ export const model = {
         const cutoff = args.sinceSeconds
           ? Date.now() - args.sinceSeconds * 1000
           : undefined;
+        // Every answer is checked before anything is written, so a failure
+        // leaves no partial set of records behind.
+        const failed = results.find((r) =>
+          !r.ok && !/was not registered/.test(r.error)
+        );
+        if (failed && !failed.ok) {
+          throw new Error(`${failed.node}: ${failed.error}`);
+        }
         const ts = now();
         const handles: DataHandle[] = [];
         for (const r of results) {
           if (!r.ok) {
-            if (/not registered|not found/i.test(r.error)) {
-              context.logger.warning("{node}: no {service} log, skipped", {
-                node: r.node,
-                service: args.service,
-              });
-              continue;
-            }
-            throw new Error(`${r.node}: ${r.error}`);
+            context.logger.warning("{node}: no {service} log, skipped", {
+              node: r.node,
+              service: args.service,
+            });
+            continue;
           }
           const counted = r.value.filter((l) =>
             cutoff === undefined || l.ts === undefined || l.ts >= cutoff
@@ -927,6 +991,10 @@ export const model = {
             })`,
           );
         }
+        context.logger.info("{service} log read on {count} nodes", {
+          service: args.service,
+          count: handles.length,
+        });
         return { dataHandles: handles };
       },
     },
@@ -949,12 +1017,20 @@ export const model = {
             "--sort",
             args.sort,
           ], { signal: context.signal });
-          return parseTable(stdout).slice(0, args.top).map(processRecord);
+          const rows = parseTable(stdout);
+          return {
+            total: rows.length,
+            processes: rows.slice(0, args.top).map(processRecord),
+          };
         });
+        const failed = results.find((r) => !r.ok);
+        if (failed && !failed.ok) {
+          throw new Error(`${failed.node}: ${failed.error}`);
+        }
         const ts = now();
         const handles: DataHandle[] = [];
         for (const r of results) {
-          if (!r.ok) throw new Error(`${r.node}: ${r.error}`);
+          if (!r.ok) continue;
           handles.push(
             await context.writeResource(
               "processes",
@@ -962,12 +1038,20 @@ export const model = {
               {
                 node: r.node,
                 sort: args.sort,
-                processes: r.value,
+                top: args.top,
+                total: r.value.total,
+                truncated: r.value.processes.length < r.value.total,
+                processes: r.value.processes,
                 timestamp: ts,
               },
             ),
           );
         }
+        context.logger.info("top {top} processes by {sort} on {count} nodes", {
+          top: args.top,
+          sort: args.sort,
+          count: handles.length,
+        });
         return { dataHandles: handles };
       },
     },
