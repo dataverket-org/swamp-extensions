@@ -1,3 +1,4 @@
+import { inRepo, resolvePaths } from "./gateway.ts";
 import {
   assertEquals,
   assertRejects,
@@ -334,4 +335,17 @@ Deno.test("a key the signer rejects is masked in the error", async () => {
   } finally {
     __setFetch();
   }
+});
+
+Deno.test("inRepo takes a relative path from the repository and leaves the rest", () => {
+  assertEquals(inRepo("certs/ca.crt", "/srv/repo"), "/srv/repo/certs/ca.crt");
+  assertEquals(inRepo("certs/ca.crt", "/srv/repo/"), "/srv/repo/certs/ca.crt");
+  assertEquals(inRepo("/etc/ca.crt", "/srv/repo"), "/etc/ca.crt");
+  assertEquals(inRepo("~/ca.crt", "/srv/repo"), "~/ca.crt");
+  assertEquals(inRepo("certs/ca.crt", undefined), "certs/ca.crt");
+  assertEquals(inRepo(undefined, "/srv/repo"), undefined);
+  assertEquals(
+    resolvePaths({ caFile: "a.crt", rootKeyFile: "k.env", other: 1 }, "/r"),
+    { caFile: "/r/a.crt", rootKeyFile: "/r/k.env", other: 1 },
+  );
 });

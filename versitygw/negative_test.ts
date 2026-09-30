@@ -739,3 +739,26 @@ Deno.test("both values are marked sensitive in the schema", () => {
     assertEquals(field.meta()?.sensitive, true);
   }
 });
+
+Deno.test("a relative rootKeyFile is read from the repository, not the working directory", async () => {
+  const repo = Deno.makeTempDirSync();
+  const file = keyFile();
+  try {
+    Deno.copyFileSync(file.path, `${repo}/root.env`);
+    const fake = installFetch();
+    try {
+      const { context, written } = makeContext(
+        globalArgs({ rootKeyFile: "root.env" }),
+      );
+      context.repoDir = repo;
+      await model.methods.buckets.execute({}, context);
+      assert(written.length > 0);
+      assert(fake.seen.every((s) => s.signed));
+    } finally {
+      fake.restore();
+    }
+  } finally {
+    file.cleanup();
+    Deno.removeSync(repo, { recursive: true });
+  }
+});

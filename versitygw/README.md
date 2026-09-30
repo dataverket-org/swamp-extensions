@@ -71,11 +71,13 @@ pass-cli run -- swamp model method run s3-site inventory
 swamp model method run s3-site check
 ```
 
-`adminUrl` is a base URL and may carry a path prefix. `region` (default
-`us-east-1`) must be the one the gateway was started with: it rejects any other,
-which this model reports as `IncorrectRegion` with both regions named. `caFile`
-is for a gateway whose certificate a private CA signed; without it the system
-store is used.
+`caFile` and `rootKeyFile` may be relative, and are then taken from the
+repository root, so a definition can name a file checked in beside it and work
+from any directory. `adminUrl` is a base URL and may carry a path prefix.
+`region` (default `us-east-1`) must be the one the gateway was started with: it
+rejects any other, which this model reports as `IncorrectRegion` with both
+regions named. `caFile` is for a gateway whose certificate a private CA signed;
+without it the system store is used.
 
 ## Checking an inventory
 

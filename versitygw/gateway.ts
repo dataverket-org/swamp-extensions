@@ -56,14 +56,14 @@ export const GlobalArgsSchema = z.object({
     "The region the gateway was started with; it rejects any other",
   ),
   caFile: z.string().optional().describe(
-    "PEM file of the CA that signed the gateway's certificate, when it is not in the system store",
+    "PEM file of the CA that signed the gateway's certificate, when it is not in the system store; a relative path is taken from the repository root",
   ),
   healthPath: z.string().default("/health").describe(
     "The path given to the gateway's --health option",
   ),
   rootKeyFile: z.string().optional().describe(
     "File of NAME=value lines holding the root key pair, read at call time. " +
-      "Suits a file an operator's session writes and removes",
+      "Suits a file an operator's session writes and removes; a relative path is taken from the repository root",
   ),
   rootKeyEnv: z.boolean().default(false).describe(
     "Read the root key pair from swamp's environment, e.g. under a secret " +
@@ -118,6 +118,7 @@ export interface ModelContext {
   globalArgs: GlobalArgs;
   logger: Logger;
   signal?: AbortSignal;
+  repoDir?: string;
   definition?: { name: string };
   writeResource(
     specName: string,
@@ -165,6 +166,33 @@ const CheckSchema = z.object({
   clean: z.boolean(),
   findings: z.array(FindingSchema),
 });
+
+/**
+ * A relative path, resolved against the repository rather than the directory
+ * swamp happened to start in: a definition can then name a file checked in
+ * beside it, e.g. `backup/site/certs/ca.crt`, and work from any directory and
+ * on any machine with a checkout. Absolute and `~/` paths are left as they are.
+ */
+export function inRepo(path: string | undefined, repoDir?: string) {
+  if (!path || !repoDir || path.startsWith("/") || path.startsWith("~")) {
+    return path;
+  }
+  return `${repoDir.replace(/\/+$/, "")}/${path}`;
+}
+
+/** The global arguments with caFile and rootKeyFile resolved by {@link inRepo}. */
+export function resolvePaths<
+  T extends { caFile?: string; rootKeyFile?: string },
+>(
+  g: T,
+  repoDir?: string,
+): T {
+  return {
+    ...g,
+    caFile: inRepo(g.caFile, repoDir),
+    rootKeyFile: inRepo(g.rootKeyFile, repoDir),
+  };
+}
 
 function endpoint(g: GlobalArgs): Endpoint {
   return g;
@@ -410,13 +438,19 @@ export const checks = {
       "The admin API answers and accepts the root key pair's signature",
     labels: ["live"],
     execute: async (
-      context: { globalArgs: z.input<typeof GlobalArgsSchema> },
+      context: {
+        globalArgs: z.input<typeof GlobalArgsSchema>;
+        repoDir?: string;
+      },
     ): Promise<CheckResult> => {
       try {
         // A check sees the definition's arguments as written, before the
         // schema's defaults: a definition that leaves out accessKeyName
         // would otherwise look for a variable named "undefined".
-        const g = GlobalArgsSchema.parse(context.globalArgs);
+        const g = resolvePaths(
+          GlobalArgsSchema.parse(context.globalArgs),
+          context.repoDir,
+        );
         await listBuckets(g, readRootKey(endpoint(g)));
         return { pass: true };
       } catch (err) {
@@ -464,12 +498,18 @@ function records(
 /** A versitygw gateway, read through its admin API and its S3 API. */
 export const model = {
   type: "@dataverket/versitygw/gateway",
-  version: "2026.09.30.2",
+  version: "2026.09.30.3",
   upgrades: [
     {
       toVersion: "2026.09.30.2",
       description:
         "rootAccessKey and rootSecretKey added as a third root key source; existing definitions unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.30.3",
+      description:
+        "a relative caFile or rootKeyFile is resolved against the repository; absolute and ~/ paths unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -531,7 +571,10 @@ export const model = {
           url: context.globalArgs.s3Url,
         });
         const out = writer(context);
-        const health = await readHealth(context.globalArgs, context.signal);
+        const health = await readHealth(
+          resolvePaths(context.globalArgs, context.repoDir),
+          context.signal,
+        );
         context.logger.info("health {url}: {status}", {
           url: health.url,
           status: health.status ?? health.error,
@@ -549,7 +592,7 @@ export const model = {
         _args: Record<string, never>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const g = context.globalArgs;
+        const g = resolvePaths(context.globalArgs, context.repoDir);
         const key = readRootKey(endpoint(g));
         context.logger.info("listing accounts on {url}", { url: g.adminUrl });
         const accounts = await listAccounts(g, key, context.signal);
@@ -570,7 +613,7 @@ export const model = {
         _args: Record<string, never>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const g = context.globalArgs;
+        const g = resolvePaths(context.globalArgs, context.repoDir);
         const key = readRootKey(endpoint(g));
         context.logger.info("listing buckets on {url}", { url: g.adminUrl });
         const buckets = await listBuckets(g, key, context.signal);
@@ -591,7 +634,7 @@ export const model = {
         args: z.infer<typeof BucketSettingsArgs>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const g = context.globalArgs;
+        const g = resolvePaths(context.globalArgs, context.repoDir);
         const key = readRootKey(endpoint(g));
         context.logger.info("reading bucket settings on {url}", {
           url: g.s3Url,
@@ -620,7 +663,7 @@ export const model = {
         _args: Record<string, never>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const g = context.globalArgs;
+        const g = resolvePaths(context.globalArgs, context.repoDir);
         const key = readRootKey(endpoint(g));
         context.logger.info("taking an inventory of {url}", {
           url: g.adminUrl,
