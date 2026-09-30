@@ -140,6 +140,41 @@ Deno.test("the root-key-named check fails on no source and on two", async () => 
   );
 });
 
+Deno.test("admin-reachable applies the schema's defaults to a minimal definition", async () => {
+  const fake = installFetch();
+  Deno.env.set("ROOT_ACCESS_KEY", ROOT_ACCESS);
+  Deno.env.set("ROOT_SECRET_KEY", ROOT_SECRET);
+  try {
+    // As a check receives it: only what the definition wrote, no defaults.
+    const written = {
+      adminUrl: "http://127.0.0.1:17071",
+      s3Url: "http://127.0.0.1:17070",
+      rootKeyEnv: true,
+    };
+    const result = await model.checks["admin-reachable"].execute({
+      globalArgs: written,
+    });
+    assertEquals(result, { pass: true });
+    assertEquals(fake.seen, [{ line: "PATCH /list-buckets", signed: true }]);
+  } finally {
+    Deno.env.delete("ROOT_ACCESS_KEY");
+    Deno.env.delete("ROOT_SECRET_KEY");
+    fake.restore();
+  }
+});
+
+Deno.test("admin-reachable without the key names the variable, not undefined", async () => {
+  const result = await model.checks["admin-reachable"].execute({
+    globalArgs: {
+      adminUrl: "http://127.0.0.1:17071",
+      s3Url: "http://127.0.0.1:17070",
+      rootKeyEnv: true,
+    },
+  });
+  assertEquals(result.pass, false);
+  assertStringIncludes(result.errors![0], "ROOT_ACCESS_KEY is not set");
+});
+
 Deno.test("a method without a key source fails before any request", async () => {
   const fake = installFetch();
   try {

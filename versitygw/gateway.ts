@@ -387,7 +387,9 @@ export const checks = {
     description:
       "Exactly one of rootKeyFile or rootKeyEnv names the root key pair",
     labels: ["policy"],
-    execute: (context: { globalArgs: GlobalArgs }): Promise<CheckResult> => {
+    execute: (
+      context: { globalArgs: z.input<typeof GlobalArgsSchema> },
+    ): Promise<CheckResult> => {
       const { rootKeyFile, rootKeyEnv } = context.globalArgs;
       if (rootKeyFile && rootKeyEnv) {
         return Promise.resolve({
@@ -409,10 +411,13 @@ export const checks = {
       "The admin API answers and accepts the root key pair's signature",
     labels: ["live"],
     execute: async (
-      context: { globalArgs: GlobalArgs },
+      context: { globalArgs: z.input<typeof GlobalArgsSchema> },
     ): Promise<CheckResult> => {
       try {
-        const g = context.globalArgs;
+        // A check sees the definition's arguments as written, before the
+        // schema's defaults: a definition that leaves out accessKeyName
+        // would otherwise look for a variable named "undefined".
+        const g = GlobalArgsSchema.parse(context.globalArgs);
         await listBuckets(g, readRootKey(endpoint(g)));
         return { pass: true };
       } catch (err) {
