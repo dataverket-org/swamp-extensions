@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-users",
+  "status": 400,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AuthorizationHeaderMalformed</Code><Message>The authorization header is malformed; the region &#34;eu-north-1&#34; is wrong; expecting &#34;us-east-1&#34;</Message><Region>us-east-1</Region><RequestId>S773N5F18KQBX7PN</RequestId><HostId>cDTV5ieagE5Ok7irnSx6JQpPtOxQtAbB5ek5qf+a7AAGRtmkVW6/cVaaBocFw5oM/jJWsVPkF3sJeWVb9Sy4cNI=</HostId></Error>"
+}

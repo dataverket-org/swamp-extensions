@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/ops?tagging",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist.</Message><BucketName>ops</BucketName><RequestId>VGYV3FWVYGXQFRI3</RequestId><HostId>R0P1nrimj+x52MHGSeqv1YaQBbEQyTp6iE7DuMijifBwaJObxOxfOy5CTzT2naGg6G0mL7Wk+JOma7KTm/QNZqk=</HostId></Error>"
+}

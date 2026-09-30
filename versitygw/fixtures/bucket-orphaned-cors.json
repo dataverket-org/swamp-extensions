@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/orphaned?cors",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchCORSConfiguration</Code><Message>The CORS configuration does not exist</Message><BucketName>orphaned</BucketName><RequestId>I1AZ3GF1MXLE4VOK</RequestId><HostId>1sexj6FOAiZgjS8AOFPy97tsiqJ5NAil7QHo+ITCUV9uMbCLtFSSHAvPLPnu6WPSzQ9OEn3PTIWNUoxMreCfkE4=</HostId></Error>"
+}

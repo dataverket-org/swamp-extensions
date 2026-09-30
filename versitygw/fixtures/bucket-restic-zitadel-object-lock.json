@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/restic-zitadel?object-lock",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>Object Lock configuration does not exist for this bucket.</Message><BucketName>restic-zitadel</BucketName><RequestId>S6KHTMV9LKP47JHJ</RequestId><HostId>EbODmTnatOU+w95LrLsvQk8HMfeWLCyWWoci4WpLXPGarbUdY8I/e+PdogDQLN42W6lZwPTrG5V+Eru6fsPvqac=</HostId></Error>"
+}

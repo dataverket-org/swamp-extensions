@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/cnpg-forgejo?object-lock",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>Object Lock configuration does not exist for this bucket.</Message><BucketName>cnpg-forgejo</BucketName><RequestId>RBZASPWVA2FA4LAF</RequestId><HostId>xmrsE2fp9w/MPWm2W+Ymk5uEolzj9cJiK5gQjIqGKk1sjvXQLFKm6POv3zyidK8JfXzhCdPlTmrqYdRd11mq5T8=</HostId></Error>"
+}

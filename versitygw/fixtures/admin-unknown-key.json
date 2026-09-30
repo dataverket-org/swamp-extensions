@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-users",
+  "status": 403,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>InvalidAccessKeyId</Code><Message>The AWS Access Key Id you provided does not exist in our records.</Message><AWSAccessKeyId>nobody</AWSAccessKeyId><RequestId>KBJC4L3PDH6FUL1G</RequestId><HostId>6+ygsEYygTJq0g73Yk6MqK9Ya69ujjsaR/7BiwBJMfJs904M0pGZzcj58aiBs9yjzNmYGDJW62qaB50OXaavmw4=</HostId></Error>"
+}

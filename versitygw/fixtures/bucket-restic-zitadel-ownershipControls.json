@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/restic-zitadel?ownershipControls",
+  "status": 200,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<OwnershipControls><Rule><ObjectOwnership>BucketOwnerPreferred</ObjectOwnership></Rule></OwnershipControls>"
+}

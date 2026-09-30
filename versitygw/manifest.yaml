@@ -1,0 +1,46 @@
+manifestVersion: 1
+name: "@dataverket/versitygw"
+version: "2026.09.30.1"
+description: >
+  A versitygw S3 gateway for swamp, read over its admin API and its S3 API.
+  Read-only.
+
+  One model type, `@dataverket/versitygw/gateway`. `health` checks the S3
+  endpoint's health path: reachable, TLS verified, latency. `accounts` lists
+  every account with its role and POSIX ids, and drops the secret key the admin
+  API returns in clear before anything is recorded. `buckets` lists every bucket
+  and its owner. `bucketSettings` reads each bucket's versioning, policy, ACL,
+  object lock, ownership controls, CORS and tags over the S3 API. `inventory`
+  does all of that in one execution and tags every record with one id, and
+  `check` applies rules to the records of one inventory: bucket owner missing or
+  not the account of the same name, an account owning nothing, a role outside
+  the allowed set, versioning enabled, a bucket anyone may read.
+
+  versitygw has no read-only admin role, so every admin call signs with the
+  root key pair. The definition names where the pair is and never holds it: a
+  file of NAME=value lines read at call time, or swamp's environment. Signing
+  is SigV4 by aws4fetch; errors are the gateway's S3 error codes. Written
+  against versitygw v1.8.0.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - gateway.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - versitygw
+  - s3
+  - object-storage
+  - storage
+  - buckets
+  - iam
+  - audit
+  - inventory
+  - admin
+dependencies: []

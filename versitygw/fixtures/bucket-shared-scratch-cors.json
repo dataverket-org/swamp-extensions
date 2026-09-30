@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/shared-scratch?cors",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchCORSConfiguration</Code><Message>The CORS configuration does not exist</Message><BucketName>shared-scratch</BucketName><RequestId>JBBT2O7U14VJKY0D</RequestId><HostId>/4QquKdS6935Uf0ib2QZwad/ii6LcxBoSt7qK02Y2s97aSs30Poj7SzluXGJ3UGZz7rIa/F5s/LzHXhFxB15i7A=</HostId></Error>"
+}

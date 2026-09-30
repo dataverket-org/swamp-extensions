@@ -15,6 +15,7 @@ independently:
 | `github/`    | `@dataverket/github`    | Repository settings `@goodcraft/github` does not reach: branches, default-branch convergence, verify-first delete |
 | `forgejo-github-mirror/` | `@dataverket/forgejo-github-mirror` | One workflow, `@dataverket/mirror-forgejo-to-github`: every repository of a Forgejo org push-mirrored to a GitHub org, with an audit |
 | `flux/`      | `@dataverket/flux`      | A reconcile with `--reset` for Flux HelmReleases stuck at `RetriesExceeded`, extending `@ginger_pappa/flux/helmrelease` |
+| `versitygw/` | `@dataverket/versitygw` | A versitygw S3 gateway, read-only: accounts without their secrets, buckets and owners, every bucket's settings, TLS health, and a `check` of one inventory |
 | `zitadel/`   | `@dataverket/zitadel`   | Zitadel over its API: projects, applications, users, grants and orgs, one model type each; fork of `@thomas/zitadel` (MIT) widened to full CRUD |
 
 Develop against a swamp repository by loading every extension from source:

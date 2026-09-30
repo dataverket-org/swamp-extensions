@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/orphaned?policy",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchBucketPolicy</Code><Message>The bucket policy does not exist.</Message><BucketName>orphaned</BucketName><RequestId>VICFZ01K3Y4XACF3</RequestId><HostId>B3F3PeXARDRsxXvkiJdMnMaqDsLVmAmkVGT0qTsHumdVDOrgwbiuDuJ5bQQ9Buc/whaNMegQRzwdmjIGgcSawtU=</HostId></Error>"
+}

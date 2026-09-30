@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-buckets",
+  "status": 200,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketsResult><Buckets><Name>cnpg-forgejo</Name><Owner>cnpg-forgejo</Owner></Buckets><Buckets><Name>locked</Name><Owner>fixtureroot</Owner></Buckets><Buckets><Name>ops</Name><Owner>ops</Owner></Buckets><Buckets><Name>orphaned</Name><Owner>gone</Owner></Buckets><Buckets><Name>restic-zitadel</Name><Owner>restic-zitadel</Owner></Buckets><Buckets><Name>shared-scratch</Name><Owner>cnpg-forgejo</Owner></Buckets></ListBucketsResult>"
+}

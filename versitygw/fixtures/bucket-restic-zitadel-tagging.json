@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/restic-zitadel?tagging",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist.</Message><BucketName>restic-zitadel</BucketName><RequestId>2H76AEZQLTW3ZH2L</RequestId><HostId>JXRCbmf6A8ctlton1avimxk8iOJBlem4asJATDm7peVqF+8eiG6onUcL7cH52vn9ooF6yFrN6pSTJaKkA8x12yQ=</HostId></Error>"
+}

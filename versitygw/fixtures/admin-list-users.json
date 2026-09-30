@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-users",
+  "status": 200,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListUserAccountsResult><Accounts><Access>cnpg-forgejo</Access><Secret>FIXTURE-SECRET-cnpg-forgejo-000000</Secret><Role>user</Role><UserID>0</UserID><GroupID>0</GroupID><ProjectID>0</ProjectID><SessionToken></SessionToken><IsSession>false</IsSession><Arn></Arn><RoleArn></RoleArn></Accounts><Accounts><Access>idle</Access><Secret>FIXTURE-SECRET-idle-0000000000000</Secret><Role>userplus</Role><UserID>0</UserID><GroupID>0</GroupID><ProjectID>0</ProjectID><SessionToken></SessionToken><IsSession>false</IsSession><Arn></Arn><RoleArn></RoleArn></Accounts><Accounts><Access>ops</Access><Secret>FIXTURE-SECRET-ops-00000000000000</Secret><Role>admin</Role><UserID>0</UserID><GroupID>0</GroupID><ProjectID>0</ProjectID><SessionToken></SessionToken><IsSession>false</IsSession><Arn></Arn><RoleArn></RoleArn></Accounts><Accounts><Access>restic-zitadel</Access><Secret>FIXTURE-SECRET-restic-zitadel-00000</Secret><Role>user</Role><UserID>1001</UserID><GroupID>1001</GroupID><ProjectID>7</ProjectID><SessionToken></SessionToken><IsSession>false</IsSession><Arn></Arn><RoleArn></RoleArn></Accounts></ListUserAccountsResult>"
+}

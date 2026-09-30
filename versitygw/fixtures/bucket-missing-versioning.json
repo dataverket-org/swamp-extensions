@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/nope?versioning",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message><BucketName>nope</BucketName><RequestId>UL3VI3UFOTH1HHMW</RequestId><HostId>IPdprkzh8CR1Ni+Fr7z5xa8v3KzUdtPVz4qmO6NBdMFrLpJwRhSADD+z/1tcoVxCpfT4DZcasTjlP2nAdRwgGIA=</HostId></Error>"
+}

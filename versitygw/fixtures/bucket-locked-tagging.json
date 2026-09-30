@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/locked?tagging",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist.</Message><BucketName>locked</BucketName><RequestId>GWMVZU087Q3H3AKO</RequestId><HostId>EHoAL0S174mFUCi/JMbb7LmgNVxRj5Q0852Gk2OKmEp3YDMeW30GQRsBebQU+XVT01i6oDDJm8ErqkrmIyJcsSA=</HostId></Error>"
+}

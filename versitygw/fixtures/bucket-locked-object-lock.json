@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/locked?object-lock",
+  "status": 200,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule></Rule></ObjectLockConfiguration>"
+}

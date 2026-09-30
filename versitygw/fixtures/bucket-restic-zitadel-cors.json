@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/restic-zitadel?cors",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchCORSConfiguration</Code><Message>The CORS configuration does not exist</Message><BucketName>restic-zitadel</BucketName><RequestId>118F8X0MMSFUK2AT</RequestId><HostId>al2zfAE2deJVJmUx5wadv3NnVnCMJPtU7ie2Ia6KKhgIJswqpMKng4q12BCpHu0sYfr7+cd2kBJKwLvADfR2M+M=</HostId></Error>"
+}

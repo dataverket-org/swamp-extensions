@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/shared-scratch?object-lock",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>Object Lock configuration does not exist for this bucket.</Message><BucketName>shared-scratch</BucketName><RequestId>0NPZ9ABFN4276HW3</RequestId><HostId>Osoq4ud61njd0Ey8y0Vv994dCY9VtoidhNJ8EjMwiLpi0ymr/UcLWo2SbLLek0gpidxZXxXvaEc9zZ3MqNkbIQU=</HostId></Error>"
+}

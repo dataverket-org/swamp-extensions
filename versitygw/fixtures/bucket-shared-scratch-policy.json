@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/shared-scratch?policy",
+  "status": 200,
+  "contentType": "text/plain; charset=utf-8",
+  "body": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::shared-scratch/*\"}]}"
+}

@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/orphaned?object-lock",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>Object Lock configuration does not exist for this bucket.</Message><BucketName>orphaned</BucketName><RequestId>HKND4OBBC3YEHYY4</RequestId><HostId>SbtV3leA3PX+W4r6tpn3aC7Qzl+Y5zMtriAHeawl1AAjlkR2HqayTM1c7GfZ0sxfpBuaH5MQayiUpnEMUtQEkhM=</HostId></Error>"
+}

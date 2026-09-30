@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/restic-zitadel?policy",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchBucketPolicy</Code><Message>The bucket policy does not exist.</Message><BucketName>restic-zitadel</BucketName><RequestId>4FWYZPH0XUHT0TJS</RequestId><HostId>kZdt8YJ7URhXy+IIsRQtCyd2GjWRPAbLeY6rxQJMLlcDbpKs2+7lcyBlt3Mjlt7ymct3KRxqLp/IahyTJxi+o+A=</HostId></Error>"
+}

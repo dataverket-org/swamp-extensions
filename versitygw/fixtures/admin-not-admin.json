@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-users",
+  "status": 403,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>XAdminAccessDenied</Code><Message>Only admin users have access to this resource.</Message><RequestId>LC8UPI7W7XVYB8TV</RequestId><HostId>Bqml/Ywbm+z5ZUxDhUacvwScRq0X6NMCSWk5j1V6mosEMpSXjPblDryltyMZdPfE3XK+aCck7x1ejL5+73jAcKw=</HostId></Error>"
+}

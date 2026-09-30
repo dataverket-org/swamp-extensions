@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/orphaned?tagging",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist.</Message><BucketName>orphaned</BucketName><RequestId>H1P2PUX92XZEFCJS</RequestId><HostId>mQGnxTN9K1Zl53idjX9mbOWylrGIuTsgEaEUF8HPHUp4/5xMpGpJG9opm9+SGFGrXZ7SxocapwsHrkLu/ZCu3yU=</HostId></Error>"
+}

@@ -1,0 +1,7 @@
+{
+  "method": "GET",
+  "path": "/cnpg-forgejo?cors",
+  "status": 404,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>NoSuchCORSConfiguration</Code><Message>The CORS configuration does not exist</Message><BucketName>cnpg-forgejo</BucketName><RequestId>OPY79JUSGV741N37</RequestId><HostId>h9syx+NUKfAdH9l+BqWW/D0r/jVAqFLXFX7y7D3/FFjNMGPThrPgYDFNHTOxU556RGP/RirZ7py0rS/c9qZkOfo=</HostId></Error>"
+}

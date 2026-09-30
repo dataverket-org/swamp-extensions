@@ -1,0 +1,7 @@
+{
+  "method": "PATCH",
+  "path": "/list-users",
+  "status": 403,
+  "contentType": "application/xml",
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>AWS authentication requires a valid Date or x-amz-date header.</Message><RequestId>1NGNKMZ7JET2EDH7</RequestId><HostId>Iqr4I0R6lEnBD6fBy4prOTDPQoLVcHqlojO24KFcJtfPWu93VGTlqc/TyGfklXBzX5vASEMlVnq+7BpHvJPtvnY=</HostId></Error>"
+}
