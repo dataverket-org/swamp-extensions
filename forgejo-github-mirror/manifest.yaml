@@ -1,0 +1,46 @@
+manifestVersion: 1
+name: "@dataverket/forgejo-github-mirror"
+version: "2026.09.30.1"
+description: >
+  One workflow, `@dataverket/mirror-forgejo-to-github`, that mirrors every
+  repository of a Forgejo org to a GitHub org and keeps it that way.
+
+  Each run lists the org's repositories, creates the missing ones on GitHub
+  (empty, same name and visibility), gives each a Forgejo push mirror that
+  pushes on every commit and on an interval, points GitHub's default branch
+  at the forge's, and fails when a mirror reports a push error. It never
+  deletes anything on GitHub. Only repositories this run saw take part, so a
+  repository deleted or renamed on the forge is not recreated from an old
+  record; empty, archived, forked and pull-mirror repositories are skipped;
+  and a private repository is never mirrored into a GitHub repository that
+  is not private.
+
+  The forge, both orgs and both tokens are inputs. A token is named by vault
+  and key, never passed as a value, because workflow inputs are recorded in
+  cleartext in the run history. Built on `@thomas/forgejo` and
+  `@goodcraft/github` with the methods `@dataverket/forgejo` and
+  `@dataverket/github` add to them; all four are dependencies.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models: []
+workflows:
+  - workflow-45608093-5a0d-4c1e-9854-03454fa14d96.yaml
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - forgejo
+  - gitea
+  - github
+  - git
+  - forge
+  - mirroring
+dependencies:
+  - "@thomas/forgejo"
+  - "@goodcraft/github"
+  - "@dataverket/forgejo"
+  - "@dataverket/github"

@@ -1,0 +1,221 @@
+id: 45608093-5a0d-4c1e-9854-03454fa14d96
+name: '@dataverket/mirror-forgejo-to-github'
+description: >-
+  Mirror every repository of one Forgejo org to one GitHub org. The forge, both orgs and the vault keys of both
+  tokens are required inputs; the GitHub endpoints default to github.com. Tokens are named by vault and key, never
+  passed as values: input values are recorded in cleartext in the run history. Discovers the org's repositories,
+  ensures each exists under the GitHub org (created empty, same name and visibility), then ensures a Forgejo push
+  mirror (push on every commit plus an interval) that carries the GitHub token, and converges GitHub's default
+  branch to the forge's. Only repositories seen by this run take part, so a repository deleted or renamed on the
+  forge is never recreated on GitHub from an old record. Archived repositories, forks, pull mirrors and empty
+  repositories are skipped (mirroring an empty repository would delete every branch on GitHub). A private forge
+  repository is never mirrored into a GitHub repository that is not private, and the run fails when one has a
+  public twin. Idempotent: existing GitHub repositories and existing mirrors are left unchanged, so a new
+  repository on the forge is picked up by the next run and nothing is ever deleted on GitHub; a mirror created
+  with a token that was since rotated keeps the old one until it is deleted and recreated. Ends with an audit that
+  fails the run when any mirror to the GitHub org reports a push error. Its models are created on first use as
+  mirror-forgejo-to-github-forgejo and mirror-forgejo-to-github-github; runs for different org pairs share them,
+  so run one pair at a time.
+version: 1
+inputs:
+  properties:
+    forgejoUrl:
+      type: string
+      description: Base URL of the Forgejo instance, no trailing slash and no /api/v1, e.g. https://forge.example.org
+    forgejoOwner:
+      type: string
+      description: Org on the Forgejo instance whose repositories are mirrored
+    forgejoTokenVault:
+      type: string
+      description: Vault holding the Forgejo API token (read repositories, manage push mirrors)
+    forgejoTokenKey:
+      type: string
+      description: Key of the Forgejo API token in forgejoTokenVault
+    githubApiUrl:
+      type: string
+      default: https://api.github.com
+      description: GitHub REST API base URL; for GitHub Enterprise Server, https://<host>/api/v3
+    githubUrl:
+      type: string
+      default: https://github.com
+      description: GitHub web and git base URL the mirrors push to, no trailing slash; https://<host> on Enterprise
+    githubOwner:
+      type: string
+      description: GitHub organisation the repositories are created under and pushed to
+    githubTokenVault:
+      type: string
+      description: Vault holding the GitHub token (create repositories, set the default branch, push)
+    githubTokenKey:
+      type: string
+      description: Key of the GitHub token in githubTokenVault; the same token is handed to Forgejo for pushing
+    githubUsername:
+      type: string
+      default: x-access-token
+      description: Username Forgejo sends with the token; GitHub accepts any value for a PAT
+    interval:
+      type: string
+      default: 8h0m0s
+      description: Periodic push interval as a Go duration, in addition to push-on-commit
+  required:
+    - forgejoUrl
+    - forgejoOwner
+    - forgejoTokenVault
+    - forgejoTokenKey
+    - githubOwner
+    - githubTokenVault
+    - githubTokenKey
+jobs:
+  - name: discover
+    steps:
+      - name: repos
+        description: Every repository the token sees under the org, one record each.
+        task:
+          type: model_method
+          modelType: "@thomas/forgejo"
+          modelName: mirror-forgejo-to-github-forgejo
+          methodName: repo_list
+          globalArgs:
+            apiUrl: ${{ inputs.forgejoUrl }}
+            token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
+            # the type's reachable check reads this without the schema's default and
+            # aborts at once when it is unset:
+            # github.com/thomas-elliott/swamp-extensions/issues/3
+            httpTimeoutMs: 30000
+          inputs:
+            owner: ${{ inputs.forgejoOwner }}
+  - name: github
+    dependsOn:
+      - job: discover
+        condition:
+          type: succeeded
+    steps:
+      - name: ensure-${{ self.repo.attributes.name }}
+        description: >-
+          The repository under the GitHub org, created empty when missing, same name and visibility. Only
+          repositories this run discovered take part, and only those with commits: the forge marks a repository
+          with no commits as empty, and a push mirror of one would push nothing and delete every branch on GitHub,
+          so empty repositories are neither created on GitHub nor mirrored until their first commit lands on the
+          forge.
+        forEach:
+          item: repo
+          in: ${{ data.findBySpec("mirror-forgejo-to-github-forgejo", "repo").filter(r, r.tags.?workflowRunId.orValue("") == run.id && r.attributes.owner == inputs.forgejoOwner && !r.attributes.archived && !r.attributes.fork && !r.attributes.mirror && !r.attributes.empty) }}
+        concurrency: 1
+        task:
+          type: model_method
+          modelType: "@goodcraft/github"
+          modelName: mirror-forgejo-to-github-github
+          methodName: ensureRepo
+          globalArgs:
+            owner: ${{ inputs.githubOwner }}
+            isOrg: true
+            baseUrl: ${{ inputs.githubApiUrl }}
+            token: ${{ vault.get(inputs.githubTokenVault, inputs.githubTokenKey) }}
+          inputs:
+            name: ${{ self.repo.attributes.name }}
+            description: ${{ self.repo.attributes.?description.orValue("") }}
+            private: ${{ self.repo.attributes.?private.orValue(false) }}
+            autoInit: false
+            dryRun: false
+  - name: mirrors
+    dependsOn:
+      - job: github
+        condition:
+          type: succeeded
+    steps:
+      - name: mirror-${{ self.repo.attributes.name }}
+        description: >-
+          A push mirror from the forge repository to its GitHub twin, pushing on every commit and on the interval;
+          the token never leaves the vault except to Forgejo. Same rules as above, and one more: a private forge
+          repository is mirrored only when this run saw its GitHub twin as private, so a twin that already existed
+          as public never receives private code (the audit then fails the run).
+        forEach:
+          item: repo
+          in: ${{ data.findBySpec("mirror-forgejo-to-github-forgejo", "repo").filter(r, r.tags.?workflowRunId.orValue("") == run.id && r.attributes.owner == inputs.forgejoOwner && !r.attributes.archived && !r.attributes.fork && !r.attributes.mirror && !r.attributes.empty && data.findBySpec("mirror-forgejo-to-github-github", "repoEnsure").exists(g, g.tags.?workflowRunId.orValue("") == run.id && g.attributes.owner == inputs.githubOwner && g.attributes.name == r.attributes.name && (!r.attributes.private || g.attributes.?visibility.orValue("") == "private"))) }}
+        concurrency: 1
+        task:
+          type: model_method
+          modelType: "@thomas/forgejo"
+          modelName: mirror-forgejo-to-github-forgejo
+          methodName: push_mirror_ensure
+          globalArgs:
+            apiUrl: ${{ inputs.forgejoUrl }}
+            token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
+            httpTimeoutMs: 30000
+          inputs:
+            owner: ${{ inputs.forgejoOwner }}
+            name: ${{ self.repo.attributes.name }}
+            remoteAddress: ${{ inputs.githubUrl + "/" + inputs.githubOwner + "/" + self.repo.attributes.name + ".git" }}
+            remoteUsername: ${{ inputs.githubUsername }}
+            remotePassword: ${{ vault.get(inputs.githubTokenVault, inputs.githubTokenKey) }}
+            interval: ${{ inputs.interval }}
+            syncOnCommit: true
+  - name: defaults
+    dependsOn:
+      - job: mirrors
+        condition:
+          type: succeeded
+    steps:
+      - name: default-branch-${{ self.repo.attributes.name }}
+        description: >-
+          GitHub's default branch follows the forge's, so a mirror whose default is not main is not rejected for
+          deleting GitHub's. Same repositories as the mirrors job. A repository whose first push has not landed
+          yet has no branches and fails here; the next run converges it, so the failure is allowed.
+        forEach:
+          item: repo
+          in: ${{ data.findBySpec("mirror-forgejo-to-github-forgejo", "repo").filter(r, r.tags.?workflowRunId.orValue("") == run.id && r.attributes.owner == inputs.forgejoOwner && !r.attributes.archived && !r.attributes.fork && !r.attributes.mirror && !r.attributes.empty && data.findBySpec("mirror-forgejo-to-github-github", "repoEnsure").exists(g, g.tags.?workflowRunId.orValue("") == run.id && g.attributes.owner == inputs.githubOwner && g.attributes.name == r.attributes.name && (!r.attributes.private || g.attributes.?visibility.orValue("") == "private"))) }}
+        concurrency: 1
+        allowFailure: true
+        task:
+          type: model_method
+          modelType: "@goodcraft/github"
+          modelName: mirror-forgejo-to-github-github
+          methodName: default_branch_ensure
+          globalArgs:
+            owner: ${{ inputs.githubOwner }}
+            isOrg: true
+            baseUrl: ${{ inputs.githubApiUrl }}
+            token: ${{ vault.get(inputs.githubTokenVault, inputs.githubTokenKey) }}
+          inputs:
+            name: ${{ self.repo.attributes.name }}
+            defaultBranch: ${{ self.repo.attributes.defaultBranch }}
+  - name: audit
+    dependsOn:
+      - job: defaults
+        condition:
+          type: succeeded
+    steps:
+      - name: list-mirrors
+        description: Every push mirror under the org with its last push and last error.
+        task:
+          type: model_method
+          modelType: "@thomas/forgejo"
+          modelName: mirror-forgejo-to-github-forgejo
+          methodName: push_mirror_list
+          globalArgs:
+            apiUrl: ${{ inputs.forgejoUrl }}
+            token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
+            httpTimeoutMs: 30000
+          inputs:
+            owner: ${{ inputs.forgejoOwner }}
+      - name: all-mirrors-healthy
+        description: Mirrors to other remotes (not the GitHub org) are outside this workflow and not audited here.
+        dependsOn:
+          - step: list-mirrors
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("mirror-forgejo-to-github-forgejo", "pushMirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.attributes.owner == inputs.forgejoOwner && m.attributes.remoteAddress.startsWith(inputs.githubUrl + "/" + inputs.githubOwner + "/") && m.attributes.lastError != "").size() == 0
+          message: "At least one push mirror to the GitHub org reports a push error; see the pushMirror records of mirror-forgejo-to-github-forgejo"
+          severity: high
+      - name: no-private-repo-on-public-github
+        description: >-
+          A private forge repository whose GitHub twin is not private. The mirrors job skips it, but a mirror made
+          before the forge repository turned private keeps pushing: make the twin private or delete that mirror.
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("mirror-forgejo-to-github-github", "repoEnsure").filter(g, g.tags.?workflowRunId.orValue("") == run.id && g.attributes.owner == inputs.githubOwner && g.attributes.?visibility.orValue("") != "private" && data.findBySpec("mirror-forgejo-to-github-forgejo", "repo").exists(r, r.tags.?workflowRunId.orValue("") == run.id && r.attributes.owner == inputs.forgejoOwner && r.attributes.name == g.attributes.name && r.attributes.private)).size() == 0
+          message: "A private forge repository has a GitHub twin that is not private; see the repoEnsure records of mirror-forgejo-to-github-github"
+          severity: high

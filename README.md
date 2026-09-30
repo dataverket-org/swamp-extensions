@@ -13,6 +13,7 @@ independently:
 | `sops/`      | `@dataverket/sops`      | SOPS + age vault, one encrypted file per secret, writable with public keys only; fork of `@zocc/sops-age` (Apache-2.0) |
 | `forgejo/`   | `@dataverket/forgejo`   | Forgejo past one repository, extending `@thomas/forgejo`: Actions secrets, runners, push mirrors, PR assignment, repository delete |
 | `github/`    | `@dataverket/github`    | Repository settings `@goodcraft/github` does not reach: branches, default-branch convergence, verify-first delete |
+| `forgejo-github-mirror/` | `@dataverket/forgejo-github-mirror` | One workflow, `@dataverket/mirror-forgejo-to-github`: every repository of a Forgejo org push-mirrored to a GitHub org, with an audit |
 | `flux/`      | `@dataverket/flux`      | A reconcile with `--reset` for Flux HelmReleases stuck at `RetriesExceeded`, extending `@ginger_pappa/flux/helmrelease` |
 | `zitadel/`   | `@dataverket/zitadel`   | Zitadel over its API: projects, applications, users, grants and orgs, one model type each; fork of `@thomas/zitadel` (MIT) widened to full CRUD |
 
