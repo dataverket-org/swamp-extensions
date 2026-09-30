@@ -19,6 +19,7 @@ import {
   type ApiCall,
   call,
   type Caller,
+  canonicalAddress,
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
@@ -143,21 +144,6 @@ async function listMirrors(
     if (items.length < 50) break;
   }
   return out;
-}
-
-/**
- * Strip credentials from a remote address so an address Forgejo reports
- * (never with the secret) compares equal to the one requested.
- */
-export function canonicalAddress(address: string): string {
-  try {
-    const u = new URL(address);
-    u.username = "";
-    u.password = "";
-    return u.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return address.trim().toLowerCase();
-  }
 }
 
 /**
@@ -528,3 +514,4 @@ export const extension = {
 
 // Keep the ApiCall type referenced for readers of the seam; tests import it from here.
 export type { ApiCall, Caller };
+export { canonicalAddress };

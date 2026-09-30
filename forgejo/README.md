@@ -14,6 +14,8 @@ upstream's model types and read its `apiUrl` and token.
 | `runner_list`               | The runners an org or repository has, with their status                                                                                          |
 | `runner_prune`              | Remove offline runners of a given name. A runner that registers and dies before it can save `.runner` leaves a record behind on every restart    |
 | `repo_rename`               | Rename a repository, verify-first                                                                                                                |
+| `pull_mirror_ensure`        | Make Forgejo pull a repository from elsewhere, sending only the settings given, so the forge's defaults decide visibility and the rest           |
+| `repo_topics_ensure`        | Give a repository topics, Forgejo's repository labels; additive unless `exact` is set                                                            |
 | `push_mirror_ensure`        | Make Forgejo push a repository to a remote on every commit and on an interval                                                                    |
 | `push_mirror_list`          | The push mirrors an org or repository has; the audit a mirroring workflow asserts on                                                             |
 | `push_mirror_delete`        | Remove a push mirror                                                                                                                             |
@@ -43,6 +45,13 @@ swamp model method run forge push_mirror_ensure \
   --arg remoteAddress=https://github.com/example-org/example-repo.git \
   --arg remoteUsername=example-org \
   --arg 'remotePassword=${{ vault.get("infra", "github-token") }}'
+
+# a public pull mirror of an upstream project, labelled as one
+swamp model method run forge pull_mirror_ensure \
+  --arg owner=example-org --arg name=tool \
+  --arg cloneAddr=https://github.com/upstream/tool.git --arg private=false
+swamp model method run forge repo_topics_ensure \
+  --arg owner=example-org --arg name=tool --arg 'topics=["upstream-mirror"]'
 
 # what the mirroring audit asserts on
 swamp model method run forge push_mirror_list --arg owner=example-org
@@ -85,6 +94,27 @@ address is left alone, because Forgejo has no update endpoint: changing the
 interval or the filter means delete and recreate, which this extension never
 does on its own. The remote credential is sent to Forgejo once and never
 recorded; Forgejo reports back only the address, the timing and the last error.
+
+## Pull mirrors send only what they are given
+
+Upstream's `mirror_ensure` defaults `private` to true, and `lfs`, `service` and
+the interval to its own values, and converges an existing mirror to them on
+every run: running it without `private` turns a public mirror private.
+`pull_mirror_ensure` sends a setting only when it is given. A new mirror gets
+Forgejo's own defaults for the rest: public, unless the instance forces new
+repositories private; an existing mirror is changed only in the settings named,
+and `changed` in the record says which. A repository that is not a mirror is
+refused, an empty one is named as a migration still running or the leftover of a
+failed one, and a mirror of another source is an error, since Forgejo cannot
+change a mirror's source. A source token is sent once on create, masked in any
+error, and never recorded. Forgejo migrates synchronously, so a large source can
+outlast the model's `httpTimeoutMs`; the migration carries on, and the next run
+finds it.
+
+`repo_topics_ensure` sets topics, the labels Forgejo shows on a repository and
+searches by. It adds the given topics and keeps the others unless `exact` makes
+the list the whole set, checks each against Forgejo's rules first so a bad one
+is named, and writes only when something changes.
 
 ## Verify-first deletes
 
@@ -132,6 +162,8 @@ swamp data query 'specName == "runner" && isLatest' --json
 | `runnerPrune`        | infinite | Offline runners of one name deleted at a scope, and the live ones kept |
 | `repoRename`         | infinite | Old and new name, and the URLs that changed                            |
 | `pushMirror`         | infinite | Remote address, timing, last push and last error                       |
+| `pullMirror`         | infinite | A pull mirror: source, visibility, interval, last sync, what changed   |
+| `repoTopics`         | infinite | A repository's topics, and which were added or removed                 |
 | `pushMirrorDelete`   | infinite | Which remote was removed from which repository                         |
 | `prAssignment`       | infinite | A pull request's assignees, as Forgejo reports them                    |
 | `userMatch`          | 7d       | A user matched by `user_search`: login and full name                   |

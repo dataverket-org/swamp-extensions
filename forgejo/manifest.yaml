@@ -1,16 +1,21 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.09.29.2"
+version: "2026.09.30.1"
 description: >
   Forgejo operations for swamp that reach past a single repository, as
   extensions to `@thomas/forgejo`.
 
-  Four modules add what upstream has no method for. `actions` covers Actions
+  Six modules add what upstream has no method for. `actions` covers Actions
   secrets (repo- or org-scoped, write-only), a runner registration token,
   runner listing, runner pruning and a verify-first repository rename.
   `push_mirror` adds the push side of mirroring — upstream's `mirror_ensure`
   is a pull mirror, Forgejo fetching from elsewhere, while a push mirror makes
   Forgejo push a repository to a remote on every commit and on an interval.
+  `pull_mirror` adds `pull_mirror_ensure`, a pull mirror that sends only the
+  settings it is given, so the forge's own defaults decide visibility and
+  the rest, and an existing mirror is changed only in what is named.
+  `topics` adds `repo_topics_ensure`, the labels Forgejo shows on a
+  repository, additive unless asked to be exact.
   `pr_assign` assigns a pull request, checking every login against the forge
   first so a typo is an error rather than a silently empty list.
   `repo_delete` deletes a repository, verify-first: one already gone is a
@@ -31,6 +36,8 @@ models:
   - actions.ts
   - checks.ts
   - push_mirror.ts
+  - pull_mirror.ts
+  - topics.ts
   - pr_assign.ts
   - repo_delete.ts
 workflows: []
@@ -48,4 +55,5 @@ labels:
   - actions
   - runners
   - mirroring
+  - topics
 dependencies: []

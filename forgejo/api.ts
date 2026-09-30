@@ -105,3 +105,19 @@ export async function call(api: Caller, c: ApiCall): Promise<ApiResult> {
   }
   return r;
 }
+
+/**
+ * Strip credentials from a clone or remote address, and case and trailing
+ * slashes with them, so an address Forgejo reports (never with the secret)
+ * compares equal to the one requested.
+ */
+export function canonicalAddress(address: string): string {
+  try {
+    const u = new URL(address);
+    u.username = "";
+    u.password = "";
+    return u.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return address.trim().toLowerCase();
+  }
+}
