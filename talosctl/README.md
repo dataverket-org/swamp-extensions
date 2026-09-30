@@ -4,28 +4,33 @@ Talos Linux machines for [swamp](https://github.com/swamp-club/swamp), through
 `talosctl`, with or without Omni.
 
 Forked from [`@magistr/talos-node`](https://github.com/umag/swamp-workspace)
-(MIT, copyright magistr) and typed. The upstream methods are kept; `volumes` is
-added, and `reset` learned to wipe only named partitions.
+(MIT, copyright magistr) and typed. The upstream methods are kept; `volumes`,
+`etcdStatus`, `serviceLogs` and `processes` are added, `reset` learned to wipe
+only named partitions, and every method takes `nodes` to address fewer machines
+than the definition names.
 
 ## Model type
 
 `@dataverket/talosctl/node` targets one or many machines.
 
-| Method        | What it does                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------ |
-| `version`     | Talos version of every node (`version` resource per node)                                              |
-| `services`    | Every service on every node (`service` resource per node and service)                                  |
-| `etcdMembers` | The etcd members (`etcdMember` resource each)                                                          |
-| `kubeconfig`  | The admin kubeconfig (`kubeconfig`, sensitive)                                                         |
-| `volumes`     | Disks, partitions by label, unallocated space and EPHEMERAL usage of every node (`volume-<host>` each) |
-| `applyConfig` | `talosctl apply-config` with a mode; `insecure` for maintenance mode                                   |
-| `patchConfig` | `talosctl patch machineconfig` with a patch file                                                       |
-| `bootstrap`   | `talosctl bootstrap`, once, against the first control plane                                            |
-| `reboot`      | Reboot, optionally by power cycle                                                                      |
-| `shutdown`    | Shut down, optionally forced                                                                           |
-| `reset`       | Wipe the system disk, or only the partitions named in `systemLabelsToWipe` (for example `EPHEMERAL`)   |
-| `upgrade`     | `talosctl upgrade` to an installer image                                                               |
-| `health`      | The cluster health check with a wait timeout                                                           |
+| Method        | What it does                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| `version`     | Talos version of every node (`version` resource per node)                                                      |
+| `services`    | Every service on every node (`service` resource per node and service)                                          |
+| `etcdMembers` | The etcd members, as the first control plane among the targets that answers sees them (`etcdMember` each)      |
+| `etcdStatus`  | Every control plane's etcd: member, leader, raft index and term, database size, errors (`etcdStatus` each)     |
+| `serviceLogs` | A service's newest log lines on every node, counted in a time window and against a pattern (`serviceLog` each) |
+| `processes`   | The top processes of every node by CPU time or memory, executables only (`processes` each)                     |
+| `kubeconfig`  | The admin kubeconfig (`kubeconfig`, sensitive)                                                                 |
+| `volumes`     | Disks, partitions by label, unallocated space and EPHEMERAL usage of every node (`volume-<host>` each)         |
+| `applyConfig` | `talosctl apply-config` with a mode; `insecure` for maintenance mode                                           |
+| `patchConfig` | `talosctl patch machineconfig` with a patch file                                                               |
+| `bootstrap`   | `talosctl bootstrap`, once, against the first control plane                                                    |
+| `reboot`      | Reboot, optionally by power cycle                                                                              |
+| `shutdown`    | Shut down, optionally forced                                                                                   |
+| `reset`       | Wipe the system disk, or only the partitions named in `systemLabelsToWipe` (for example `EPHEMERAL`)           |
+| `upgrade`     | `talosctl upgrade` to an installer image                                                                       |
+| `health`      | The cluster health check with a wait timeout, from one control plane                                           |
 
 ### Targets
 
@@ -79,6 +84,50 @@ globalArguments:
   talosconfigContent: ${{ data.latest("omni", "talosconfig-prod").attributes.content }}
   serviceAccountKeyFile: ~/.talos/omni/reader.key
 ```
+
+## Fewer nodes than the definition names
+
+A definition names a whole cluster, and a method addresses all of it unless a
+call says otherwise. Every method takes `nodes`, which must be a subset of the
+definition's targets: an argument can shrink what a definition reaches, never
+widen it. This is what makes lifecycle methods safe to use on a fleet
+definition: `reboot` without `nodes` reboots every machine.
+
+```sh
+swamp model method run lab reboot --input 'nodes=["10.5.0.3"]'
+swamp model method run lab etcdStatus
+```
+
+`etcdMembers`, `etcdStatus` and `health` only mean something on a control plane,
+so they read each target's `machinetype` first and go only where it says
+`controlplane`. Each node is asked on its own, so a worker in the list, or a
+control plane that is rebooting, leaves the others' answers intact: an
+`etcdStatus` for an unreachable control plane is written with
+`reachable: false`. `health` runs from the first control plane, or from `node`.
+Through Omni's proxy its etcd check needs more than a Reader identity; Omni
+reports cluster health on its own.
+
+## `serviceLogs`
+
+`talosctl logs <service> --tail <n>` on every target, one call each; a node
+where the service does not exist (etcd on a worker) is skipped. Lines are
+counted inside `sinceSeconds`, by each line's own `ts` (RFC 3339 or epoch
+milliseconds; a line without one is counted), and matched against `match`, a
+regular expression. The record keeps the counts, the window's oldest and newest
+times, and the newest `keep` matching lines. After a restart, a node that kept
+running still holds its old lines, so ask for a window rather than a tail count
+when the question is "has this stopped":
+
+```sh
+swamp model method run lab serviceLogs --input service=etcd \
+  --input tail=2000 --input 'match=ID mismatch' --input sinceSeconds=300
+```
+
+## `processes`
+
+`talosctl processes --sort cpu|rss` on every target; the newest `top` rows per
+node, with CPU seconds, virtual and resident bytes and the SELinux label. Only a
+command's first word is kept: arguments can carry secrets.
 
 ## `volumes`
 

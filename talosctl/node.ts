@@ -3,8 +3,16 @@
  * or without Omni. Forked from `@magistr/talos-node` (MIT) and typed; the
  * upstream methods are kept (version, services, etcd members, kubeconfig,
  * apply and patch config, bootstrap, reboot, shutdown, reset, upgrade,
- * health) and one is added: `volumes`, the disk and partition layout of
- * every targeted node with how full EPHEMERAL is.
+ * health) and four are added: `volumes`, the disk and partition layout of
+ * every targeted node with how full EPHEMERAL is; `etcdStatus`, every control
+ * plane's view of etcd; `serviceLogs`, a service's recent log lines counted
+ * in a time window; and `processes`, the top processes per node.
+ *
+ * Every method takes `nodes`, a subset of the definition's targets for that
+ * call, so a definition can name a whole cluster while a reboot touches one
+ * machine. Commands only control planes answer (etcd, health) are sent only
+ * to the targets whose machine type says so, asked one node at a time, so a
+ * worker in the list or a control plane mid-reboot does not fail the call.
  *
  * Targets: `nodes` is the list of machines a method addresses (`--nodes`);
  * `endpoint` is where the API is reached (`--endpoints`) and doubles as the
@@ -31,6 +39,13 @@ import {
   sanitizeInstanceName,
   VolumeLayoutSchema,
 } from "./layout.ts";
+import {
+  parseLogs,
+  parsePercent,
+  parseSeconds,
+  parseSize,
+  parseTable,
+} from "./tables.ts";
 
 /** Global arguments of every `@dataverket/talosctl/node` instance. */
 export const GlobalArgsSchema = z.object({
@@ -154,6 +169,108 @@ export function options(g: GlobalArgs, insecure?: boolean): TalosctlOptions {
 
 const now = () => new Date().toISOString();
 
+/**
+ * The `nodes` argument every method takes: a subset of the definition's
+ * targets for this one call. Without it a call addresses every target, which
+ * for a lifecycle method such as `reboot` is the whole fleet.
+ */
+const NodesArg = z.array(z.string()).min(1).optional().describe(
+  "Only these of the definition's nodes, for this call; each must be one of the targets",
+);
+const NodesOnly = z.object({ nodes: NodesArg });
+type NodesOnlyArgs = z.infer<typeof NodesOnly>;
+
+/**
+ * Narrow transport options to `nodes`, which must all be targets already: an
+ * argument may shrink what a definition reaches, never widen it.
+ */
+export function narrow(
+  opts: TalosctlOptions,
+  nodes?: string[],
+): TalosctlOptions {
+  if (!nodes || nodes.length === 0) return opts;
+  const stray = nodes.filter((n) => !opts.nodes.includes(n));
+  if (stray.length > 0) {
+    throw new Error(
+      `not among the definition's nodes: ${stray.join(", ")} ` +
+        `(targets: ${opts.nodes.join(", ")})`,
+    );
+  }
+  return { ...opts, nodes };
+}
+
+/** One node's outcome of a call made to each node on its own. */
+export type PerNode<T> =
+  | { node: string; ok: true; value: T }
+  | { node: string; ok: false; error: string };
+
+/**
+ * Run `fn` for every targeted node, one talosctl call per node, in parallel.
+ * A fan-out call fails as a whole when one node is down or refuses the
+ * command, which is the normal state of a node mid-reboot or of a worker
+ * asked about etcd; one call per node keeps the other answers.
+ */
+export function perNode<T>(
+  opts: TalosctlOptions,
+  fn: (one: TalosctlOptions, node: string) => Promise<T>,
+): Promise<PerNode<T>[]> {
+  return Promise.all(opts.nodes.map(async (node): Promise<PerNode<T>> => {
+    try {
+      const value = await fn({ ...opts, nodes: [node] }, node);
+      return { node, ok: true, value };
+    } catch (err) {
+      return {
+        node,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }));
+}
+
+/** True for the machine types that run etcd: `controlplane`, legacy `init`. */
+export function isControlPlaneType(type: unknown): boolean {
+  return type === "controlplane" || type === "init";
+}
+
+/**
+ * The targeted nodes that are control planes, in target order, read from each
+ * node's `machinetype` resource. A node that does not answer is left out with
+ * a warning, so a control plane mid-reboot does not stop a call to the others.
+ */
+export async function controlPlanes(
+  opts: TalosctlOptions,
+  context: Pick<ModelContext, "logger" | "signal">,
+): Promise<string[]> {
+  const types = await perNode(opts, async (one) => {
+    const { stdout } = await talosctl(one, [
+      "get",
+      "machinetype",
+      "-o",
+      "json",
+    ], { signal: context.signal });
+    return parseConcatJson(stdout)[0]?.spec;
+  });
+  const out: string[] = [];
+  for (const t of types) {
+    if (!t.ok) {
+      context.logger.warning(
+        "{node}: machine type unknown, left out: {error}",
+        {
+          node: t.node,
+          error: t.error,
+        },
+      );
+    } else if (isControlPlaneType(t.value)) out.push(t.node);
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `no control plane among the reachable targets (${opts.nodes.join(", ")})`,
+    );
+  }
+  return out;
+}
+
 const VersionSchema = z.object({
   node: z.string(),
   tag: z.string(),
@@ -187,6 +304,116 @@ const ResultSchema = z.object({
   warnings: z.array(z.string()).optional(),
   timestamp: z.string(),
 });
+const EtcdStatusSchema = z.object({
+  node: z.string(),
+  reachable: z.boolean().describe(
+    "false when the control plane did not answer; the fields below are then absent",
+  ),
+  error: z.string().optional(),
+  member: z.string().optional(),
+  leader: z.string().optional(),
+  isLeader: z.boolean().optional(),
+  dbSizeBytes: z.number().optional(),
+  dbInUseBytes: z.number().optional(),
+  dbInUsePercent: z.number().optional(),
+  raftIndex: z.number().optional(),
+  raftTerm: z.number().optional(),
+  raftAppliedIndex: z.number().optional(),
+  isLearner: z.boolean().optional(),
+  protocol: z.string().optional(),
+  storage: z.string().optional(),
+  errors: z.string().optional().describe(
+    "etcd's own ERRORS column, e.g. an alarm; empty when healthy",
+  ),
+  timestamp: z.string(),
+});
+const ServiceLogSchema = z.object({
+  node: z.string(),
+  service: z.string(),
+  tail: z.number(),
+  match: z.string().optional(),
+  sinceSeconds: z.number().optional(),
+  read: z.number().describe("Lines read, at most tail"),
+  counted: z.number().describe(
+    "Lines inside the time window (all read lines without sinceSeconds)",
+  ),
+  matched: z.number().describe(
+    "Counted lines matching `match` (equal to counted without it)",
+  ),
+  oldest: z.string().optional().describe(
+    "Time of the oldest counted line that carries one",
+  ),
+  newest: z.string().optional(),
+  lines: z.array(z.string()).describe(
+    "The newest `keep` matching lines, oldest first",
+  ),
+  timestamp: z.string(),
+});
+const ProcessSchema = z.object({
+  pid: z.number(),
+  state: z.string(),
+  threads: z.number().optional(),
+  cpuSeconds: z.number().optional().describe(
+    "CPU time used since the process started",
+  ),
+  virtualBytes: z.number().optional(),
+  residentBytes: z.number().optional(),
+  label: z.string().optional().describe("SELinux label, e.g. ...:etcd_t:s0"),
+  executable: z.string().describe(
+    "The command's first word only; arguments can carry secrets",
+  ),
+});
+const ProcessesSchema = z.object({
+  node: z.string(),
+  sort: z.enum(["cpu", "rss"]),
+  processes: z.array(ProcessSchema),
+  timestamp: z.string(),
+});
+
+/** One `talosctl etcd status` row as an {@link EtcdStatusSchema} record. */
+export function etcdStatusRecord(row: Record<string, string>) {
+  const num = (k: string) => {
+    const n = Number(row[k]);
+    return row[k] !== undefined && row[k] !== "" && Number.isFinite(n)
+      ? n
+      : undefined;
+  };
+  return {
+    node: row["NODE"],
+    reachable: true,
+    member: row["MEMBER"],
+    leader: row["LEADER"],
+    isLeader: row["MEMBER"] !== undefined && row["MEMBER"] === row["LEADER"],
+    dbSizeBytes: parseSize(row["DB SIZE"] ?? ""),
+    dbInUseBytes: parseSize(row["IN USE"] ?? ""),
+    dbInUsePercent: parsePercent(row["IN USE"] ?? ""),
+    raftIndex: num("RAFT INDEX"),
+    raftTerm: num("RAFT TERM"),
+    raftAppliedIndex: num("RAFT APPLIED INDEX"),
+    isLearner: row["LEARNER"] === "true",
+    protocol: row["PROTOCOL"] || undefined,
+    storage: row["STORAGE"] || undefined,
+    errors: row["ERRORS"] ?? "",
+  };
+}
+
+/** One `talosctl processes` row as a {@link ProcessSchema} entry. */
+export function processRecord(row: Record<string, string>) {
+  const int = (k: string) => {
+    const n = Number(row[k]);
+    return row[k] && Number.isInteger(n) ? n : undefined;
+  };
+  return {
+    pid: int("PID") ?? -1,
+    state: row["STATE"] ?? "",
+    threads: int("THREADS"),
+    cpuSeconds: parseSeconds(row["CPU-TIME"] ?? ""),
+    virtualBytes: parseSize(row["VIRTMEM"] ?? ""),
+    residentBytes: parseSize(row["RESMEM"] ?? ""),
+    label: row["LABEL"] || undefined,
+    executable: (row["COMMAND"] ?? "").split(/\s+/)[0],
+  };
+}
 
 /** Parse `talosctl services`: NODE SERVICE STATE HEALTH ... rows. */
 export function parseServices(
@@ -236,6 +463,7 @@ export function parseContexts(stdout: string): string[] {
 }
 
 const ApplyArgs = z.object({
+  nodes: NodesArg,
   configFile: z.string().describe("Path to the machine config YAML file"),
   mode: z.enum(["auto", "reboot", "no-reboot", "staged"]).default("auto"),
   insecure: z.boolean().default(false).describe(
@@ -243,6 +471,7 @@ const ApplyArgs = z.object({
   ),
 });
 const PatchArgs = z.object({
+  nodes: NodesArg,
   patchFile: z.string().describe("Path to the YAML patch file"),
   mode: z.enum(["auto", "reboot", "no-reboot", "staged"]).default("auto"),
 });
@@ -267,7 +496,7 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.29.3",
+  version: "2026.09.30.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -285,6 +514,12 @@ export const model = {
       toVersion: "2026.09.29.3",
       description:
         "omni-key-readable and talos-context-exists checks added; no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.30.1",
+      description:
+        "etcd and health go to control planes only; etcdStatus, serviceLogs and processes added; every method takes nodes; no global schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -424,16 +659,36 @@ export const model = {
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
+    etcdStatus: {
+      description:
+        "One control plane's etcd member: leader, raft indexes, database size, errors",
+      schema: EtcdStatusSchema,
+      lifetime: "30d" as const,
+      garbageCollection: 20,
+    },
+    serviceLog: {
+      description:
+        "The recent lines of one service on one node, with counts in a time window",
+      schema: ServiceLogSchema,
+      lifetime: "7d" as const,
+      garbageCollection: 20,
+    },
+    processes: {
+      description: "The top processes of one node by CPU time or memory",
+      schema: ProcessesSchema,
+      lifetime: "7d" as const,
+      garbageCollection: 20,
+    },
   },
   methods: {
     version: {
       description: "Read the Talos version of every targeted node",
-      arguments: z.object({}),
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const handles: DataHandle[] = [];
         for (const node of opts.nodes) {
           const { stdout } = await talosctl({ ...opts, nodes: [node] }, [
@@ -462,14 +717,16 @@ export const model = {
     },
     services: {
       description: "List every service on every targeted node",
-      arguments: z.object({}),
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const { stdout } = await talosctl(options(context.globalArgs), [
-          "services",
-        ], { signal: context.signal });
+        const { stdout } = await talosctl(
+          narrow(options(context.globalArgs), args.nodes),
+          ["services"],
+          { signal: context.signal },
+        );
         const handles: DataHandle[] = [];
         for (const s of parseServices(stdout)) {
           handles.push(
@@ -487,25 +744,226 @@ export const model = {
       },
     },
     etcdMembers: {
-      description: "List the etcd cluster members",
-      arguments: z.object({}),
+      description:
+        "List the etcd cluster members, as one control plane among the targets sees them; the first that answers is asked",
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const { stdout } = await talosctl(options(context.globalArgs), [
-          "etcd",
-          "members",
-        ], { signal: context.signal });
+        const opts = narrow(options(context.globalArgs), args.nodes);
+        const errors: string[] = [];
+        for (const cp of await controlPlanes(opts, context)) {
+          let stdout: string;
+          try {
+            ({ stdout } = await talosctl({ ...opts, nodes: [cp] }, [
+              "etcd",
+              "members",
+            ], { signal: context.signal }));
+          } catch (err) {
+            errors.push(err instanceof Error ? err.message : String(err));
+            continue;
+          }
+          const handles: DataHandle[] = [];
+          for (const m of parseEtcdMembers(stdout)) {
+            handles.push(
+              await context.writeResource(
+                "etcdMember",
+                `etcd-${sanitizeInstanceName(m.hostname)}`,
+                {
+                  ...m,
+                  timestamp: now(),
+                },
+              ),
+            );
+          }
+          return { dataHandles: handles };
+        }
+        throw new Error(
+          `no control plane answered etcd members: ${errors.join("; ")}`,
+        );
+      },
+    },
+    etcdStatus: {
+      description:
+        "The etcd status of every control plane among the targets: member, leader, raft index and term, database size, errors. One etcdStatus per control plane; one that does not answer is recorded as unreachable. Read-only.",
+      arguments: NodesOnly,
+      execute: async (
+        args: NodesOnlyArgs,
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const opts = narrow(options(context.globalArgs), args.nodes);
+        const cps = await controlPlanes(opts, context);
+        const results = await perNode({ ...opts, nodes: cps }, async (one) => {
+          const { stdout } = await talosctl(one, ["etcd", "status"], {
+            signal: context.signal,
+          });
+          const row = parseTable(stdout)[0];
+          if (!row) throw new Error("etcd status printed no row");
+          return etcdStatusRecord(row);
+        });
+        const ts = now();
         const handles: DataHandle[] = [];
-        for (const m of parseEtcdMembers(stdout)) {
+        for (const r of results) {
+          const data = r.ok
+            ? { ...r.value, node: r.node, timestamp: ts }
+            : { node: r.node, reachable: false, error: r.error, timestamp: ts };
+          if (!r.ok) {
+            context.logger.warning("{node}: etcd status failed: {error}", {
+              node: r.node,
+              error: r.error,
+            });
+          }
           handles.push(
             await context.writeResource(
-              "etcdMember",
-              `etcd-${sanitizeInstanceName(m.hostname)}`,
+              "etcdStatus",
+              `etcd-status-${sanitizeInstanceName(r.node)}`,
+              data,
+            ),
+          );
+        }
+        return { dataHandles: handles };
+      },
+    },
+    serviceLogs: {
+      description:
+        "The last lines of one service's log on every targeted node, with how many fall inside a time window and match a pattern. One serviceLog per node; a node where the service does not exist is skipped. Read-only.",
+      arguments: z.object({
+        nodes: NodesArg,
+        service: z.string().min(1).describe(
+          "Talos service or container log, e.g. etcd, kubelet, apid",
+        ),
+        tail: z.number().int().min(1).max(10000).default(500).describe(
+          "How many of the newest lines to read",
+        ),
+        match: z.string().optional().describe(
+          "Regular expression; only matching lines are counted as matched and kept",
+        ),
+        sinceSeconds: z.number().int().min(1).optional().describe(
+          "Count only lines whose own timestamp is this recent; lines without one are counted",
+        ),
+        keep: z.number().int().min(0).max(1000).default(20).describe(
+          "How many of the newest matching lines to store",
+        ),
+      }),
+      execute: async (
+        args: {
+          nodes?: string[];
+          service: string;
+          tail: number;
+          match?: string;
+          sinceSeconds?: number;
+          keep: number;
+        },
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const opts = narrow(options(context.globalArgs), args.nodes);
+        const pattern = args.match ? new RegExp(args.match) : undefined;
+        const results = await perNode(opts, async (one) => {
+          const { stdout } = await talosctl(one, [
+            "logs",
+            args.service,
+            "--tail",
+            String(args.tail),
+          ], { signal: context.signal });
+          return parseLogs(stdout);
+        });
+        const cutoff = args.sinceSeconds
+          ? Date.now() - args.sinceSeconds * 1000
+          : undefined;
+        const ts = now();
+        const handles: DataHandle[] = [];
+        for (const r of results) {
+          if (!r.ok) {
+            if (/not registered|not found/i.test(r.error)) {
+              context.logger.warning("{node}: no {service} log, skipped", {
+                node: r.node,
+                service: args.service,
+              });
+              continue;
+            }
+            throw new Error(`${r.node}: ${r.error}`);
+          }
+          const counted = r.value.filter((l) =>
+            cutoff === undefined || l.ts === undefined || l.ts >= cutoff
+          );
+          const matched = pattern
+            ? counted.filter((l) => pattern.test(l.text))
+            : counted;
+          const times = counted.map((l) => l.ts).filter((t): t is number =>
+            t !== undefined
+          );
+          handles.push(
+            await context.writeResource(
+              "serviceLog",
+              `log-${sanitizeInstanceName(`${r.node}-${args.service}`)}`,
               {
-                ...m,
-                timestamp: now(),
+                node: r.node,
+                service: args.service,
+                tail: args.tail,
+                match: args.match,
+                sinceSeconds: args.sinceSeconds,
+                read: r.value.length,
+                counted: counted.length,
+                matched: matched.length,
+                oldest: times.length > 0
+                  ? new Date(Math.min(...times)).toISOString()
+                  : undefined,
+                newest: times.length > 0
+                  ? new Date(Math.max(...times)).toISOString()
+                  : undefined,
+                lines: args.keep > 0
+                  ? matched.slice(-args.keep).map((l) => l.text)
+                  : [],
+                timestamp: ts,
+              },
+            ),
+          );
+        }
+        if (handles.length === 0) {
+          throw new Error(
+            `no targeted node has a ${args.service} log (${
+              opts.nodes.join(", ")
+            })`,
+          );
+        }
+        return { dataHandles: handles };
+      },
+    },
+    processes: {
+      description:
+        "The top processes of every targeted node by CPU time or resident memory. One processes record per node, holding each process's executable but never its arguments. Read-only.",
+      arguments: z.object({
+        nodes: NodesArg,
+        sort: z.enum(["cpu", "rss"]).default("cpu"),
+        top: z.number().int().min(1).max(200).default(10),
+      }),
+      execute: async (
+        args: { nodes?: string[]; sort: "cpu" | "rss"; top: number },
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const opts = narrow(options(context.globalArgs), args.nodes);
+        const results = await perNode(opts, async (one) => {
+          const { stdout } = await talosctl(one, [
+            "processes",
+            "--sort",
+            args.sort,
+          ], { signal: context.signal });
+          return parseTable(stdout).slice(0, args.top).map(processRecord);
+        });
+        const ts = now();
+        const handles: DataHandle[] = [];
+        for (const r of results) {
+          if (!r.ok) throw new Error(`${r.node}: ${r.error}`);
+          handles.push(
+            await context.writeResource(
+              "processes",
+              `processes-${sanitizeInstanceName(r.node)}`,
+              {
+                node: r.node,
+                sort: args.sort,
+                processes: r.value,
+                timestamp: ts,
               },
             ),
           );
@@ -515,15 +973,16 @@ export const model = {
     },
     kubeconfig: {
       description: "Retrieve the cluster kubeconfig",
-      arguments: z.object({}),
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const { stdout } = await talosctl(options(context.globalArgs), [
-          "kubeconfig",
-          "-",
-        ], { signal: context.signal });
+        const { stdout } = await talosctl(
+          narrow(options(context.globalArgs), args.nodes),
+          ["kubeconfig", "-"],
+          { signal: context.signal },
+        );
         const handle = await context.writeResource("kubeconfig", "main", {
           kubeconfig: stdout,
           timestamp: now(),
@@ -534,12 +993,12 @@ export const model = {
     volumes: {
       description:
         "For every targeted node: disks, partitions (STATE, EPHEMERAL, u-<name>, ...), unallocated bytes on the system disk, and /var usage. One volumeLayout per node, one execution. Read-only.",
-      arguments: z.object({}),
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const get = (kind: string) =>
           talosctl(opts, ["get", kind, "-o", "json"], {
             signal: context.signal,
@@ -604,9 +1063,12 @@ export const model = {
         args: z.infer<typeof ApplyArgs>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(
-          context.globalArgs,
-          args.insecure || context.globalArgs.insecure,
+        const opts = narrow(
+          options(
+            context.globalArgs,
+            args.insecure || context.globalArgs.insecure,
+          ),
+          args.nodes,
         );
         const { stderr } = await talosctl(
           opts,
@@ -623,12 +1085,12 @@ export const model = {
     },
     bootstrap: {
       description: "Bootstrap etcd (run once, against the first control plane)",
-      arguments: z.object({}),
+      arguments: NodesOnly,
       execute: async (
-        _args: Record<string, never>,
+        args: NodesOnlyArgs,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         await talosctl(opts, ["bootstrap"], {
           retries: 20,
           signal: context.signal,
@@ -641,15 +1103,17 @@ export const model = {
       },
     },
     reboot: {
-      description: "Reboot the targeted nodes",
+      description:
+        "Reboot the targeted nodes; give nodes to reboot fewer than all of them, e.g. one control plane at a time",
       arguments: z.object({
+        nodes: NodesArg,
         mode: z.enum(["default", "powercycle"]).default("default"),
       }),
       execute: async (
-        args: { mode: "default" | "powercycle" },
+        args: { nodes?: string[]; mode: "default" | "powercycle" },
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const a = ["reboot"];
         if (args.mode === "powercycle") a.push("--mode", "powercycle");
         await talosctl(opts, a, { signal: context.signal });
@@ -662,12 +1126,15 @@ export const model = {
     },
     shutdown: {
       description: "Shut down the targeted nodes",
-      arguments: z.object({ force: z.boolean().default(false) }),
+      arguments: z.object({
+        nodes: NodesArg,
+        force: z.boolean().default(false),
+      }),
       execute: async (
-        args: { force: boolean },
+        args: { nodes?: string[]; force: boolean },
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const a = ["shutdown"];
         if (args.force) a.push("--force");
         await talosctl(opts, a, { signal: context.signal });
@@ -682,6 +1149,7 @@ export const model = {
       description:
         "Reset the targeted nodes: wipe the system disk, or only the named partitions",
       arguments: z.object({
+        nodes: NodesArg,
         graceful: z.boolean().default(true).describe(
           "Cordon, drain and leave etcd first",
         ),
@@ -694,13 +1162,14 @@ export const model = {
       }),
       execute: async (
         args: {
+          nodes?: string[];
           graceful: boolean;
           reboot: boolean;
           systemLabelsToWipe?: string[];
         },
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const a = ["reset"];
         if (!args.graceful) a.push("--graceful=false");
         if (args.reboot) a.push("--reboot");
@@ -723,6 +1192,7 @@ export const model = {
     upgrade: {
       description: "Upgrade Talos on the targeted nodes",
       arguments: z.object({
+        nodes: NodesArg,
         image: z.string().describe(
           "Installer image, e.g. ghcr.io/siderolabs/installer:v1.14.1",
         ),
@@ -731,10 +1201,10 @@ export const model = {
         ),
       }),
       execute: async (
-        args: { image: string; preserve: boolean },
+        args: { nodes?: string[]; image: string; preserve: boolean },
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const a = ["upgrade", "--image", args.image];
         if (args.preserve) a.push("--preserve");
         await talosctl(opts, a, { signal: context.signal });
@@ -752,7 +1222,7 @@ export const model = {
         args: z.infer<typeof PatchArgs>,
         context: ModelContext,
       ): Promise<MethodResult> => {
-        const opts = options(context.globalArgs);
+        const opts = narrow(options(context.globalArgs), args.nodes);
         const { stderr } = await talosctl(
           opts,
           [
@@ -774,25 +1244,33 @@ export const model = {
       },
     },
     health: {
-      description: "Run the cluster health check",
+      description:
+        "Run the cluster health check from one control plane: the given node, or the first control plane among the targets. Through Omni's proxy the etcd check needs more than a Reader identity; Omni reports cluster health itself",
       arguments: z.object({
+        node: z.string().optional().describe(
+          "The control plane to run the check from; must be one of the targets",
+        ),
         waitTimeout: z.string().default("10s").describe(
           "How long to wait for the check to pass, e.g. 30s, 2m",
         ),
       }),
       execute: async (
-        args: { waitTimeout: string },
+        args: { node?: string; waitTimeout: string },
         context: ModelContext,
       ): Promise<MethodResult> => {
+        const opts = options(context.globalArgs);
+        const node = args.node
+          ? narrow(opts, [args.node]).nodes[0]
+          : (await controlPlanes(opts, context))[0];
         const { stdout } = await talosctl(
-          options(context.globalArgs),
+          { ...opts, nodes: [node] },
           ["health", "--wait-timeout", args.waitTimeout],
           { signal: context.signal },
         );
         return await resultOf(
           context,
           "health",
-          stdout.trim() || "Cluster healthy",
+          `${node}: ${stdout.trim() || "cluster healthy"}`,
         );
       },
     },
