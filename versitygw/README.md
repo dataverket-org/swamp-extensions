@@ -19,24 +19,44 @@ Written and tested against versitygw v1.8.0.
 ## Credentials
 
 versitygw has no read-only admin role: every admin call, reads included, signs
-with the root key pair. A definition names where the pair is and never holds it.
-There are two sources, and a definition names exactly one:
+with the root key pair. There are three sources, and a definition names exactly
+one:
 
 - `rootKeyFile`: a file of `NAME=value` lines, read at each call. Suits a file
   an operator's session writes before a run and removes after, or a file a
   process that owns the gateway already keeps.
 - `rootKeyEnv: true`: swamp's own environment. Suits a key held only while an
   operator works, supplied by a secret manager's `run -- swamp ...`.
+- `rootAccessKey` and `rootSecretKey`, always together: the pair as values,
+  written as vault expressions so the definition stores only the reference.
+  Suits a key a process owns and runs with unattended, such as a test gateway's.
 
-`accessKeyName` and `secretKeyName` (default `ROOT_ACCESS_KEY` and
-`ROOT_SECRET_KEY`, the names versitygw itself reads) say which variables to
-take, so one environment can serve several gateways.
+The first two need a person or a process to put the key where the definition
+looks; the third lets any run that can open the vault sign as root, so it is the
+choice when that is what is wanted. `accessKeyName` and `secretKeyName` (default
+`ROOT_ACCESS_KEY` and `ROOT_SECRET_KEY`, the names versitygw itself reads) say
+which variables to take from a file or the environment, so one environment can
+serve several gateways.
+
+```yaml
+globalArguments:
+  adminUrl: http://localhost:7071
+  s3Url: https://s3.example.org:443
+  rootAccessKey: ${{ vault.get("test", "gateway-root-access") }}
+  rootSecretKey: ${{ vault.get("test", "gateway-root-secret") }}
+```
 
 What never leaves the method: `list-users` returns every account's secret key
 and session token in clear, and the parser copies named fields into a record
 type that has no field for either. The root access key is not recorded either: a
 bucket root owns says `ownerIsRoot: true`, and an ACL or policy naming root
 names `<root>`. Both halves of the root pair are masked in every error.
+
+Two pre-flight checks come with the type: `root-key-named` (exactly one source,
+the values whole, not empty, no whitespace) and `admin-reachable` (the admin API
+accepts the pair's signature). Every method here only reads, and swamp runs
+checks by itself only before methods that change something, so run them with
+`swamp model validate <name>`.
 
 ## A gateway
 

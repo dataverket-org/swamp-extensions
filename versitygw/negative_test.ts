@@ -10,7 +10,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
-import { model } from "./gateway.ts";
+import { GlobalArgsSchema, model } from "./gateway.ts";
 import { parseAccounts, parseBuckets, parseVersioning } from "./parse.ts";
 import { __setFetch, parseXml, readRootKey, S3Error } from "./transport.ts";
 import {
@@ -697,4 +697,45 @@ Deno.test("check does not count records another inventory wrote", async () => {
       .map((f) => f.subject);
     assertEquals(subjects, ["idle", "ops"]);
   });
+});
+
+Deno.test("the root-key-named check accepts the pair as values and refuses half a pair", async () => {
+  const check = model.checks["root-key-named"];
+  assertEquals(
+    await check.execute({
+      globalArgs: globalArgs({
+        rootAccessKey: ROOT_ACCESS,
+        rootSecretKey: ROOT_SECRET,
+      }),
+    }),
+    { pass: true },
+  );
+  const half = await check.execute({
+    globalArgs: globalArgs({ rootSecretKey: ROOT_SECRET }),
+  });
+  assertEquals(half.pass, false);
+  assertEquals(JSON.stringify(half).includes(ROOT_SECRET), false);
+});
+
+Deno.test("an inventory signed with the pair as values records neither value", async () => {
+  const fake = installFetch();
+  try {
+    const { context, written, logs } = makeContext(
+      globalArgs({ rootAccessKey: ROOT_ACCESS, rootSecretKey: ROOT_SECRET }),
+    );
+    await model.methods.inventory.execute({}, context);
+    assertEquals(fake.seen.filter((s) => !s.signed).length, 1, "only /health");
+    const all = JSON.stringify({ written, logs });
+    assertEquals(all.includes(ROOT_SECRET), false);
+    assertEquals(all.includes(`"${ROOT_ACCESS}"`), false);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("both values are marked sensitive in the schema", () => {
+  const shape = GlobalArgsSchema.shape;
+  for (const field of [shape.rootAccessKey, shape.rootSecretKey]) {
+    assertEquals(field.meta()?.sensitive, true);
+  }
 });

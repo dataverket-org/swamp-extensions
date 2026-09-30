@@ -4,9 +4,11 @@
  * body turned into an {@link S3Error}.
  *
  * versitygw has no read-only admin role, so every admin call, reads included,
- * signs with the root key pair. The definition names where the pair is, never
- * the pair itself: a key file the operator's session writes, or the process
- * environment. Both values are masked in every error text this module builds.
+ * signs with the root key pair. It comes from exactly one of three sources: a
+ * key file the operator's session writes, the process environment, or the two
+ * values themselves, which a definition supplies through vault expressions so
+ * that it stores only the reference. Both values are masked in every error
+ * text this module builds.
  *
  * One injectable seam, {@link __setFetch}, lets tests answer from recorded
  * gateway responses without a gateway.
@@ -24,6 +26,8 @@ export interface Endpoint {
   caFile?: string;
   rootKeyFile?: string;
   rootKeyEnv?: boolean;
+  rootAccessKey?: string;
+  rootSecretKey?: string;
   accessKeyName: string;
   secretKeyName: string;
   httpTimeoutMs: number;
@@ -102,13 +106,68 @@ export function parseKeyFile(text: string): Map<string, string> {
 }
 
 /**
+ * Which root key sources a definition names, and what is wrong with that:
+ * undefined when exactly one is named whole. The values count as one source,
+ * and only as a pair. Shared by {@link readRootKey} and the pre-flight check,
+ * so the two cannot disagree.
+ */
+export function rootKeySourceProblem(
+  endpoint: Pick<
+    Endpoint,
+    "rootKeyFile" | "rootKeyEnv" | "rootAccessKey" | "rootSecretKey"
+  >,
+): string | undefined {
+  const { rootKeyFile, rootKeyEnv, rootAccessKey, rootSecretKey } = endpoint;
+  // A value that is set counts as named even when empty, so a vault entry
+  // that resolved to "" is reported as such rather than as a missing source
+  // or, worse, a silent fall back to another one.
+  const values = rootAccessKey !== undefined || rootSecretKey !== undefined;
+  const named = [
+    rootKeyFile ? "rootKeyFile" : "",
+    rootKeyEnv ? "rootKeyEnv" : "",
+    values ? "rootAccessKey and rootSecretKey" : "",
+  ].filter(Boolean);
+  if (named.length === 0) {
+    return "no root key source: set rootKeyFile, rootKeyEnv, or rootAccessKey and rootSecretKey";
+  }
+  if (named.length > 1) {
+    return `give one root key source, not ${named.join(" and ")}`;
+  }
+  if (values && rootAccessKey === undefined) {
+    return "rootSecretKey is set but rootAccessKey is not; give both or neither";
+  }
+  if (values && rootSecretKey === undefined) {
+    return "rootAccessKey is set but rootSecretKey is not; give both or neither";
+  }
+  for (
+    const [name, value] of [
+      ["rootAccessKey", rootAccessKey],
+      ["rootSecretKey", rootSecretKey],
+    ] as const
+  ) {
+    if (value === undefined) continue;
+    if (value === "") return `${name} is empty`;
+    // A key never holds whitespace; a stray newline from how the value was
+    // stored would otherwise fail inside the signer, whose error quotes the
+    // header it built.
+    if (/\s/.test(value)) return `${name} contains whitespace`;
+  }
+  return undefined;
+}
+
+/**
  * Read the root key pair from the one source the definition names. The error
  * texts name the source and the variable, never a value.
  */
 export function readRootKey(endpoint: Endpoint): RootKey {
   const { rootKeyFile, rootKeyEnv, accessKeyName, secretKeyName } = endpoint;
-  if (rootKeyFile && rootKeyEnv) {
-    throw new Error("give rootKeyFile or rootKeyEnv, not both");
+  const problem = rootKeySourceProblem(endpoint);
+  if (problem) throw new Error(problem);
+  if (
+    endpoint.rootAccessKey !== undefined &&
+    endpoint.rootSecretKey !== undefined
+  ) {
+    return { access: endpoint.rootAccessKey, secret: endpoint.rootSecretKey };
   }
   let lookup: (name: string) => string | undefined;
   let source: string;
@@ -133,7 +192,8 @@ export function readRootKey(endpoint: Endpoint): RootKey {
     lookup = (name) => Deno.env.get(name);
     source = "the environment";
   } else {
-    throw new Error("no root key source: set rootKeyFile or rootKeyEnv");
+    // unreachable: rootKeySourceProblem refused every other combination
+    throw new Error("no root key source");
   }
   const access = lookup(accessKeyName) ?? "";
   const secret = lookup(secretKeyName) ?? "";
@@ -332,9 +392,8 @@ export async function send(
   const base = call.api === "admin" ? endpoint.adminUrl : endpoint.s3Url;
   const url = joinUrl(base, call.path, call.query);
   let request = new Request(url, { method: call.method });
-  if (!call.unsigned) {
-    if (!key) throw new Error(`${call.method} ${call.path}: no root key`);
-    request = await sign(request, key, endpoint.region);
+  if (!call.unsigned && !key) {
+    throw new Error(`${call.method} ${call.path}: no root key`);
   }
   const timeout = AbortSignal.timeout(endpoint.httpTimeoutMs);
   const init = {
@@ -342,6 +401,11 @@ export async function send(
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   };
   try {
+    // Signing is inside the masked block: a key the signer cannot put in a
+    // header makes it throw with the header, key included, in its message.
+    if (!call.unsigned && key) {
+      request = await sign(request, key, endpoint.region);
+    }
     const response = testFetch
       ? await testFetch(request, init)
       : await fetch(request, init);

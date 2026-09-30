@@ -17,6 +17,7 @@ import {
   expectOk,
   readRootKey,
   type RootKey,
+  rootKeySourceProblem,
   S3Error,
   send,
 } from "./transport.ts";
@@ -40,9 +41,9 @@ import {
 import { type Finding, findings, FindingSchema, RULES } from "./findings.ts";
 
 /**
- * Global arguments. The root key pair is named, never carried: a key file the
- * operator's session writes, or the environment swamp runs in. One or the
- * other, never both.
+ * Global arguments. The root key pair comes from exactly one source: a key
+ * file, the environment swamp runs in, or the two values, supplied through
+ * vault expressions so the definition stores only the reference.
  */
 export const GlobalArgsSchema = z.object({
   adminUrl: z.string().describe(
@@ -67,6 +68,14 @@ export const GlobalArgsSchema = z.object({
   rootKeyEnv: z.boolean().default(false).describe(
     "Read the root key pair from swamp's environment, e.g. under a secret " +
       "manager's `run -- swamp ...`. Suits a key held only while an operator works",
+  ),
+  rootAccessKey: z.string().optional().meta({ sensitive: true }).describe(
+    'The root access key as a value, e.g. ${{ vault.get("<vault>", "<key>") }}; ' +
+      "with rootSecretKey, instead of a file or the environment. Suits a key a " +
+      "process owns and runs with unattended",
+  ),
+  rootSecretKey: z.string().optional().meta({ sensitive: true }).describe(
+    "The root secret key as a value, supplied like rootAccessKey and always with it",
   ),
   accessKeyName: z.string().default("ROOT_ACCESS_KEY").describe(
     "Variable holding the root access key, in the file or the environment",
@@ -385,25 +394,15 @@ function writer(context: ModelContext): Writer {
 export const checks = {
   "root-key-named": {
     description:
-      "Exactly one of rootKeyFile or rootKeyEnv names the root key pair",
+      "Exactly one root key source is named: rootKeyFile, rootKeyEnv, or rootAccessKey with rootSecretKey",
     labels: ["policy"],
     execute: (
       context: { globalArgs: z.input<typeof GlobalArgsSchema> },
     ): Promise<CheckResult> => {
-      const { rootKeyFile, rootKeyEnv } = context.globalArgs;
-      if (rootKeyFile && rootKeyEnv) {
-        return Promise.resolve({
-          pass: false,
-          errors: ["give rootKeyFile or rootKeyEnv, not both"],
-        });
-      }
-      if (!rootKeyFile && !rootKeyEnv) {
-        return Promise.resolve({
-          pass: false,
-          errors: ["no root key source: set rootKeyFile or rootKeyEnv"],
-        });
-      }
-      return Promise.resolve({ pass: true });
+      const problem = rootKeySourceProblem(context.globalArgs);
+      return Promise.resolve(
+        problem ? { pass: false, errors: [problem] } : { pass: true },
+      );
     },
   },
   "admin-reachable": {
@@ -465,7 +464,15 @@ function records(
 /** A versitygw gateway, read through its admin API and its S3 API. */
 export const model = {
   type: "@dataverket/versitygw/gateway",
-  version: "2026.09.30.1",
+  version: "2026.09.30.2",
+  upgrades: [
+    {
+      toVersion: "2026.09.30.2",
+      description:
+        "rootAccessKey and rootSecretKey added as a third root key source; existing definitions unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {

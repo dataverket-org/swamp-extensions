@@ -182,7 +182,7 @@ Deno.test("readRootKey refuses no source, two sources, and a missing variable", 
       () =>
         readRootKey(globalArgs({ rootKeyFile: file.path, rootKeyEnv: true })),
       Error,
-      "not both",
+      "give one root key source, not rootKeyFile and rootKeyEnv",
     );
     const error = assertThrows(
       () =>
@@ -246,6 +246,91 @@ Deno.test("send masks the key pair in a transport failure", async () => {
     );
     assertEquals((error as Error).message.includes(ROOT_SECRET), false);
     assertStringIncludes((error as Error).message, "[REDACTED]");
+  } finally {
+    __setFetch();
+  }
+});
+
+Deno.test("readRootKey takes the pair as values, and only as a whole pair", () => {
+  assertEquals(
+    readRootKey(
+      globalArgs({ rootAccessKey: ROOT_ACCESS, rootSecretKey: ROOT_SECRET }),
+    ),
+    { access: ROOT_ACCESS, secret: ROOT_SECRET },
+  );
+  const half = assertThrows(
+    () => readRootKey(globalArgs({ rootAccessKey: ROOT_ACCESS })),
+    Error,
+    "rootAccessKey is set but rootSecretKey is not",
+  );
+  assertEquals(half.message.includes(ROOT_ACCESS), false);
+  assertThrows(
+    () => readRootKey(globalArgs({ rootSecretKey: ROOT_SECRET })),
+    Error,
+    "rootSecretKey is set but rootAccessKey is not",
+  );
+  const both = assertThrows(
+    () =>
+      readRootKey(
+        globalArgs({
+          rootKeyEnv: true,
+          rootAccessKey: ROOT_ACCESS,
+          rootSecretKey: ROOT_SECRET,
+        }),
+      ),
+    Error,
+    "not rootKeyEnv and rootAccessKey and rootSecretKey",
+  );
+  assertEquals(both.message.includes(ROOT_SECRET), false);
+});
+
+Deno.test("a value with whitespace or an empty value is refused by name, never by value", () => {
+  const newline = assertThrows(
+    () =>
+      readRootKey(
+        globalArgs({
+          rootAccessKey: `${ROOT_ACCESS}\n`,
+          rootSecretKey: ROOT_SECRET,
+        }),
+      ),
+    Error,
+    "rootAccessKey contains whitespace",
+  );
+  assertEquals(newline.message.includes(ROOT_ACCESS), false);
+  assertThrows(
+    () =>
+      readRootKey(
+        globalArgs({ rootAccessKey: "", rootSecretKey: ROOT_SECRET }),
+      ),
+    Error,
+    "rootAccessKey is empty",
+  );
+  assertThrows(
+    () =>
+      readRootKey(
+        globalArgs({ rootKeyEnv: true, rootAccessKey: "", rootSecretKey: "" }),
+      ),
+    Error,
+    "give one root key source",
+  );
+});
+
+Deno.test("a key the signer rejects is masked in the error", async () => {
+  // The file source is not checked for whitespace; the signer's own error,
+  // which quotes the header it built, must still come out masked.
+  __setFetch(() => Promise.reject(new Error("not reached")));
+  try {
+    const key = { access: `${ROOT_ACCESS}\u0000`, secret: ROOT_SECRET };
+    const error = await assertRejects(() =>
+      send(globalArgs(), key, {
+        api: "admin",
+        method: "PATCH",
+        path: "/list-buckets",
+      })
+    );
+    const message = (error as Error).message;
+    assertEquals(message.includes(ROOT_ACCESS), false, message);
+    assertEquals(message.includes(ROOT_SECRET), false, message);
   } finally {
     __setFetch();
   }
