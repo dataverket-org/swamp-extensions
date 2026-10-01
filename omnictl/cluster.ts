@@ -7,7 +7,7 @@
  * In the order a worker swap uses them: `applyPatch` and `setExtensions`
  * before `addMachine`, so both are in place when Omni first provisions the
  * machine; `removeMachine` drains, wipes and waits; `deleteMachine` is the
- * dashboard's Delete Machine, after the server is gone. The sequences around
+ * dashboard's Delete Machine (patches and Link), after the server is gone. The sequences around
  * them, with their checks, belong in workflows. Every apply takes `dryRun`,
  * which makes `omnictl apply --dry-run` validate the resource and change
  * nothing.
@@ -43,9 +43,8 @@ export const TYPES = {
   machineSetNode: "MachineSetNodes.omni.sidero.dev",
   machineStatus: "MachineStatuses.omni.sidero.dev",
   clusterMachine: "ClusterMachines.omni.sidero.dev",
-  machine: "Machines.omni.sidero.dev",
   extensionsConfiguration: "ExtensionsConfigurations.omni.sidero.dev",
-  link: "Links.siderolink.omni.sidero.dev",
+  link: "Links.omni.sidero.dev",
 } as const;
 
 /** Omni's label keys for patch and machine-set scoping. */
@@ -324,7 +323,7 @@ const nodeName = (machine: string) =>
  */
 export const model = {
   type: "@dataverket/omnictl/cluster",
-  version: "2026.10.01.2",
+  version: "2026.10.01.3",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -342,6 +341,12 @@ export const model = {
       toVersion: "2026.10.01.2",
       description:
         "setExtensions added, applyPatch takes dataFile, forgetMachine replaced by deleteMachine (the dashboard's Delete Machine); global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.01.3",
+      description:
+        "deleteMachine deletes the Link, not the read-only Machine; the Link type is Links.omni.sidero.dev; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -544,7 +549,7 @@ export const model = {
     },
     deleteMachine: {
       description:
-        "What Omni's dashboard does with Delete Machine: delete the machine's own config patches and its Machine; Omni then removes its labels and SideroLink Link. Refuses while the machine is in a machine set (removeMachine first), and is a no-op when Omni has no such machine. Delete the server first, or a running machine re-registers. Works whether or not removeMachine's wipe finished, so it also clears a machine whose server is gone and whose removal hangs.",
+        "What Omni's dashboard does with Delete Machine: delete the machine's own config patches and its SideroLink Link; Omni then tears down the Machine and its labels (Machines themselves are read-only to every role). Refuses while the machine is in a machine set (removeMachine first), and is a no-op when Omni has no such machine. Delete the server first, or a running machine re-registers. Works whether or not removeMachine's wipe finished, so it also clears a machine whose server is gone and whose removal hangs.",
       arguments: DeleteMachineArgs,
       execute: async (
         args: z.infer<typeof DeleteMachineArgs>,
@@ -568,13 +573,13 @@ export const model = {
             }; removeMachine first`,
           );
         }
-        const machine = await getResource(
-          TYPES.machine,
+        const link = await getResource(
+          TYPES.link,
           args.machine,
           opts,
           context.signal,
         );
-        if (!machine) {
+        if (!link) {
           context.logger.info(
             "omnictl: Omni already has no machine {machine}",
             {
@@ -594,7 +599,7 @@ export const model = {
           ] === args.machine
         );
         context.logger.info(
-          "omnictl: deleting machine {machine} and its {count} config patch(es)",
+          "omnictl: deleting machine {machine}: its {count} config patch(es) and its Link",
           { machine: args.machine, count: own.length },
         );
         for (const p of own) {
@@ -605,7 +610,7 @@ export const model = {
             context.signal,
           );
         }
-        await deleteResource(TYPES.machine, args.machine, opts, context.signal);
+        await deleteResource(TYPES.link, args.machine, opts, context.signal);
         return { dataHandles: [] };
       },
     },

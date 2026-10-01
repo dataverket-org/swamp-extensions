@@ -46,13 +46,13 @@ One instance per Omni endpoint, with an Operator service account on its own
 vault key, so the reads above never carry it. The four writes of a machine swap,
 in the order a swap uses them:
 
-| Method          | What it does                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `applyPatch`    | Create or update a `ConfigPatch` from `data` or a `dataFile` path in the repository, scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it        |
-| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos                                |
-| `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                                                    |
-| `deleteMachine` | The dashboard's Delete Machine: delete the machine's own config patches and its `Machine`; Omni removes the Link. Refuses while it is in a machine set; delete the server first |
-| `setExtensions` | Set the system extensions (`--input extensions='["siderolabs/kata-containers"]'`) for a `machine`, a `machineSet` or the `cluster`; the list replaces what was there            |
+| Method          | What it does                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `applyPatch`    | Create or update a `ConfigPatch` from `data` or a `dataFile` path in the repository, scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it             |
+| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos                                     |
+| `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                                                         |
+| `deleteMachine` | The dashboard's Delete Machine: delete the machine's own config patches and its `Link`; Omni tears down the `Machine`. Refuses while it is in a machine set; delete the server first |
+| `setExtensions` | Set the system extensions (`--input extensions='["siderolabs/kata-containers"]'`) for a `machine`, a `machineSet` or the `cluster`; the list replaces what was there                 |
 
 `applyPatch` and `addMachine` take `dryRun=true`, which runs
 `omnictl apply --dry-run`: Omni validates the resource and nothing changes. Use

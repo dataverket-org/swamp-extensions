@@ -459,7 +459,7 @@ function deleteRunner(
           : gone(),
       );
     }
-    if (argv[1] === "get" && argv[2] === TYPES.machine) {
+    if (argv[1] === "get" && argv[2] === TYPES.link) {
       return Promise.resolve(
         state.machine ? ok(json({ metadata: { id: M }, spec: {} })) : gone(),
       );
@@ -493,7 +493,7 @@ function deleteRunner(
   };
 }
 
-Deno.test("deleteMachine deletes the machine's own config patches, then the Machine, as the dashboard does", async () => {
+Deno.test("deleteMachine deletes the machine's own config patches, then its Link, never the read-only Machine", async () => {
   const calls: string[][] = [];
   __setRunner(deleteRunner(calls, { node: false, machine: true }));
   const { context, written } = makeContext();
@@ -501,7 +501,7 @@ Deno.test("deleteMachine deletes the machine's own config patches, then the Mach
     await model.methods.deleteMachine.execute({ machine: M }, context);
     assertEquals(
       calls.filter((c) => c[1] === "delete").map((c) => c.slice(2, 4)),
-      [[TYPES.configPatch, "500-mine"], [TYPES.machine, M]],
+      [[TYPES.configPatch, "500-mine"], [TYPES.link, M]],
     );
     assertEquals(written.length, 0);
   } finally {
@@ -604,4 +604,8 @@ Deno.test("applyPatch with dataFile sends the file's contents to Omni", async ()
     __setRunner();
     await Deno.remove(repo, { recursive: true });
   }
+});
+
+Deno.test("the Link type is the one Omni accepts a delete on", () => {
+  assertEquals(TYPES.link, "Links.omni.sidero.dev");
 });
