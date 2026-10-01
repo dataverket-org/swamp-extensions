@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import {
   configPatchFromResource,
+  extensionsScope,
   LABELS,
   model,
   patchScope,
@@ -327,43 +328,6 @@ Deno.test("removeMachine refuses an unassigned machine, otherwise deletes with a
   }
 });
 
-Deno.test("forgetMachine refuses a machine still in a cluster, is a no-op without a link, else deletes the link", async () => {
-  const calls: string[][] = [];
-  let cluster = "prod";
-  let linked = true;
-  __setRunner((argv) => {
-    calls.push(argv);
-    if (argv[1] === "get" && argv[2] === TYPES.machineStatus) {
-      return Promise.resolve(
-        ok(json({ metadata: { id: M }, spec: { cluster } })),
-      );
-    }
-    if (argv[1] === "get" && argv[2] === TYPES.link) {
-      return Promise.resolve(
-        linked ? ok(json({ metadata: { id: M }, spec: {} })) : gone(),
-      );
-    }
-    return Promise.resolve(ok());
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () => model.methods.forgetMachine.execute({ machine: M }, context),
-      Error,
-      "still in cluster prod",
-    );
-    cluster = "";
-    linked = false;
-    await model.methods.forgetMachine.execute({ machine: M }, context);
-    assertEquals(calls.some((c) => c[1] === "delete"), false);
-    linked = true;
-    await model.methods.forgetMachine.execute({ machine: M }, context);
-    assertEquals(calls.at(-1), ["omnictl", "delete", TYPES.link, M]);
-  } finally {
-    __setRunner();
-  }
-});
-
 Deno.test("configPatchFromResource reads scope from labels", () => {
   const p = configPatchFromResource({
     metadata: {
@@ -375,4 +339,200 @@ Deno.test("configPatchFromResource reads scope from labels", () => {
   assertEquals(p.scope, "machineSet");
   assertEquals(p.cluster, "prod");
   assertEquals(p.machine, null);
+});
+
+Deno.test("extensionsScope labels and names a machine, a machine set or a cluster configuration, and rejects both", () => {
+  assertEquals(
+    extensionsScope({ cluster: "prod", machine: M }),
+    {
+      scope: "machine",
+      id: `schematic-${M}`,
+      labels: { [LABELS.cluster]: "prod", [LABELS.clusterMachine]: M },
+    },
+  );
+  assertEquals(
+    extensionsScope({ cluster: "prod", machineSet: "prod-workers" }),
+    {
+      scope: "machineSet",
+      id: "schematic-prod-workers",
+      labels: { [LABELS.cluster]: "prod", [LABELS.machineSet]: "prod-workers" },
+    },
+  );
+  assertEquals(extensionsScope({ cluster: "prod", id: "kata" }).id, "kata");
+  assertEquals(extensionsScope({ cluster: "prod" }).scope, "cluster");
+  let threw = false;
+  try {
+    extensionsScope({
+      cluster: "prod",
+      machine: M,
+      machineSet: "prod-workers",
+    });
+  } catch (e) {
+    threw = (e as Error).message.includes("one of machine or machineSet");
+  }
+  assertEquals(threw, true);
+});
+
+Deno.test("setExtensions applies the configuration, reads it back and stores it; dryRun stores nothing", async () => {
+  let applied: Record<string, unknown> | undefined;
+  const calls: string[][] = [];
+  __setRunner(async (argv) => {
+    calls.push(argv);
+    if (argv[1] === "apply") {
+      applied = JSON.parse(await Deno.readTextFile(argv[3]));
+      return ok("ok");
+    }
+    if (argv[1] === "get" && argv[2] === TYPES.extensionsConfiguration) {
+      return ok(json({
+        metadata: { id: "schematic-prod-workers" },
+        spec: { extensions: ["siderolabs/kata-containers"] },
+      }));
+    }
+    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
+  });
+  const { context, written } = makeContext();
+  try {
+    await model.methods.setExtensions.execute({
+      cluster: "prod",
+      machineSet: "prod-workers",
+      extensions: ["siderolabs/kata-containers"],
+      dryRun: false,
+    }, context);
+    assertEquals(applied?.metadata, {
+      namespace: "default",
+      type: TYPES.extensionsConfiguration,
+      id: "schematic-prod-workers",
+      labels: { [LABELS.cluster]: "prod", [LABELS.machineSet]: "prod-workers" },
+    });
+    assertEquals(applied?.spec, { extensions: ["siderolabs/kata-containers"] });
+    assertEquals(written[0].data.extensions, ["siderolabs/kata-containers"]);
+    assertEquals(written[0].data.scope, "machineSet");
+    const before = calls.length;
+    const r = await model.methods.setExtensions.execute({
+      cluster: "prod",
+      machine: M,
+      extensions: [],
+      dryRun: true,
+    }, context);
+    assertEquals(r.dataHandles.length, 0);
+    assertEquals(written.length, 1);
+    assertEquals(calls.length, before + 1);
+    assertEquals(calls.at(-1)!.includes("--dry-run"), true);
+  } finally {
+    __setRunner();
+  }
+});
+
+Deno.test("setExtensions rejects a malformed extension name before calling omnictl", () => {
+  __setRunner((argv) => {
+    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
+  });
+  try {
+    const parsed = model.methods.setExtensions.arguments.safeParse({
+      cluster: "prod",
+      machine: M,
+      extensions: ["kata-containers; rm -rf /"],
+    });
+    assertEquals(parsed.success, false);
+  } finally {
+    __setRunner();
+  }
+});
+
+function deleteRunner(
+  calls: string[][],
+  state: { node: boolean; machine: boolean },
+) {
+  return (argv: string[]) => {
+    calls.push(argv);
+    if (argv[1] === "get" && argv[2] === TYPES.machineSetNode) {
+      return Promise.resolve(
+        state.node
+          ? ok(json({
+            metadata: {
+              id: M,
+              labels: { [LABELS.machineSet]: "prod-workers" },
+            },
+            spec: {},
+          }))
+          : gone(),
+      );
+    }
+    if (argv[1] === "get" && argv[2] === TYPES.machine) {
+      return Promise.resolve(
+        state.machine ? ok(json({ metadata: { id: M }, spec: {} })) : gone(),
+      );
+    }
+    if (argv[1] === "get" && argv[2] === TYPES.configPatch) {
+      return Promise.resolve(ok(
+        json({
+          metadata: { id: "500-mine", labels: { [LABELS.machine]: M } },
+          spec: {},
+        }) +
+          json({
+            metadata: {
+              id: "500-other",
+              labels: {
+                [LABELS.machine]: "b02c2eaa-edec-4668-bceb-2fe63517836b",
+              },
+            },
+            spec: {},
+          }) +
+          json({
+            metadata: {
+              id: "400-set",
+              labels: { [LABELS.machineSet]: "prod-workers" },
+            },
+            spec: {},
+          }),
+      ));
+    }
+    if (argv[1] === "delete") return Promise.resolve(ok());
+    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
+  };
+}
+
+Deno.test("deleteMachine deletes the machine's own config patches, then the Machine, as the dashboard does", async () => {
+  const calls: string[][] = [];
+  __setRunner(deleteRunner(calls, { node: false, machine: true }));
+  const { context, written } = makeContext();
+  try {
+    await model.methods.deleteMachine.execute({ machine: M }, context);
+    assertEquals(
+      calls.filter((c) => c[1] === "delete").map((c) => c.slice(2, 4)),
+      [[TYPES.configPatch, "500-mine"], [TYPES.machine, M]],
+    );
+    assertEquals(written.length, 0);
+  } finally {
+    __setRunner();
+  }
+});
+
+Deno.test("deleteMachine refuses a machine still in a machine set and deletes nothing", async () => {
+  const calls: string[][] = [];
+  __setRunner(deleteRunner(calls, { node: true, machine: true }));
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () => model.methods.deleteMachine.execute({ machine: M }, context),
+      Error,
+      "still in machine set prod-workers; removeMachine first",
+    );
+    assertEquals(calls.some((c) => c[1] === "delete"), false);
+  } finally {
+    __setRunner();
+  }
+});
+
+Deno.test("deleteMachine is a no-op when Omni has no such machine", async () => {
+  const calls: string[][] = [];
+  __setRunner(deleteRunner(calls, { node: false, machine: false }));
+  const { context } = makeContext();
+  try {
+    await model.methods.deleteMachine.execute({ machine: M }, context);
+    assertEquals(calls.some((c) => c[1] === "delete"), false);
+    assertEquals(calls.some((c) => c[2] === TYPES.configPatch), false);
+  } finally {
+    __setRunner();
+  }
 });

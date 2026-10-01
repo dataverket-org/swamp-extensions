@@ -1,14 +1,16 @@
 /**
  * `@dataverket/omnictl/cluster` — the writes an Omni Operator makes when a
- * cluster's machines change: a config patch, a machine joining a machine set,
- * a machine leaving its cluster, and a machine forgotten by Omni.
+ * cluster's machines change, one Omni operation per method: a config patch,
+ * the system extensions, a machine joining a machine set, a machine leaving
+ * its cluster, and a machine deleted from Omni.
  *
- * Four methods, one `omnictl` call each, in the order a worker swap uses them:
- * `applyPatch` before `addMachine`, so the patch is in place when Omni first
- * provisions the machine; `removeMachine` drains, wipes and waits;
- * `forgetMachine` deletes the SideroLink `Link`, and refuses while the machine
- * is still in a cluster. Every write takes `dryRun`, which makes `omnictl
- * apply --dry-run` validate the resource and change nothing.
+ * In the order a worker swap uses them: `applyPatch` and `setExtensions`
+ * before `addMachine`, so both are in place when Omni first provisions the
+ * machine; `removeMachine` drains, wipes and waits; `deleteMachine` is the
+ * dashboard's Delete Machine, after the server is gone. The sequences around
+ * them, with their checks, belong in workflows. Every apply takes `dryRun`,
+ * which makes `omnictl apply --dry-run` validate the resource and change
+ * nothing.
  *
  * Needs a service account with the Operator role. Keep it on its own model
  * instance with its own vault key, apart from the Reader key `inventory` uses.
@@ -28,6 +30,7 @@ import {
   type CosiResource,
   deleteResource,
   getResource,
+  getResources,
 } from "./omnictl.ts";
 import { checks } from "./checks.ts";
 import { sanitizeInstanceName } from "./schema.ts";
@@ -38,6 +41,9 @@ export const TYPES = {
   machineSet: "MachineSets.omni.sidero.dev",
   machineSetNode: "MachineSetNodes.omni.sidero.dev",
   machineStatus: "MachineStatuses.omni.sidero.dev",
+  clusterMachine: "ClusterMachines.omni.sidero.dev",
+  machine: "Machines.omni.sidero.dev",
+  extensionsConfiguration: "ExtensionsConfigurations.omni.sidero.dev",
   link: "Links.siderolink.omni.sidero.dev",
 } as const;
 
@@ -46,6 +52,7 @@ export const LABELS = {
   cluster: "omni.sidero.dev/cluster",
   machineSet: "omni.sidero.dev/machine-set",
   machine: "omni.sidero.dev/machine",
+  clusterMachine: "omni.sidero.dev/cluster-machine",
 } as const;
 
 /**
@@ -118,7 +125,79 @@ const RemoveMachineArgs = z.object({
     "How long omnictl waits for the drain and wipe",
   ),
 });
-const ForgetMachineArgs = z.object({ machine: Machine });
+const DeleteMachineArgs = z.object({ machine: Machine });
+const Extension = z.string().regex(/^[a-z0-9-]+\/[a-z0-9._-]+$/).describe(
+  "System extension, e.g. siderolabs/kata-containers",
+);
+const SetExtensionsArgs = z.object({
+  cluster: z.string().min(1).describe("Cluster name"),
+  machineSet: z.string().min(1).optional().describe(
+    "Scope to a machine set: every machine in it without a configuration of its own",
+  ),
+  machine: Machine.optional().describe("Scope to one machine of the cluster"),
+  extensions: z.array(Extension).describe(
+    "The complete list for the scope; it replaces what was there, and [] removes them all",
+  ),
+  id: Name.optional().describe(
+    "Resource id; default schematic-<machine>, schematic-<machineSet> or schematic-<cluster>, as Omni's UI names them",
+  ),
+  dryRun: z.boolean().default(false).describe(
+    "Validate with omnictl and change nothing",
+  ),
+});
+
+/** An extensions configuration as stored after `setExtensions`. */
+export const ExtensionsConfigurationSchema = z.object({
+  id: z.string(),
+  scope: z.enum(["machine", "machineSet", "cluster"]),
+  cluster: z.string(),
+  machineSet: z.string().nullable(),
+  machine: z.string().nullable(),
+  extensions: z.array(z.string()),
+  appliedAt: z.string(),
+});
+
+/**
+ * The labels and default id of an extensions configuration. Omni picks the
+ * most specific one for a machine: its own, then its machine set's, then its
+ * cluster's; they do not merge.
+ */
+export function extensionsScope(
+  args: Pick<
+    z.infer<typeof SetExtensionsArgs>,
+    "cluster" | "machineSet" | "machine" | "id"
+  >,
+): {
+  scope: "machine" | "machineSet" | "cluster";
+  id: string;
+  labels: Record<string, string>;
+} {
+  if (args.machine && args.machineSet) {
+    throw new Error("setExtensions takes one of machine or machineSet");
+  }
+  const labels: Record<string, string> = { [LABELS.cluster]: args.cluster };
+  if (args.machine) {
+    labels[LABELS.clusterMachine] = args.machine;
+    return {
+      scope: "machine",
+      id: args.id ?? `schematic-${args.machine}`,
+      labels,
+    };
+  }
+  if (args.machineSet) {
+    labels[LABELS.machineSet] = args.machineSet;
+    return {
+      scope: "machineSet",
+      id: args.id ?? `schematic-${args.machineSet}`,
+      labels,
+    };
+  }
+  return {
+    scope: "cluster",
+    id: args.id ?? `schematic-${args.cluster}`,
+    labels,
+  };
+}
 
 /** Which scope an `applyPatch` call asked for, and the labels it implies. */
 export function patchScope(
@@ -212,11 +291,11 @@ const nodeName = (machine: string) =>
 /**
  * `@dataverket/omnictl/cluster` — config patches and machine-set membership
  * through `omnictl apply`, machine removal through `omnictl cluster machine
- * delete`, and forgetting a machine through deleting its `Link`. Operator role.
+ * delete`, and deleting a machine from Omni as the dashboard does. Operator role.
  */
 export const model = {
   type: "@dataverket/omnictl/cluster",
-  version: "2026.10.01.1",
+  version: "2026.10.01.2",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -228,6 +307,12 @@ export const model = {
       toVersion: "2026.10.01.1",
       description:
         "addMachine copies the machine set's role label, and pre-flight checks: the key resolves and Omni accepts it; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.01.2",
+      description:
+        "setExtensions added; forgetMachine replaced by deleteMachine, the dashboard's Delete Machine; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -244,6 +329,13 @@ export const model = {
     machineSetNode: {
       description: "A machine's membership of an Omni machine set",
       schema: MachineSetNodeSchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 5,
+    },
+    extensionsConfiguration: {
+      description:
+        "The system extensions Omni installs on a machine, a machine set's machines or a cluster's",
+      schema: ExtensionsConfigurationSchema,
       lifetime: "infinite" as const,
       garbageCollection: 5,
     },
@@ -420,38 +512,39 @@ export const model = {
         return { dataHandles: [] };
       },
     },
-    forgetMachine: {
+    deleteMachine: {
       description:
-        "Delete a machine's SideroLink Link so Omni forgets it. Refuses while the machine is still in a cluster, and is a no-op when Omni already has no such machine. Do this after the machine itself is gone, or a running machine re-registers.",
-      arguments: ForgetMachineArgs,
+        "What Omni's dashboard does with Delete Machine: delete the machine's own config patches and its Machine; Omni then removes its labels and SideroLink Link. Refuses while the machine is in a machine set (removeMachine first), and is a no-op when Omni has no such machine. Delete the server first, or a running machine re-registers. Works whether or not removeMachine's wipe finished, so it also clears a machine whose server is gone and whose removal hangs.",
+      arguments: DeleteMachineArgs,
       execute: async (
-        args: z.infer<typeof ForgetMachineArgs>,
+        args: z.infer<typeof DeleteMachineArgs>,
         context: MethodContext,
       ): Promise<MethodResult> => {
         const opts = optionsOf(context.globalArgs);
-        const status = await getResource(
-          TYPES.machineStatus,
+        const node = await getResource(
+          TYPES.machineSetNode,
           args.machine,
           opts,
           context.signal,
         );
-        if (status) {
-          const cluster = typeof status.spec.cluster === "string"
-            ? status.spec.cluster
-            : "";
-          if (cluster !== "") {
-            throw new Error(
-              `machine ${args.machine} is still in cluster ${cluster}; removeMachine first`,
-            );
-          }
+        if (node) {
+          const labels = (node.metadata.labels ?? {}) as Record<
+            string,
+            unknown
+          >;
+          throw new Error(
+            `machine ${args.machine} is still in machine set ${
+              String(labels[LABELS.machineSet] ?? "(unknown)")
+            }; removeMachine first`,
+          );
         }
-        const link = await getResource(
-          TYPES.link,
+        const machine = await getResource(
+          TYPES.machine,
           args.machine,
           opts,
           context.signal,
         );
-        if (!link) {
+        if (!machine) {
           context.logger.info(
             "omnictl: Omni already has no machine {machine}",
             {
@@ -460,11 +553,100 @@ export const model = {
           );
           return { dataHandles: [] };
         }
-        context.logger.info("omnictl: forgetting machine {machine}", {
-          machine: args.machine,
-        });
-        await deleteResource(TYPES.link, args.machine, opts, context.signal);
+        const patches = await getResources(
+          TYPES.configPatch,
+          opts,
+          context.signal,
+        );
+        const own = patches.filter((p) =>
+          ((p.metadata.labels ?? {}) as Record<string, unknown>)[
+            LABELS.machine
+          ] === args.machine
+        );
+        context.logger.info(
+          "omnictl: deleting machine {machine} and its {count} config patch(es)",
+          { machine: args.machine, count: own.length },
+        );
+        for (const p of own) {
+          await deleteResource(
+            TYPES.configPatch,
+            p.metadata.id,
+            opts,
+            context.signal,
+          );
+        }
+        await deleteResource(TYPES.machine, args.machine, opts, context.signal);
         return { dataHandles: [] };
+      },
+    },
+    setExtensions: {
+      description:
+        "Create or replace the ExtensionsConfiguration for a machine, a machine set or a cluster, as Omni's UI does; Omni installs the most specific one a machine has, which reboots it into a new schematic. dryRun validates only.",
+      arguments: SetExtensionsArgs,
+      execute: async (
+        args: z.infer<typeof SetExtensionsArgs>,
+        context: MethodContext,
+      ): Promise<MethodResult> => {
+        const opts = optionsOf(context.globalArgs);
+        const { scope, id, labels } = extensionsScope(args);
+        const resource: CosiResource = {
+          metadata: {
+            namespace: "default",
+            type: TYPES.extensionsConfiguration,
+            id,
+            labels,
+          },
+          spec: { extensions: args.extensions },
+        };
+        context.logger.info(
+          "omnictl: {verb} extensions {id} ({scope}): {extensions}",
+          {
+            verb: args.dryRun ? "validating" : "setting",
+            id,
+            scope,
+            extensions: args.extensions.join(", ") || "(none)",
+          },
+        );
+        const out = await applyResource(
+          resource,
+          opts,
+          context.signal,
+          args.dryRun,
+        );
+        if (args.dryRun) {
+          context.logger.info("omnictl: dry run\n{out}", { out: out.trim() });
+          return { dataHandles: [] };
+        }
+        const back = await getResource(
+          TYPES.extensionsConfiguration,
+          id,
+          opts,
+          context.signal,
+        );
+        if (!back) {
+          throw new Error(
+            `extensions ${id} were applied but Omni returns no ExtensionsConfiguration`,
+          );
+        }
+        const stored = Array.isArray(back.spec.extensions)
+          ? back.spec.extensions.filter((e): e is string =>
+            typeof e === "string"
+          )
+          : [];
+        const handle = await context.writeResource(
+          "extensionsConfiguration",
+          sanitizeInstanceName(id),
+          {
+            id,
+            scope,
+            cluster: args.cluster,
+            machineSet: args.machineSet ?? null,
+            machine: args.machine ?? null,
+            extensions: stored,
+            appliedAt: new Date().toISOString(),
+          },
+        );
+        return { dataHandles: [handle] };
       },
     },
   },

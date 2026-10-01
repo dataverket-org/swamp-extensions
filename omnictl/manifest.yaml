@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/omnictl"
-version: "2026.10.01.1"
+version: "2026.10.01.2"
 description: >
   Sidero Omni for swamp, through `omnictl`. Two model types, two roles.
 
@@ -17,8 +17,10 @@ description: >
   puts a machine into a machine set by its MachineSetNode, with the
   set's role label, without which Omni never allocates it; `removeMachine`
   is `omnictl cluster machine delete`, which drains, wipes and waits;
-  `forgetMachine` deletes the machine's SideroLink Link once it is out of
-  every cluster. Every apply takes `dryRun`. An Operator service account, on
+  `deleteMachine` is the dashboard's Delete Machine: the machine's own config
+  patches and its Machine, after which Omni removes the Link, also when a
+  removal hangs because the server is gone; `setExtensions` sets the system
+  extensions for a machine, a machine set or a cluster. Every apply takes `dryRun`. An Operator service account, on
   its own model instance with its own vault key.
 
   Forked from `@mccormick/omni` (MIT) as `@dataverket/omni`; renamed after the

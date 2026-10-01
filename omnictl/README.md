@@ -46,12 +46,13 @@ One instance per Omni endpoint, with an Operator service account on its own
 vault key, so the reads above never carry it. The four writes of a machine swap,
 in the order a swap uses them:
 
-| Method          | What it does                                                                                                                                            |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `applyPatch`    | Create or update a `ConfigPatch` (`--input id=… data=…`) scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it            |
-| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos        |
-| `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                            |
-| `forgetMachine` | Delete the machine's SideroLink `Link`; refuses while it is in a cluster, no-op when already gone. After the machine itself is gone, or it re-registers |
+| Method          | What it does                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applyPatch`    | Create or update a `ConfigPatch` (`--input id=… data=…`) scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it                                    |
+| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos                                |
+| `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                                                    |
+| `deleteMachine` | The dashboard's Delete Machine: delete the machine's own config patches and its `Machine`; Omni removes the Link. Refuses while it is in a machine set; delete the server first |
+| `setExtensions` | Set the system extensions (`--input extensions='["siderolabs/kata-containers"]'`) for a `machine`, a `machineSet` or the `cluster`; the list replaces what was there            |
 
 `applyPatch` and `addMachine` take `dryRun=true`, which runs
 `omnictl apply --dry-run`: Omni validates the resource and nothing changes. Use
@@ -74,8 +75,29 @@ swamp model method run omni-cluster applyPatch \
 swamp model method run omni-cluster addMachine \
   --input machine=<uuid> --input cluster=prod --input machineSet=prod-workers
 swamp model method run omni-cluster removeMachine --input machine=<uuid>
-swamp model method run omni-cluster forgetMachine --input machine=<uuid>
+swamp model method run omni-cluster deleteMachine --input machine=<uuid>
 ```
+
+### When a machine is gone before its removal finishes
+
+`removeMachine` asks Omni to wipe the machine. If its server is deleted first,
+or it never finished booting, Omni cannot reach it and the removal waits for
+ever. `deleteMachine` clears it all the same, as the dashboard's Delete Machine
+does: its own config patches and its `Machine` are deleted, and Omni removes the
+rest (seen in Omni's audit log, 2026-10-01).
+
+```sh
+swamp model method run omni-cluster removeMachine --input machine=<uuid> --input timeout=1m
+swamp model method run omni-cluster deleteMachine --input machine=<uuid>
+```
+
+### Extensions follow the most specific scope
+
+Omni installs the most specific `ExtensionsConfiguration` a machine has: its
+own, then its machine set's, then its cluster's. They do not merge. Machines
+added in the dashboard get one of their own, named `schematic-<uuid>`; setting
+the machine set's once makes every new machine in it start with the same
+extensions.
 
 ## Credential-safe
 
