@@ -34,6 +34,7 @@ import {
 } from "./omnictl.ts";
 import { checks } from "./checks.ts";
 import { sanitizeInstanceName } from "./schema.ts";
+import { readSecretFile } from "./util.ts";
 
 /** Omni's resource types, fully qualified so no alias lookup is involved. */
 export const TYPES = {
@@ -95,7 +96,12 @@ const ApplyPatchArgs = z.object({
   id: Name.describe(
     "Patch id, e.g. 500-dataverket-wrkr-4-storage; an existing id is updated",
   ),
-  data: z.string().min(1).describe("Talos machine config patch, YAML text"),
+  data: z.string().min(1).optional().describe(
+    "Talos machine config patch, YAML text; or name it with dataFile",
+  ),
+  dataFile: z.string().min(1).optional().describe(
+    "Path of a YAML file holding the patch, read at call time; relative to the repository",
+  ),
   machine: Machine.optional().describe(
     "Scope the patch to one machine, before or after it joins a cluster",
   ),
@@ -265,6 +271,29 @@ export function roleLabel(
   return roles[0];
 }
 
+/**
+ * The patch text: `data` as given, or the file `dataFile` names, read now and
+ * resolved against the repository when relative, so a definition or workflow
+ * names the file in git rather than carrying its contents. Exactly one.
+ */
+export function patchData(
+  args: { data?: string; dataFile?: string },
+  repoDir?: string,
+): string {
+  if (args.data && args.dataFile) {
+    throw new Error("applyPatch takes data or dataFile, not both");
+  }
+  if (args.data) return args.data;
+  if (!args.dataFile) {
+    throw new Error("applyPatch needs data or dataFile");
+  }
+  const path = args.dataFile.startsWith("/") || args.dataFile.startsWith("~") ||
+      !repoDir
+    ? args.dataFile
+    : `${repoDir.replace(/\/+$/, "")}/${args.dataFile}`;
+  return readSecretFile(path, "dataFile");
+}
+
 /** Fold a `ConfigPatch` resource read back from Omni into the stored shape. */
 export function configPatchFromResource(
   r: CosiResource,
@@ -312,7 +341,7 @@ export const model = {
     {
       toVersion: "2026.10.01.2",
       description:
-        "setExtensions added; forgetMachine replaced by deleteMachine, the dashboard's Delete Machine; global arguments unchanged",
+        "setExtensions added, applyPatch takes dataFile, forgetMachine replaced by deleteMachine (the dashboard's Delete Machine); global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -351,6 +380,7 @@ export const model = {
       ): Promise<MethodResult> => {
         const opts = optionsOf(context.globalArgs);
         const { scope, labels } = patchScope(args);
+        const data = patchData(args, context.repoDir);
         const resource: CosiResource = {
           metadata: {
             namespace: "default",
@@ -358,7 +388,7 @@ export const model = {
             id: args.id,
             labels,
           },
-          spec: { data: args.data },
+          spec: { data },
         };
         context.logger.info(
           "omnictl: {verb} config patch {id} ({scope})",

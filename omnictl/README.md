@@ -48,7 +48,7 @@ in the order a swap uses them:
 
 | Method          | What it does                                                                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `applyPatch`    | Create or update a `ConfigPatch` (`--input id=… data=…`) scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it                                    |
+| `applyPatch`    | Create or update a `ConfigPatch` from `data` or a `dataFile` path in the repository, scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it        |
 | `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos                                |
 | `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                                                    |
 | `deleteMachine` | The dashboard's Delete Machine: delete the machine's own config patches and its `Machine`; Omni removes the Link. Refuses while it is in a machine set; delete the server first |
@@ -71,7 +71,7 @@ swamp model create @dataverket/omnictl/cluster omni-cluster
 #   endpoint: https://omni.example.net
 #   serviceAccountKeyFile: ~/.talos/omni/operator.key
 swamp model method run omni-cluster applyPatch \
-  --input id=500-wrkr-4-storage --input machine=<uuid> --input data="$(cat patch.yaml)" --input dryRun=true
+  --input id=500-wrkr-4-storage --input machine=<uuid> --input dataFile=talos/patch.yaml --input dryRun=true
 swamp model method run omni-cluster addMachine \
   --input machine=<uuid> --input cluster=prod --input machineSet=prod-workers
 swamp model method run omni-cluster removeMachine --input machine=<uuid>

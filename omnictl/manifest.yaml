@@ -13,7 +13,8 @@ description: >
   join tokens by fingerprint, state and use. A Reader service account.
 
   `@dataverket/omnictl/cluster` writes: `applyPatch` creates or updates a
-  ConfigPatch scoped to a machine, a machine set or a cluster; `addMachine`
+  ConfigPatch, from text or a file in the repository, scoped to a machine, a
+  machine set or a cluster; `addMachine`
   puts a machine into a machine set by its MachineSetNode, with the
   set's role label, without which Omni never allocates it; `removeMachine`
   is `omnictl cluster machine delete`, which drains, wipes and waits;

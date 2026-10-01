@@ -4,6 +4,7 @@ import {
   extensionsScope,
   LABELS,
   model,
+  patchData,
   patchScope,
   ROLE_PREFIX,
   roleLabel,
@@ -534,5 +535,73 @@ Deno.test("deleteMachine is a no-op when Omni has no such machine", async () => 
     assertEquals(calls.some((c) => c[2] === TYPES.configPatch), false);
   } finally {
     __setRunner();
+  }
+});
+
+Deno.test("patchData takes data as given, or reads dataFile relative to the repository, and refuses both or neither", async () => {
+  const repo = await Deno.makeTempDir({ prefix: "omnictl-repo-" });
+  try {
+    await Deno.mkdir(`${repo}/talos`);
+    await Deno.writeTextFile(`${repo}/talos/p.yaml`, "machine: {}\n");
+    assertEquals(patchData({ data: "a: 1" }), "a: 1");
+    assertEquals(patchData({ dataFile: "talos/p.yaml" }, repo), "machine: {}");
+    assertEquals(
+      patchData({ dataFile: `${repo}/talos/p.yaml` }, "/elsewhere"),
+      "machine: {}",
+    );
+    let errors: string[] = [];
+    for (
+      const a of [{ data: "x", dataFile: "talos/p.yaml" }, {}, {
+        dataFile: "talos/missing.yaml",
+      }]
+    ) {
+      try {
+        patchData(a, repo);
+      } catch (e) {
+        errors.push((e as Error).message);
+      }
+    }
+    assertEquals(errors.length, 3);
+    assertEquals(errors[0], "applyPatch takes data or dataFile, not both");
+    assertEquals(errors[1], "applyPatch needs data or dataFile");
+    assertEquals(errors[2].includes(`${repo}/talos/missing.yaml`), true);
+    errors = [];
+  } finally {
+    await Deno.remove(repo, { recursive: true });
+  }
+});
+
+Deno.test("applyPatch with dataFile sends the file's contents to Omni", async () => {
+  const repo = await Deno.makeTempDir({ prefix: "omnictl-repo-" });
+  let applied: Record<string, unknown> | undefined;
+  __setRunner(async (argv) => {
+    if (argv[1] === "apply") {
+      applied = JSON.parse(await Deno.readTextFile(argv[3]));
+      return ok("ok");
+    }
+    if (argv[1] === "get" && argv[2] === TYPES.configPatch) {
+      return ok(json({
+        metadata: { id: "500-x", labels: { [LABELS.machine]: M } },
+        spec: { data: "machine: {}" },
+      }));
+    }
+    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
+  });
+  const { context } = makeContext();
+  try {
+    await Deno.writeTextFile(`${repo}/p.yaml`, "machine: {}\n");
+    await model.methods.applyPatch.execute({
+      id: "500-x",
+      dataFile: "p.yaml",
+      machine: M,
+      dryRun: false,
+    }, { ...context, repoDir: repo });
+    assertEquals(
+      (applied?.spec as Record<string, unknown>).data,
+      "machine: {}",
+    );
+  } finally {
+    __setRunner();
+    await Deno.remove(repo, { recursive: true });
   }
 });

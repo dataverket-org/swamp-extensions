@@ -44,6 +44,8 @@ export interface DataHandle {
 export interface MethodContext {
   globalArgs: GlobalArgsData;
   signal?: AbortSignal;
+  /** The repository the method runs in; relative file paths resolve here. */
+  repoDir?: string;
   logger: {
     info(message: string, props?: Record<string, unknown>): void;
     warning(message: string, props?: Record<string, unknown>): void;
