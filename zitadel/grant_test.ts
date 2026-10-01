@@ -129,3 +129,76 @@ Deno.test("setState refuses a grant that is not there", async () => {
     fake.restore();
   }
 });
+
+Deno.test("list names a grant by username and project, as ensure does", async () => {
+  const row = { ...GRANT, userName: "kari", projectName: "fabrikk" };
+  const fake = installFake((call) => {
+    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
+    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
+    if (line(call) === GRANT_SEARCH) return page([row]);
+    return undefined;
+  });
+  const listed = makeContext();
+  const ensured = makeContext();
+  try {
+    await model.methods.list.execute(
+      { user: undefined, project: undefined },
+      listed.context,
+    );
+    await model.methods.ensure.execute(
+      { user: "kari", project: "fabrikk", roleKeys: ["kube-admin"] },
+      ensured.context,
+    );
+    assertEquals(listed.written[0].name, "grant-kari-fabrikk");
+    assertEquals(listed.written[0].name, ensured.written[0].name);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("list falls back to an id only for the name Zitadel did not send", async () => {
+  const fake = installFake((call) =>
+    line(call) === GRANT_SEARCH
+      ? page([
+        GRANT,
+        { ...GRANT, id: "600000000000000002", userName: "kari" },
+        { ...GRANT, id: "600000000000000003", userName: "", projectName: "p" },
+      ])
+      : undefined
+  );
+  const { context, written } = makeContext();
+  try {
+    await model.methods.list.execute(
+      { user: undefined, project: undefined },
+      context,
+    );
+    assertEquals(written.map((entry) => entry.name), [
+      `grant-${GRANT.userId}-${GRANT.projectId}`,
+      `grant-kari-${GRANT.projectId}`,
+      `grant-${GRANT.userId}-p`,
+    ]);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("two grants of one user on one project do not overwrite each other", async () => {
+  const row = { ...GRANT, userName: "kari", projectName: "fabrikk" };
+  const fake = installFake((call) =>
+    line(call) === GRANT_SEARCH
+      ? page([row, { ...row, id: "600000000000000009", roleKeys: ["other"] }])
+      : undefined
+  );
+  const { context, written } = makeContext();
+  try {
+    await model.methods.list.execute(
+      { user: undefined, project: undefined },
+      context,
+    );
+    assertEquals(written.length, 2);
+    assertEquals(written[0].name, "grant-kari-fabrikk");
+    assert(written[1].name.startsWith("grant-kari-fabrikk-"));
+  } finally {
+    fake.restore();
+  }
+});

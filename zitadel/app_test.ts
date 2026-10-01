@@ -3,6 +3,7 @@ import { model } from "./app.ts";
 import { API_APP, OIDC_APP, PROJECT } from "./fixtures.ts";
 import { installFake, line, makeContext, page } from "./test_support.ts";
 import { toBase64 } from "./api.ts";
+import { shapeApp } from "./schema.ts";
 
 const PROJECT_SEARCH = "POST /management/v1/projects/_search";
 const APP_SEARCH = `POST /management/v1/projects/${PROJECT.id}/apps/_search`;
@@ -257,4 +258,70 @@ Deno.test("secretRotate refuses an application that has no secret to rotate", as
   } finally {
     fake.restore();
   }
+});
+
+Deno.test("an auth method Zitadel omitted reads as basic, for OIDC and API", () => {
+  const oidc = shapeApp(
+    "1",
+    {
+      id: "2",
+      name: "web",
+      oidcConfig: { clientId: "c" },
+    },
+    "observed",
+    "t",
+  );
+  const api = shapeApp(
+    "1",
+    {
+      id: "3",
+      name: "api",
+      apiConfig: { clientId: "c" },
+    },
+    "observed",
+    "t",
+  );
+  assertEquals(oidc.authMethod, "basic");
+  assertEquals(api.authMethod, "basic");
+});
+
+Deno.test("an auth method Zitadel did send is not replaced by the default", () => {
+  const none = shapeApp(
+    "1",
+    {
+      id: "2",
+      name: "cli",
+      oidcConfig: { authMethodType: "OIDC_AUTH_METHOD_TYPE_NONE" },
+    },
+    "observed",
+    "t",
+  );
+  const jwt = shapeApp(
+    "1",
+    {
+      id: "3",
+      name: "api",
+      apiConfig: { authMethodType: "API_AUTH_METHOD_TYPE_PRIVATE_KEY_JWT" },
+    },
+    "observed",
+    "t",
+  );
+  assertEquals(none.authMethod, "none");
+  assertEquals(jwt.authMethod, "jwt");
+});
+
+Deno.test("an application that is neither OIDC nor API gets no auth method", () => {
+  const saml = shapeApp(
+    "1",
+    {
+      id: "2",
+      name: "saml",
+      samlConfig: {},
+    },
+    "observed",
+    "t",
+  );
+  const bare = shapeApp("1", { id: "3", name: "bare" }, "observed", "t");
+  assertEquals(saml.authMethod, undefined);
+  assertEquals(bare.authMethod, undefined);
 });

@@ -329,7 +329,8 @@ export function shapeRole(
 
 /**
  * Shape an application record. OIDC configuration uses proto3 zero-value
- * omission, so `appType=web`, `accessTokenType=bearer` and `devMode=false` come
+ * omission, so `appType=web`, `accessTokenType=bearer`, `devMode=false` and
+ * an `authMethod` of `basic`, for an OIDC and an API application alike, come
  * back absent; they are normalized to the effective default so a read shows the
  * whole configuration and a read-then-converge changes only what was asked for.
  */
@@ -367,8 +368,10 @@ export function shapeApp(
           friendlyState(oidc.accessTokenType))
         : "bearer")
       : undefined,
-    authMethod: (oidc.authMethodType ?? api.authMethodType)
-      ? friendlyState(oidc.authMethodType ?? api.authMethodType)
+    authMethod: kind === "oidc" || kind === "api"
+      ? ((oidc.authMethodType ?? api.authMethodType)
+        ? friendlyState(oidc.authMethodType ?? api.authMethodType)
+        : "basic")
       : undefined,
     redirectUris: optStrList(oidc.redirectUris),
     postLogoutUris: optStrList(oidc.postLogoutRedirectUris),

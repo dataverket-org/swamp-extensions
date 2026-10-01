@@ -122,12 +122,23 @@ export const model = {
         const grants = rows.map((row) =>
           shapeGrant(row, "observed", timestamp)
         );
+        // Keyed as `ensure` keys it, by the username and the project's name,
+        // which the search row carries; an id stands in only where Zitadel
+        // sent no name, so a list and an ensure write the same instance.
+        const keys = new Map(
+          grants.map((grant, index) => [
+            grant,
+            `${str(rows[index].userName) || str(grant.userId)}-${
+              str(rows[index].projectName) || str(grant.projectId)
+            }`,
+          ]),
+        );
         const handles = await writeAll(
           context,
           "grant",
           "grant",
           grants,
-          (grant) => `${str(grant.userId)}-${str(grant.projectId)}`,
+          (grant) => keys.get(grant) ?? "",
         );
         context.logger.info("stored {count} grants", { count: grants.length });
         return { dataHandles: handles };
