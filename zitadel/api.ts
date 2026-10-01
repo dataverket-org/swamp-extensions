@@ -310,6 +310,17 @@ function transport(globalArgs: Json): Transport {
 }
 
 /**
+ * Expand a leading `~/` from `HOME`, so a definition can name a key file the
+ * way an operator does. Any other path is returned unchanged.
+ */
+export function expandHome(path: string): string {
+  if (path !== "~" && !path.startsWith("~/")) return path;
+  const home = Deno.env.get("HOME");
+  if (!home) throw new Error(`cannot expand ~ in ${path}: HOME is not set`);
+  return home + path.slice(1);
+}
+
+/**
  * Read the service user's key JSON: the vault value when the definition gives
  * one, otherwise the file it names. Exactly one of the two must be set.
  */
@@ -322,8 +333,9 @@ export async function readKeyJson(globalArgs: Json): Promise<string> {
   if (!g.keyJsonFile) {
     throw new Error("no credential: set keyJson (from a vault) or keyJsonFile");
   }
+  const path = expandHome(g.keyJsonFile);
   try {
-    return await Deno.readTextFile(g.keyJsonFile);
+    return await Deno.readTextFile(path);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`cannot read keyJsonFile ${g.keyJsonFile}: ${message}`);

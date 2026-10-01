@@ -24,8 +24,8 @@ export const GlobalArgsSchema = z.object({
       "instead to keep the value out of the definition entirely.",
   ),
   keyJsonFile: z.string().optional().describe(
-    "Path to the service user's machine key JSON, read at call time; " +
-      "mutually exclusive with keyJson",
+    "Path to the service user's machine key JSON, read at call time; a " +
+      "leading ~/ is expanded from HOME. Mutually exclusive with keyJson",
   ),
   orgId: z.string().optional().describe(
     "Target organization id (the x-zitadel-orgid header). Omit to act in the " +

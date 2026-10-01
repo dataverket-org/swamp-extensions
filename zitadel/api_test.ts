@@ -5,10 +5,12 @@ import {
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
 import {
+  expandHome,
   fromBase64,
   importSigningKey,
   jwtAssertionClaims,
   parseKeyJson,
+  readKeyJson,
   searchAll,
   toBase64,
 } from "./api.ts";
@@ -98,5 +100,85 @@ Deno.test("a key that is not a PEM is named as such, without its contents", asyn
   assert(
     !error.message.includes("SECRETMARKER"),
     "the key leaked into the error",
+  );
+});
+
+/** Run `fn` with `HOME` set to `home` (or unset), restoring it afterwards. */
+async function withHome(
+  home: string | undefined,
+  fn: () => Promise<void> | void,
+): Promise<void> {
+  const before = Deno.env.get("HOME");
+  if (home === undefined) Deno.env.delete("HOME");
+  else Deno.env.set("HOME", home);
+  try {
+    await fn();
+  } finally {
+    if (before === undefined) Deno.env.delete("HOME");
+    else Deno.env.set("HOME", before);
+  }
+}
+
+Deno.test("expandHome expands a leading ~/ and nothing else", async () => {
+  await withHome("/home/kari", () => {
+    assertEquals(
+      expandHome("~/.config/zitadel/k.json"),
+      "/home/kari/.config/zitadel/k.json",
+    );
+    assertEquals(expandHome("~"), "/home/kari");
+    assertEquals(expandHome("/etc/k.json"), "/etc/k.json");
+    assertEquals(expandHome("keys/k.json"), "keys/k.json");
+    // Another user's home and a ~ further in are not ours to guess at.
+    assertEquals(expandHome("~ola/k.json"), "~ola/k.json");
+    assertEquals(expandHome("/srv/~/k.json"), "/srv/~/k.json");
+  });
+});
+
+Deno.test("expandHome refuses ~ when HOME is not set", async () => {
+  await withHome(undefined, () => {
+    assertThrows(() => expandHome("~/k.json"), Error, "HOME is not set");
+    assertEquals(expandHome("/etc/k.json"), "/etc/k.json");
+  });
+});
+
+Deno.test("readKeyJson reads a key file named with ~/", async () => {
+  const home = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${home}/k.json`, '{"keyId":"1"}');
+    await withHome(home, async () => {
+      assertEquals(
+        await readKeyJson({ apiUrl: "x", keyJsonFile: "~/k.json" }),
+        '{"keyId":"1"}',
+      );
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("readKeyJson names the path it was given when the file is missing", async () => {
+  const home = await Deno.makeTempDir();
+  try {
+    await withHome(home, async () => {
+      const error = await assertRejects(
+        () =>
+          readKeyJson({ apiUrl: "x", keyJsonFile: "~/does-not-exist.json" }),
+        Error,
+      );
+      assert(
+        error.message.includes("cannot read keyJsonFile ~/does-not-exist.json"),
+        error.message,
+      );
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("readKeyJson refuses a vault value and a file together", async () => {
+  await assertRejects(
+    () => readKeyJson({ apiUrl: "x", keyJson: "{}", keyJsonFile: "~/k.json" }),
+    Error,
+    "not both",
   );
 });

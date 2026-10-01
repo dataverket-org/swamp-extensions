@@ -141,6 +141,9 @@ globalArguments:
   keyJsonFile: ~/.config/zitadel/admin.json
 ```
 
+A leading `~/` is expanded from `HOME`, so one definition serves every operator
+who keeps the file in the same place under their own home directory.
+
 Quote the arguments to `vault.get`: `swamp model validate` only recognizes a
 quoted vault expression, and warns that an unquoted one is "passed to the method
 unchanged" — swamp's resolver does take a bare token verbatim, so the unquoted
