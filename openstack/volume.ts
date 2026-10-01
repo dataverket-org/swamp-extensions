@@ -353,6 +353,8 @@ export const model = {
       },
     },
     delete: {
+      // A collection model: "action", so swamp tombstones only what deleteResource names (common.ts).
+      kind: "action" as const,
       description:
         "Delete a volume (no-op when already gone), wait for it to vanish and drop its stored resource",
       arguments: DeleteArgs,

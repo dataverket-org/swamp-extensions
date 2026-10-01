@@ -182,6 +182,8 @@ export const model = {
       },
     },
     delete: {
+      // A collection model: "action", so swamp tombstones only what deleteResource names (common.ts).
+      kind: "action" as const,
       description:
         "Delete a server group (no-op when already gone) and drop its stored resource",
       arguments: DeleteArgs,

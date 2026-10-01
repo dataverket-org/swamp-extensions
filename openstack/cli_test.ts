@@ -162,6 +162,10 @@ Deno.test("openstackJson rejects empty and malformed output", async () => {
 });
 
 Deno.test("openstackVersion runs without any authentication configured", async () => {
+  // Inherited OS_* pass through when the model names no cloud, so the
+  // operator's own OS_CLOUD must not decide this test.
+  const inherited = Deno.env.get("OS_CLOUD");
+  Deno.env.delete("OS_CLOUD");
   const fake = installFake((args) =>
     args[0] === "--version" ? ok("openstack 10.3.0\n") : undefined
   );
@@ -173,6 +177,7 @@ Deno.test("openstackVersion runs without any authentication configured", async (
     assertEquals(fake.calls[0].env.OS_CLOUD, undefined);
   } finally {
     fake.restore();
+    if (inherited !== undefined) Deno.env.set("OS_CLOUD", inherited);
   }
 });
 

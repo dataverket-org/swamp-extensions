@@ -187,6 +187,11 @@ active: ${{ data.findBySpec("servers", "server").filter(s, s.attributes.status =
 device: ${{ data.latest("volumes", "volume-web-01-state").attributes.attachments[0].device }}
 ```
 
+Deleting one resource drops only that resource's record. Every type is a
+collection, so its `delete` declares the lifecycle kind `action`: under swamp's
+default for a method named `delete`, one deletion would mark every record of the
+model deleted, and `get` would refuse to run until a `create`.
+
 ## Known limitations
 
 - **One project per model instance.** The credential's project scope decides
@@ -210,6 +215,9 @@ device: ${{ data.latest("volumes", "volume-web-01-state").attributes.attachments
 ~/.swamp/deno/deno task lint
 swamp extension source add ~/kode/swamp-extensions/*   # load every extension of the monorepo from source
 ```
+
+`smoke/delete-kind.sh` checks the same against a real cloud with three 1 GiB
+volumes and three small images (see `smoke/README.md`).
 
 Test fixtures in `fixtures.ts` mirror python-openstackclient 10.3.0 output with
 anonymised identifiers; keep them in step with the CLI version named above when

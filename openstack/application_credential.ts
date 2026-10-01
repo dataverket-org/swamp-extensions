@@ -283,6 +283,8 @@ export const model = {
       },
     },
     delete: {
+      // A collection model: "action", so swamp tombstones only what deleteResource names (common.ts).
+      kind: "action" as const,
       description:
         "Delete an application credential (no-op when already gone) and drop its stored resources",
       arguments: DeleteArgs,

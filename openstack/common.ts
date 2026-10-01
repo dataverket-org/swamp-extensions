@@ -176,6 +176,17 @@ export function sanitizeInstanceName(raw: string): string {
   return `${cleaned.slice(0, 91)}-${stableHash(raw)}`;
 }
 
+/*
+ * Every model here is a collection: one model holds every server, volume or
+ * port of a project. Swamp infers a method's lifecycle kind from its name, and
+ * after a method of kind "delete" (named `delete`, `destroy` or `remove`) it
+ * marks *every* declared resource of the model deleted, after which `get` and
+ * `update` refuse to run until a `create`. That is right for a model that
+ * stands for one resource and wrong here. The `delete` methods therefore
+ * declare `kind: "action"` and drop the one instance that is gone with
+ * `context.deleteResource`; method_kind_test.ts keeps it so.
+ */
+
 /** Something with an OpenStack id and a display name. */
 export interface Named {
   id: string;
