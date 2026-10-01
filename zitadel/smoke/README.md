@@ -8,40 +8,27 @@ _not_ happen.
 ## Run it
 
 ```sh
-# 1. a Zitadel of your own, with a service-user key written out at startup
+# 1. a Zitadel of your own, with a service-user key written out at startup.
+#    ZITADEL_VERSION picks the release; run the suite on the one you deploy.
 mkdir -p machinekey && chmod 777 machinekey     # rootless podman writes as another uid
-podman compose -p zit-test up -d
+ZITADEL_VERSION=v4.15.3 podman compose -p zit-test up -d
 until curl -sf http://localhost:8899/debug/healthz; do sleep 3; done
 
-# 2. a swamp repository with the five models pointing at it
-swamp repo init
-swamp extension source add ../../zitadel
-swamp vault create local_encryption testvault   # the minted secrets need somewhere to go
-for t in org project app user grant; do
-  swamp model create @dataverket/zitadel/$t zitadel-$t \
-    --global-arg apiUrl=http://localhost:8899 \
-    --global-arg keyJsonFile="$PWD/machinekey/swamp-admin.json"
-done
+# 2. a swamp repository with every model the batches name, in a directory of
+#    its own. setup.sh loads the extension from this checkout, makes the
+#    models, the second organization, more than a page of users and projects,
+#    the workflow, and two keys that may do less than the first one.
+mkdir /tmp/zit-smoke && cd /tmp/zit-smoke
+<this directory>/setup.sh <this directory>/machinekey
 
-# 3. batch J grants the project to a second organization, which the org type
-#    deliberately cannot create, so the scaffolding makes one
-export ORG=$(deno run --allow-read --allow-net --allow-env mkorg.ts \
-  "$PWD/machinekey/swamp-admin.json" http://localhost:8899 "Annen organisasjon")
+# 3. the suite
+export REPO=$PWD ORG=$(cat org-id.txt)
+./fixtures.sh && for b in a b c d e f g h i j k l m n o p; do ./neg-$b.sh; done
 
-# 4. the suite; batch E also wants the cred-* models (see neg-e.sh)
-# batch m wants more than a page of things, and n wants the workflow
-deno run --allow-read --allow-net --allow-env bulk.ts "$PWD/machinekey/swamp-admin.json" \
-  http://localhost:8899 users 120
-deno run --allow-read --allow-net --allow-env bulk.ts "$PWD/machinekey/swamp-admin.json" \
-  http://localhost:8899 projects 120
-swamp workflow create zitadel-selftest        # then copy this directory's
-                                              # workflow-zitadel-selftest.yaml
-                                              # over the scaffold, keeping its id
-
-REPO=$PWD ./fixtures.sh && for b in a b c d e f g h i j k l m n o; do REPO=$PWD ./neg-$b.sh; done
-
-# 5. and away
+# 4. and away. setup.sh also left a copy of the throwaway key under
+#    ~/.cache/zitadel-smoke/, which batch E reads through a ~/ path.
 podman compose -p zit-test down --volumes
+rm -rf /tmp/zit-smoke ~/.cache/zitadel-smoke
 ```
 
 ## What each batch is for
@@ -56,6 +43,16 @@ podman compose -p zit-test down --volumes
 | `f`   | Converging rather than accumulating, and not clobbering what was not mentioned       |
 | `g`   | Names with spaces, slashes and non-ASCII letters; a delete that cascades             |
 | `h`   | Secrets at rest, and swamp's own lifecycle rules for a model whose resources went    |
+| `i`   | Actions: targets, executions, and a delete an execution still depends on             |
+| `j`   | A project granted to another organization, and taken back only by its name           |
+| `k`   | Settings: the scope each came from, and writes refused before the API sees them      |
+| `l`   | Authentication factors and identity-provider links nobody has                        |
+| `m`   | More than a page of users and projects, listed to the end                            |
+| `n`   | A swamp workflow, run twice, with every resource unchanged the second time           |
+| `o`   | Every minted secret stored as a vault reference, and a report after a failure        |
+| `p`   | Keys that may do less: a reader that changes nothing, an owner of one project that   |
+|       | touches no other; one name for a grant from `list` and `ensure`; a default auth      |
+|       | method read back; a definition from an older type version migrated on its first run  |
 
 `fixtures.sh` makes the least it can that the negatives need, and is the only
 batch that walks a golden path.

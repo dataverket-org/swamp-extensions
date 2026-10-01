@@ -12,7 +12,7 @@ services:
       retries: 20
 
   zitadel:
-    image: ghcr.io/zitadel/zitadel:v4.19.3
+    image: ghcr.io/zitadel/zitadel:${ZITADEL_VERSION:-v4.19.3}
     command: >-
       start-from-init --masterkey MasterkeyNeedsToHave32Characters --tlsMode disabled
     environment:

@@ -202,3 +202,67 @@ Deno.test("two grants of one user on one project do not overwrite each other", a
     fake.restore();
   }
 });
+
+Deno.test("list forgets the id-named record of a grant it now stores by name", async () => {
+  const fake = installFake((call) =>
+    line(call) === GRANT_SEARCH
+      ? page([{ ...GRANT, userName: "kari", projectName: "fabrikk" }])
+      : undefined
+  );
+  const { context, written, forgotten } = makeContext();
+  try {
+    await model.methods.list.execute(
+      { user: undefined, project: undefined },
+      context,
+    );
+    assertEquals(written[0].name, "grant-kari-fabrikk");
+    assertEquals(forgotten, [`grant-${GRANT.userId}-${GRANT.projectId}`]);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("list forgets nothing when the id is the only name there is", async () => {
+  const fake = installFake((call) =>
+    line(call) === GRANT_SEARCH ? page([GRANT]) : undefined
+  );
+  const { context, written, forgotten } = makeContext();
+  try {
+    await model.methods.list.execute(
+      { user: undefined, project: undefined },
+      context,
+    );
+    assertEquals(written[0].name, `grant-${GRANT.userId}-${GRANT.projectId}`);
+    assertEquals(forgotten, []);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("every type carries an upgrade to the version it declares", async () => {
+  for (
+    const file of [
+      "action",
+      "app",
+      "grant",
+      "org",
+      "project",
+      "settings",
+      "user",
+    ]
+  ) {
+    const loaded = (await import(`./${file}.ts`)).model as {
+      version: string;
+      upgrades: {
+        toVersion: string;
+        upgradeAttributes: (
+          old: Record<string, unknown>,
+        ) => Record<string, unknown>;
+      }[];
+    };
+    const last = loaded.upgrades[loaded.upgrades.length - 1];
+    assertEquals(last.toVersion, loaded.version, file);
+    const args = { apiUrl: "https://zitadel.example.org", keyJsonFile: "~/k" };
+    assertEquals(last.upgradeAttributes(args), args, file);
+  }
+});

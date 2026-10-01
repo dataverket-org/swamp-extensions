@@ -26,6 +26,8 @@ export interface FakeContext {
   context: ModelContext;
   written: Written[];
   logs: string[];
+  /** Instance names a method tombstoned with `deleteResource`. */
+  forgotten: string[];
 }
 
 /** Global arguments good enough for a method that never reaches the network. */
@@ -46,6 +48,7 @@ export function fakeGlobalArgs(
 export function makeContext(overrides: Partial<GlobalArgs> = {}): FakeContext {
   const written: Written[] = [];
   const logs: string[] = [];
+  const forgotten: string[] = [];
   const log = (level: string) => (message: string) => {
     logs.push(`${level}: ${message}`);
   };
@@ -64,8 +67,12 @@ export function makeContext(overrides: Partial<GlobalArgs> = {}): FakeContext {
       written.push({ spec, name, data });
       return Promise.resolve({ name });
     },
+    deleteResource(instanceName: string): Promise<void> {
+      forgotten.push(instanceName);
+      return Promise.resolve();
+    },
   };
-  return { context, written, logs };
+  return { context, written, logs, forgotten };
 }
 
 /** What a fake handler may answer with. */

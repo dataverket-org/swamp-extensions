@@ -63,7 +63,15 @@ const DeleteArgs = z.object({
 /** Zitadel user grants. */
 export const model = {
   type: "@dataverket/zitadel/grant",
-  version: "2026.09.29.1",
+  version: "2026.10.01.3",
+  upgrades: [
+    {
+      toVersion: "2026.10.01.3",
+      description:
+        "list names a grant by username and project name, as ensure does, and forgets the id-named record it wrote before; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {
@@ -89,7 +97,7 @@ export const model = {
   methods: {
     list: {
       description:
-        "List user grants, optionally narrowed to one user or one project, and store each one. Read-only.",
+        "List user grants, optionally narrowed to one user or one project, and store each one under the username and the project's name. Read-only against Zitadel.",
       arguments: ListArgs,
       execute: async (
         args: z.infer<typeof ListArgs>,
@@ -140,6 +148,13 @@ export const model = {
           grants,
           (grant) => keys.get(grant) ?? "",
         );
+        // Before 2026.10.01.2 a listed grant was stored under its two ids.
+        // That record is the same grant under a name nothing writes any
+        // more, so it is forgotten once the grant is stored under its names.
+        for (const [grant, key] of keys) {
+          const byId = `${str(grant.userId)}-${str(grant.projectId)}`;
+          if (byId !== key) await forgetInstance(context, "grant", byId);
+        }
         context.logger.info("stored {count} grants", { count: grants.length });
         return { dataHandles: handles };
       },

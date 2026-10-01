@@ -13,6 +13,11 @@ refuses "both a vault value and a file is refused" \
 refuses "a key file that is not there is named in the error" \
   "cannot read keyJsonFile.*does-not-exist" \
   cred-missing get
+holds   "a key file named with ~/ is read from the home directory" '.dataArtifacts[0].attributes.state == "active"' \
+  cred-tilde get
+refuses "a ~/ key file that is not there is named as the definition wrote it" \
+  "cannot read keyJsonFile ~/.*does-not-exist" \
+  cred-tilde-missing get
 refuses "a key file that is not JSON is refused" \
   "not valid JSON" \
   cred-notjson get

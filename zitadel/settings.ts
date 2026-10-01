@@ -229,7 +229,14 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.09.29.1",
+  version: "2026.10.01.3",
+  upgrades: [
+    {
+      toVersion: "2026.10.01.3",
+      description: "keyJsonFile expands a leading ~/; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {
