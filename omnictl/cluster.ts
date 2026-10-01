@@ -34,6 +34,7 @@ import { sanitizeInstanceName } from "./schema.ts";
 /** Omni's resource types, fully qualified so no alias lookup is involved. */
 export const TYPES = {
   configPatch: "ConfigPatches.omni.sidero.dev",
+  machineSet: "MachineSets.omni.sidero.dev",
   machineSetNode: "MachineSetNodes.omni.sidero.dev",
   machineStatus: "MachineStatuses.omni.sidero.dev",
   link: "Links.siderolink.omni.sidero.dev",
@@ -45,6 +46,14 @@ export const LABELS = {
   machineSet: "omni.sidero.dev/machine-set",
   machine: "omni.sidero.dev/machine",
 } as const;
+
+/**
+ * The prefix of Omni's role labels, `omni.sidero.dev/role-worker` and
+ * `omni.sidero.dev/role-controlplane`. A machine set carries one, and Omni's
+ * UI copies it onto every MachineSetNode; a node made without it on 2026-10-01
+ * was counted as requested and not allocated.
+ */
+export const ROLE_PREFIX = "omni.sidero.dev/role-";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const Machine = z.string().regex(UUID).describe("Omni machine UUID");
@@ -68,6 +77,9 @@ export const MachineSetNodeSchema = z.object({
   machine: z.string().describe("Omni machine UUID"),
   cluster: z.string(),
   machineSet: z.string(),
+  role: z.string().nullable().describe(
+    "The role label copied from the machine set, e.g. omni.sidero.dev/role-worker",
+  ),
   appliedAt: z.string(),
 });
 
@@ -142,6 +154,37 @@ export function patchScope(
   throw new Error("applyPatch needs a machine, a machineSet or a cluster");
 }
 
+/**
+ * The role label a machine set's nodes must carry, read from the machine set:
+ * Omni's UI copies it onto every MachineSetNode it creates. Refuses a machine
+ * set that does not exist, belongs to another cluster, or has no single role.
+ */
+export function roleLabel(
+  machineSet: CosiResource | null,
+  id: string,
+  cluster: string,
+): string {
+  if (!machineSet) {
+    throw new Error(`machine set ${id} does not exist`);
+  }
+  const labels = (machineSet.metadata.labels ?? {}) as Record<string, unknown>;
+  const owner = labels[LABELS.cluster];
+  if (owner !== cluster) {
+    throw new Error(
+      `machine set ${id} belongs to cluster ${
+        typeof owner === "string" ? owner : "(none)"
+      }, not ${cluster}`,
+    );
+  }
+  const roles = Object.keys(labels).filter((k) => k.startsWith(ROLE_PREFIX));
+  if (roles.length !== 1) {
+    throw new Error(
+      `machine set ${id} has ${roles.length} role labels; expected one ${ROLE_PREFIX}*`,
+    );
+  }
+  return roles[0];
+}
+
 /** Fold a `ConfigPatch` resource read back from Omni into the stored shape. */
 export function configPatchFromResource(
   r: CosiResource,
@@ -172,12 +215,18 @@ const nodeName = (machine: string) =>
  */
 export const model = {
   type: "@dataverket/omnictl/cluster",
-  version: "2026.09.29.1",
+  version: "2026.10.01.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
       description:
         "serviceAccountKeyFile added; serviceAccountKey unchanged where set",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.01.1",
+      description:
+        "addMachine copies the machine set's role label; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -252,13 +301,23 @@ export const model = {
     },
     addMachine: {
       description:
-        "Add a machine to a machine set by creating its MachineSetNode, which is what the Omni UI does; Omni then installs Talos with every patch in scope. dryRun validates only.",
+        "Add a machine to a machine set by creating its MachineSetNode, which is what the Omni UI does, with the set's role label copied onto it; Omni then installs Talos with every patch in scope. Refuses a machine set that is missing, of another cluster, or without one role. An existing node is updated. dryRun validates only.",
       arguments: AddMachineArgs,
       execute: async (
         args: z.infer<typeof AddMachineArgs>,
         context: MethodContext,
       ): Promise<MethodResult> => {
         const opts = optionsOf(context.globalArgs);
+        const role = roleLabel(
+          await getResource(
+            TYPES.machineSet,
+            args.machineSet,
+            opts,
+            context.signal,
+          ),
+          args.machineSet,
+          args.cluster,
+        );
         const resource: CosiResource = {
           metadata: {
             namespace: "default",
@@ -267,6 +326,7 @@ export const model = {
             labels: {
               [LABELS.cluster]: args.cluster,
               [LABELS.machineSet]: args.machineSet,
+              [role]: "",
             },
           },
           spec: {},
@@ -312,6 +372,7 @@ export const model = {
             machineSet: typeof labels[LABELS.machineSet] === "string"
               ? labels[LABELS.machineSet]
               : args.machineSet,
+            role: role in labels ? role : null,
             appliedAt: new Date().toISOString(),
           },
         );

@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/omnictl"
-version: "2026.09.29.1"
+version: "2026.10.01.1"
 description: >
   Sidero Omni for swamp, through `omnictl`. Two model types, two roles.
 
@@ -14,7 +14,8 @@ description: >
 
   `@dataverket/omnictl/cluster` writes: `applyPatch` creates or updates a
   ConfigPatch scoped to a machine, a machine set or a cluster; `addMachine`
-  puts a machine into a machine set by its MachineSetNode; `removeMachine`
+  puts a machine into a machine set by its MachineSetNode, with the
+  set's role label, without which Omni never allocates it; `removeMachine`
   is `omnictl cluster machine delete`, which drains, wipes and waits;
   `forgetMachine` deletes the machine's SideroLink Link once it is out of
   every cluster. Every apply takes `dryRun`. An Operator service account, on

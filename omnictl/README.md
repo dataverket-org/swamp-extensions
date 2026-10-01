@@ -49,13 +49,21 @@ in the order a swap uses them:
 | Method          | What it does                                                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `applyPatch`    | Create or update a `ConfigPatch` (`--input id=… data=…`) scoped to a `machine`, a `machineSet` with its `cluster`, or a `cluster`; stores it            |
-| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode`, what the UI's "add machine" does; Omni installs Talos with every patch in scope      |
+| `addMachine`    | Put a machine into a machine set by creating its `MachineSetNode` with the set's role label, as the UI's "add machine" does; Omni installs Talos        |
 | `removeMachine` | `omnictl cluster machine delete`: drain, wipe, wait up to `timeout` (15m); refuses a machine in no machine set; never forces                            |
 | `forgetMachine` | Delete the machine's SideroLink `Link`; refuses while it is in a cluster, no-op when already gone. After the machine itself is gone, or it re-registers |
 
 `applyPatch` and `addMachine` take `dryRun=true`, which runs
 `omnictl apply --dry-run`: Omni validates the resource and nothing changes. Use
 it once with a new Operator key to see the resources before applying them.
+
+`addMachine` reads the machine set first and copies its role label
+(`omni.sidero.dev/role-worker` or `omni.sidero.dev/role-controlplane`) onto the
+node, as Omni's UI does. Omni accepts a `MachineSetNode` without one, even in a
+dry run; one made that way on 2026-10-01 was counted as requested and not
+allocated. The method refuses a machine set that is missing, belongs to another
+cluster or has no single role. A node that exists is updated, so rerunning
+`addMachine` adds the label to a node made by 2026.09.29.1 or earlier.
 
 ```sh
 swamp model create @dataverket/omnictl/cluster omni-cluster

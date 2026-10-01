@@ -4,6 +4,8 @@ import {
   LABELS,
   model,
   patchScope,
+  ROLE_PREFIX,
+  roleLabel,
   TYPES,
 } from "./cluster.ts";
 import { __setRunner, type RunResult } from "./omnictl.ts";
@@ -48,6 +50,11 @@ const gone = (): RunResult => ({
   stderr: "resource doesn't exist",
 });
 const json = (r: unknown) => JSON.stringify(r);
+const WORKER = `${ROLE_PREFIX}worker`;
+const workers = (labels: Record<string, string> = {
+  [LABELS.cluster]: "prod",
+  [WORKER]: "",
+}) => ({ metadata: { id: "prod-workers", labels }, spec: {} });
 
 Deno.test("patchScope picks machine, machineSet+cluster or cluster and rejects mixes", () => {
   assertEquals(patchScope({ machine: M }), {
@@ -126,6 +133,9 @@ Deno.test("dryRun passes --dry-run and stores nothing", async () => {
   const calls: string[][] = [];
   __setRunner((argv) => {
     calls.push(argv);
+    if (argv[1] === "get" && argv[2] === TYPES.machineSet) {
+      return Promise.resolve(ok(json(workers())));
+    }
     return Promise.resolve(ok("would create"));
   });
   const { context, written } = makeContext();
@@ -138,19 +148,27 @@ Deno.test("dryRun passes --dry-run and stores nothing", async () => {
     }, context);
     assertEquals(r.dataHandles.length, 0);
     assertEquals(written.length, 0);
-    assertEquals(calls.length, 1);
-    assertEquals(calls[0].includes("--dry-run"), true);
+    assertEquals(calls.length, 2);
+    assertEquals(calls[0].slice(1, 4), [
+      "get",
+      TYPES.machineSet,
+      "prod-workers",
+    ]);
+    assertEquals(calls[1].includes("--dry-run"), true);
   } finally {
     __setRunner();
   }
 });
 
-Deno.test("addMachine applies a MachineSetNode with cluster and machine-set labels and stores it", async () => {
+Deno.test("addMachine applies a MachineSetNode with cluster, machine-set and the set's role label and stores it", async () => {
   let applied: Record<string, unknown> | undefined;
   __setRunner(async (argv) => {
     if (argv[1] === "apply") {
       applied = JSON.parse(await Deno.readTextFile(argv[3]));
       return ok();
+    }
+    if (argv[1] === "get" && argv[2] === TYPES.machineSet) {
+      return ok(json(workers()));
     }
     if (argv[1] === "get" && argv[2] === TYPES.machineSetNode) {
       return ok(json({
@@ -159,12 +177,13 @@ Deno.test("addMachine applies a MachineSetNode with cluster and machine-set labe
           labels: {
             [LABELS.cluster]: "prod",
             [LABELS.machineSet]: "prod-workers",
+            [WORKER]: "",
           },
         },
         spec: {},
       }));
     }
-    return gone();
+    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
   });
   const { context, written } = makeContext();
   try {
@@ -178,14 +197,90 @@ Deno.test("addMachine applies a MachineSetNode with cluster and machine-set labe
       namespace: "default",
       type: TYPES.machineSetNode,
       id: M,
-      labels: { [LABELS.cluster]: "prod", [LABELS.machineSet]: "prod-workers" },
+      labels: {
+        [LABELS.cluster]: "prod",
+        [LABELS.machineSet]: "prod-workers",
+        [WORKER]: "",
+      },
     });
     assertEquals(applied?.spec, {});
     assertEquals(written[0].name, `machinesetnode-${M}`);
     assertEquals(written[0].data.machineSet, "prod-workers");
+    assertEquals(written[0].data.role, WORKER);
   } finally {
     __setRunner();
   }
+});
+
+Deno.test("addMachine refuses a missing machine set, one of another cluster, or one without a single role, and applies nothing", async () => {
+  const cases: [string, unknown, string][] = [
+    ["missing", null, "does not exist"],
+    [
+      "other cluster",
+      workers({ [LABELS.cluster]: "staging", [WORKER]: "" }),
+      "belongs to cluster staging, not prod",
+    ],
+    [
+      "no cluster label",
+      workers({ [WORKER]: "" }),
+      "belongs to cluster (none), not prod",
+    ],
+    ["no role", workers({ [LABELS.cluster]: "prod" }), "has 0 role labels"],
+    [
+      "two roles",
+      workers({
+        [LABELS.cluster]: "prod",
+        [WORKER]: "",
+        [`${ROLE_PREFIX}controlplane`]: "",
+      }),
+      "has 2 role labels",
+    ],
+  ];
+  for (const [name, set, message] of cases) {
+    for (const dryRun of [false, true]) {
+      const calls: string[][] = [];
+      __setRunner((argv) => {
+        calls.push(argv);
+        if (argv[1] === "get" && argv[2] === TYPES.machineSet) {
+          return Promise.resolve(set === null ? gone() : ok(json(set)));
+        }
+        throw new Error(`unexpected omnictl call (${name}): ${argv.join(" ")}`);
+      });
+      const { context, written } = makeContext();
+      try {
+        await assertRejects(
+          () =>
+            model.methods.addMachine.execute({
+              machine: M,
+              cluster: "prod",
+              machineSet: "prod-workers",
+              dryRun,
+            }, context),
+          Error,
+          message,
+        );
+        assertEquals(calls.length, 1, `${name}: only the machine set is read`);
+        assertEquals(written.length, 0, `${name}: nothing is stored`);
+      } finally {
+        __setRunner();
+      }
+    }
+  }
+});
+
+Deno.test("roleLabel returns the machine set's one role label", () => {
+  assertEquals(roleLabel(workers() as never, "prod-workers", "prod"), WORKER);
+  assertEquals(
+    roleLabel(
+      workers({
+        [LABELS.cluster]: "prod",
+        [`${ROLE_PREFIX}controlplane`]: "",
+      }) as never,
+      "prod-control-planes",
+      "prod",
+    ),
+    `${ROLE_PREFIX}controlplane`,
+  );
 });
 
 Deno.test("removeMachine refuses an unassigned machine, otherwise deletes with a timeout and drops the record", async () => {
