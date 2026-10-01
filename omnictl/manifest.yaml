@@ -25,7 +25,9 @@ description: >
   CLI it wraps. The key is named as a file read at call time
   (`serviceAccountKeyFile`) or given as a value from a vault
   (`serviceAccountKey`), never both; either way it is marked sensitive and
-  redacted from logs and errors.
+  redacted from logs and errors. Both models check before every method that
+  the key resolves and that Omni accepts it, so an expired key stops a run
+  with a message that says so.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest

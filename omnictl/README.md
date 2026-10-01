@@ -86,6 +86,26 @@ pass through a private temporary file that is removed at once. The key is
 supplied through a vault, marked sensitive, and redacted from logs and error
 text. `inventory` needs the Reader role; `cluster` needs Operator.
 
+## Pre-flight checks
+
+Both models run two checks before a method reaches Omni:
+
+| Check                 | Label    | What it checks                                                                                   |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `service-account-key` | `policy` | The endpoint is https and the key is set once: the file exists, is readable and is not empty     |
+| `omni-authenticates`  | `live`   | Omni accepts the key: one `omnictl get Clusters.omni.sidero.dev`, which every Omni role can read |
+
+Service account keys expire. Without the checks an expired key shows up as
+`failed to sign message: ... no valid signing keys` from inside `omnictl`. With
+them, the run stops before any write and says which key expired and that a new
+one must be minted. The live check costs one read per method run; skip it where
+that matters:
+
+```sh
+swamp model method run omni-cluster addMachine --skip-check-label live \
+  --input machine=<uuid> --input cluster=prod --input machineSet=prod-workers
+```
+
 ## Prerequisites
 
 `omnictl` on `PATH` (or `omnictlPath`). The stored talosconfig is not a secret:

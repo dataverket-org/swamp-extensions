@@ -29,6 +29,7 @@ import {
   deleteResource,
   getResource,
 } from "./omnictl.ts";
+import { checks } from "./checks.ts";
 import { sanitizeInstanceName } from "./schema.ts";
 
 /** Omni's resource types, fully qualified so no alias lookup is involved. */
@@ -226,11 +227,12 @@ export const model = {
     {
       toVersion: "2026.10.01.1",
       description:
-        "addMachine copies the machine set's role label; global arguments unchanged",
+        "addMachine copies the machine set's role label, and pre-flight checks: the key resolves and Omni accepts it; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
   globalArguments: GlobalArgs,
+  checks,
   resources: {
     configPatch: {
       description:

@@ -26,6 +26,7 @@ import {
 } from "./schema.ts";
 import { type CosiResource, getResources, mintTalosconfig } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
+import { checks } from "./checks.ts";
 import {
   type DataHandle,
   GlobalArgs,
@@ -167,7 +168,7 @@ export function clusterMembers(
  */
 export const model = {
   type: "@dataverket/omnictl/inventory",
-  version: "2026.09.29.1",
+  version: "2026.10.01.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -175,8 +176,15 @@ export const model = {
         "serviceAccountKeyFile added; serviceAccountKey unchanged where set",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
+    {
+      toVersion: "2026.10.01.1",
+      description:
+        "pre-flight checks: the key resolves and Omni accepts it; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
   ],
   globalArguments: GlobalArgs,
+  checks,
   resources: {
     node: {
       description: "An Omni-managed Talos machine",
