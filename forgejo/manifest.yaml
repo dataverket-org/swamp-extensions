@@ -1,11 +1,11 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.04.1"
+version: "2026.10.04.2"
 description: >
   Forgejo operations for swamp that reach past a single repository, as
   extensions to `@thomas/forgejo`.
 
-  Seven modules add what upstream has no method for. `actions` covers Actions
+  Eight modules add what upstream has no method for. `actions` covers Actions
   secrets (repo- or org-scoped, write-only), a runner registration token,
   runner listing, runner pruning and a verify-first repository rename.
   `push_mirror` adds the push side of mirroring — upstream's `mirror_ensure`
@@ -20,7 +20,8 @@ description: >
   first so a typo is an error rather than a silently empty list.
   `repo_delete` deletes a repository, verify-first: one already gone is a
   no-op and one with commits is refused unless asked for explicitly, because
-  Forgejo has no undelete.
+  Forgejo has no undelete. `org_delete` deletes an organization the same way:
+  one already gone is a no-op and one that still holds repositories is refused.
 
   Install alongside `@thomas/forgejo`; the methods land on its model types and
   read its `apiUrl` and token. Two pre-flight checks come with them: a policy
@@ -41,6 +42,7 @@ models:
   - units.ts
   - pr_assign.ts
   - repo_delete.ts
+  - org_delete.ts
 workflows: []
 vaults: []
 datastores: []

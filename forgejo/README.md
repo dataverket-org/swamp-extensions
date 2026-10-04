@@ -24,6 +24,7 @@ upstream's model types and read its `apiUrl` and token.
 | `user_search`               | Search forge users by login or name fragment, without admin scope — the way to find a login for `pr_assign`. Read-only; Forgejo's top 50 matches |
 | `pr_assign`                 | Assign a pull request                                                                                                                            |
 | `repo_delete`               | Delete a repository, verify-first                                                                                                                |
+| `org_delete`                | Delete an organization, verify-first; refused while it still holds repositories                                                                  |
 
 ## Use
 
@@ -136,6 +137,11 @@ reported as an error rather than as `updated`.
 gone is a no-op, and one with commits is refused unless `allowContent` says
 otherwise, because Forgejo has no undelete. What is recorded is what was seen
 before the delete and what happened.
+
+`org_delete` does the same for an organization. One that is already gone is a
+no-op, and one that still holds repositories is refused and names them, because
+`repo_delete` is where the decision about each repository belongs; Forgejo would
+refuse the delete anyway. Members and teams go with the organization.
 
 `pr_assign` checks every login against the forge first, so a typo is an error
 and not a silently empty assignee list, and the pull request must exist and be
