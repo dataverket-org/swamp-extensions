@@ -16,6 +16,7 @@ upstream's model types and read its `apiUrl` and token.
 | `repo_rename`               | Rename a repository, verify-first                                                                                                                |
 | `pull_mirror_ensure`        | Make Forgejo pull a repository from elsewhere, sending only the settings given, so the forge's defaults decide visibility and the rest           |
 | `repo_topics_ensure`        | Give a repository topics, Forgejo's repository labels; additive unless `exact` is set                                                            |
+| `repo_units_ensure`         | Switch a repository's Actions, packages or projects unit, the units upstream's `repo_ensure` does not reach; sends only what is given            |
 | `push_mirror_ensure`        | Make Forgejo push a repository to a remote on every commit and on an interval                                                                    |
 | `push_mirror_list`          | The push mirrors an org or repository has; the audit a mirroring workflow asserts on                                                             |
 | `push_mirror_delete`        | Remove a push mirror                                                                                                                             |
@@ -52,6 +53,10 @@ swamp model method run forge pull_mirror_ensure \
   --arg cloneAddr=https://github.com/upstream/tool.git --arg private=false
 swamp model method run forge repo_topics_ensure \
   --arg owner=example-org --arg name=tool --arg 'topics=["upstream-mirror"]'
+
+# let the repository's .forgejo/workflows run
+swamp model method run forge repo_units_ensure \
+  --arg owner=example-org --arg name=tool --arg hasActions=true
 
 # what the mirroring audit asserts on
 swamp model method run forge push_mirror_list --arg owner=example-org
@@ -115,6 +120,15 @@ finds it.
 searches by. It adds the given topics and keeps the others unless `exact` makes
 the list the whole set, checks each against Forgejo's rules first so a bad one
 is named, and writes only when something changes.
+
+## Units upstream does not reach
+
+`repo_units_ensure` switches the Actions, packages and projects units of a
+repository, the three `repo_ensure` has no argument for. It sends only the units
+named, so the rest of the repository is untouched, and writes only when a named
+unit differs. It reads the forge's answer after the write: an instance with
+Actions disabled accepts `has_actions: true` and leaves it off, and that is
+reported as an error rather than as `updated`.
 
 ## Verify-first deletes
 
