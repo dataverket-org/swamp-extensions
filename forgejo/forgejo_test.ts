@@ -81,7 +81,7 @@ const MODULES = [
 
 Deno.test("the base owns the dataverket type at the published version", () => {
   assertEquals(model.type, "@dataverket/forgejo");
-  assertEquals(model.version, "2026.10.05.3");
+  assertEquals(model.version, "2026.10.05.4");
 });
 
 Deno.test("the upgrade chain ends at the model's version and is a no-op", () => {

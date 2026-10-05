@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1.0.13";
-import { apiUrlProblem, extension } from "./checks.ts";
+import { apiUrlProblem, extension, scopeRefusal } from "./checks.ts";
 import type { GlobalArgs } from "./api.ts";
 
 const checks = extension.checks[0];
@@ -55,6 +55,66 @@ Deno.test("forgejo-token-accepted reports the forge's own refusal, without the t
   } finally {
     globalThis.fetch = original;
   }
+});
+
+Deno.test("forgejo-token-accepted passes a 403 that names a missing scope", async () => {
+  // Forgejo authenticates the token before it checks scopes, so this body can
+  // only come back for a token it accepted; a token without read:user is a
+  // working token here.
+  const original = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          message:
+            "token does not have at least one of required scope(s), required=[read:user]",
+        }),
+        { status: 403 },
+      ),
+    );
+  try {
+    const r = await checks["forgejo-token-accepted"].execute(
+      g({ apiUrl: "https://forge.example.com", token: "narrow-token-1" }),
+    );
+    assertEquals(r.pass, true);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("forgejo-token-accepted fails a 403 that does not name a scope", async () => {
+  // a forbidden answer for any other reason is still a refusal
+  const original = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ message: "user is not allowed" }), {
+        status: 403,
+      }),
+    );
+  try {
+    const r = await checks["forgejo-token-accepted"].execute(
+      g({ apiUrl: "https://forge.example.com", token: "narrow-token-1" }),
+    );
+    assertEquals(r.pass, false);
+    assertStringIncludes(r.errors![0], "HTTP 403");
+    assertStringIncludes(r.errors![0], "user is not allowed");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("scopeRefusal is a 403 naming a scope and nothing else", () => {
+  assertEquals(
+    scopeRefusal(403, { message: "required scope(s) read:user" }),
+    true,
+  );
+  assertEquals(scopeRefusal(403, { raw: "missing scope" }), true);
+  assertEquals(scopeRefusal(403, { message: "forbidden" }), false);
+  assertEquals(
+    scopeRefusal(401, { message: "required scope(s) read:user" }),
+    false,
+  );
+  assertEquals(scopeRefusal(403, {}), false);
 });
 
 Deno.test("forgejo-token-accepted passes when the forge names the login", async () => {

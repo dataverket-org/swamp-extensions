@@ -6,8 +6,10 @@
  *
  * Two checks, so either can be skipped on its own: a shape check on the URL
  * that needs no network, and a live call that proves the token is still
- * accepted. Neither writes anything, and neither puts the token in its
- * output.
+ * accepted. A token without read:user is accepted too: Forgejo refuses a
+ * scope only after it has authenticated the token, so that 403 passes and a
+ * 401 is the failure. Neither writes anything, and neither puts the token in
+ * its output.
  *
  * A check receives the definition's global arguments as written, with none
  * of the schema's defaults applied, so `httpTimeoutMs` is undefined here
@@ -16,7 +18,7 @@
  *
  * @module
  */
-import { call, fetchCaller, type GlobalArgs } from "./api.ts";
+import { fetchCaller, type GlobalArgs } from "./api.ts";
 
 /**
  * Forgejo's base URL, without the API path. The schema says "no trailing
@@ -43,6 +45,28 @@ export function apiUrlProblem(apiUrl: string | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a 403 is Forgejo refusing a scope rather than the token. Forgejo
+ * checks the token before it checks scopes, so a body that names a required
+ * scope ("token does not have at least one of required scope(s), required=
+ * [read:user]") can only come back for a token it has already accepted. A
+ * token the forge does not know gets a 401 instead. Narrow tokens are the
+ * design here, `repo_list` says how to list without read:user, so a token
+ * that cannot read its own user is still a working token.
+ */
+export function scopeRefusal(
+  status: number,
+  body: Record<string, unknown>,
+): boolean {
+  if (status !== 403) return false;
+  const msg = typeof body.message === "string"
+    ? body.message
+    : typeof body.raw === "string"
+    ? body.raw
+    : "";
+  return /scope/i.test(msg);
+}
+
 /** The pre-flight checks of `@dataverket/forgejo`. */
 export const extension = {
   type: "@dataverket/forgejo",
@@ -60,7 +84,7 @@ export const extension = {
     },
     "forgejo-token-accepted": {
       description:
-        "The forge answers and the token is still accepted, reported as the login it belongs to",
+        "The forge answers and the token is still accepted: it names the login, or refuses only a scope",
       labels: ["live"],
       execute: async (
         context: { globalArgs: GlobalArgs; signal?: AbortSignal },
@@ -72,10 +96,24 @@ export const extension = {
           return { pass: false, errors: ["globalArguments.token is not set"] };
         }
         try {
-          const r = await call(
-            fetchCaller(context.globalArgs, context.signal),
-            { method: "GET", path: "/api/v1/user" },
-          );
+          const api = fetchCaller(context.globalArgs, context.signal);
+          const r = await api({ method: "GET", path: "/api/v1/user" });
+          // a scope refusal is proof of acceptance: see scopeRefusal
+          if (scopeRefusal(r.status, r.body)) return { pass: true };
+          if (r.status >= 400) {
+            const b = r.body;
+            const msg = typeof b.message === "string"
+              ? b.message
+              : typeof b.raw === "string"
+              ? b.raw
+              : JSON.stringify(b);
+            return {
+              pass: false,
+              errors: [
+                `Forgejo API GET /api/v1/user -> HTTP ${r.status}: ${msg}`,
+              ],
+            };
+          }
           const login = typeof r.body.login === "string" ? r.body.login : "";
           if (!login) {
             return {

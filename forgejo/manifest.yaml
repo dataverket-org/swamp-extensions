@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.05.3"
+version: "2026.10.05.4"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in one model type, `@dataverket/forgejo`.

@@ -222,6 +222,11 @@ other:
   makes the same `GET /api/v1/user` with better reporting, and
   `forgejo-api-url-shape` catches the URL mistake first. Two checks against the
   same endpoint would otherwise fail twice for one cause.
+- **A token without `read:user` passes the token check.** Forgejo checks the
+  token before it checks scopes, so a 403 that names a required scope can only
+  come back for a token it has accepted; `forgejo-token-accepted` passes it and
+  fails on a 401, the real refusal. Narrow tokens are the design: `repo_list`
+  explains how to list without `read:organization` or `read:user`.
 - **The former add-ons are methods of the same type.** They were published as
   `export const extension` on `@thomas/forgejo` and are now part of
   `@dataverket/forgejo`; their behaviour is unchanged. The scope statement
