@@ -25,6 +25,10 @@ upstream's model types and read its `apiUrl` and token.
 | `pr_assign`                 | Assign a pull request                                                                                                                            |
 | `repo_delete`               | Delete a repository, verify-first                                                                                                                |
 | `org_delete`                | Delete an organization, verify-first; refused while it still holds repositories                                                                  |
+| `issue_ensure`              | File issues, several per call, each unless an issue of the same exact title exists, open or closed; one record per issue                         |
+| `issue_list`                | The issues of a repository in a state, every page, pull requests excluded                                                                        |
+| `label_ensure`              | The labels of an organization, shared by its repositories, or of one repository: create, patch, keep; delete only with `prune`                   |
+| `label_list`                | The labels of an organization or a repository, every page                                                                                        |
 
 ## Use
 
@@ -148,14 +152,38 @@ and not a silently empty assignee list, and the pull request must exist and be
 open. Forgejo's `assignees` replaces the whole list; what is recorded is what
 Forgejo reports back, not what was asked for.
 
+## Issues by title
+
+`issue_ensure` takes a list of issues and files each one unless the repository
+already has an issue of that exact title, open or closed; a rerun files nothing
+twice, and a closed one is reported as found rather than reopened. The search is
+Forgejo's `q` on the title, followed to the end, and the match is the exact
+title, so an issue whose title merely contains the new one does not count. Two
+equal titles in one call are refused before anything is sent. `issue_list` reads
+a repository's issues in one state, every page.
+
+An issue is filed with labels by name. Every name must exist on the repository
+or on its organization, or the call is refused before any issue is filed; a
+found issue keeps the labels it has.
+
+## Labels of an organization or a repository
+
+`label_ensure` without a repository name works on an organization's labels,
+which every repository in it shares; with one, on that repository's own. The
+name is the identity: a missing label is created, one whose color, description
+or exclusivity differ is patched in place, keeping its id and the issues it is
+on, and the rest are kept. `prune` deletes the labels of that scope not in the
+list, and nothing else. Colors compare without `#` and without case.
+
 ## Lists are followed to the end
 
-`push_mirror_list`, `runner_list` and the find-or-create behind
-`push_mirror_ensure` follow Forgejo's pagination rather than reading one page. A
-repository past one page of mirrors would otherwise have had a second mirror
-created to a remote it already had, and a runner past the first page would have
-survived every `runner_prune`. `user_search` is the one deliberate cap: it is a
-search, and it returns Forgejo's top 50 matches.
+`push_mirror_list`, `runner_list`, `issue_list`, the search behind
+`issue_ensure` and the find-or-create behind `push_mirror_ensure` follow
+Forgejo's pagination rather than reading one page. A repository past one page of
+mirrors would otherwise have had a second mirror created to a remote it already
+had, and a runner past the first page would have survived every `runner_prune`.
+`user_search` is the one deliberate cap: it is a search, and it returns
+Forgejo's top 50 matches.
 
 ## Secrets
 
