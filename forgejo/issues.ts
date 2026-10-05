@@ -1,13 +1,14 @@
 /**
  * Adds to `@thomas/forgejo` a repository's issues: `issue_ensure`, which
  * files the issues given unless an issue of the same title already exists,
- * and `issue_list`. Upstream has no method for issues.
+ * `issue_labels_ensure` and `issue_list`. Upstream has no method for issues.
  *
  * The title is the identity. An issue is searched for by its title, in any
  * state, and matched on the exact title, so a rerun files nothing twice and a
  * closed issue is reported rather than reopened. Several issues go in one
  * call, so a batch takes the model's lock once. Labels are named; every name
  * must exist on the repository or its organization before anything is filed.
+ * `issue_labels_ensure` labels an existing issue or pull request by number.
  *
  * @module
  */
@@ -70,6 +71,103 @@ const IssueEnsureArgs = z.object({
 );
 /** {@link IssueEnsureArgs} */
 export type IssueEnsureArgsT = z.infer<typeof IssueEnsureArgs>;
+
+const IssueLabelsEnsureArgs = z.object({
+  owner: z.string().min(1).describe("Owning org or user login."),
+  name: z.string().min(1).describe("Repository name."),
+  number: z.number().int().positive().describe(
+    "The issue's or pull request's number; Forgejo numbers both in one sequence.",
+  ),
+  labels: z.array(z.string().trim().min(1)).min(1).describe(
+    "Label names it must carry; each must exist on the repository or its organization.",
+  ),
+  exact: z.boolean().default(false).describe(
+    "Make the list the whole set, removing any other label. Off: other labels are kept.",
+  ),
+});
+/** {@link IssueLabelsEnsureArgs} */
+export type IssueLabelsEnsureArgsT = z.infer<typeof IssueLabelsEnsureArgs>;
+
+/** An issue's or pull request's labels after `issue_labels_ensure`. */
+const IssueLabelsInfo = z.object({
+  owner: z.string(),
+  repo: z.string(),
+  number: z.number().int(),
+  labels: z.array(z.string()).describe("Every label, sorted"),
+  added: z.array(z.string()),
+  removed: z.array(z.string()),
+  action: z.enum(["updated", "unchanged"]),
+  timestamp: z.string(),
+});
+/** {@link IssueLabelsInfo} */
+export type IssueLabels = z.infer<typeof IssueLabelsInfo>;
+
+/** Resolve label names on the repository and its organization; refuse any that is missing. */
+async function labelIds(
+  api: Caller,
+  owner: string,
+  repo: string,
+  names: string[],
+): Promise<Map<string, number>> {
+  const ids = new Map<string, number>();
+  for (const l of await labelsForIssues(api, owner, repo)) {
+    if (!ids.has(l.name)) ids.set(l.name, l.id);
+  }
+  const missing = names.filter((n) => !ids.has(n));
+  if (missing.length > 0) {
+    throw new Error(
+      `label(s) ${missing.map((n) => JSON.stringify(n)).join(", ")} ` +
+        `exist neither on ${owner}/${repo} nor on ${owner}; label_ensure makes them`,
+    );
+  }
+  return ids;
+}
+
+/** Add the given labels to an issue or pull request, or with `exact` make them the whole set. */
+export async function issueLabelsEnsure(
+  api: Caller,
+  a: IssueLabelsEnsureArgsT,
+): Promise<IssueLabels> {
+  const p = IssueLabelsEnsureArgs.parse(a);
+  const want = [...new Set(p.labels)];
+  const ids = await labelIds(api, p.owner, p.name, want);
+  const path = `${issuesPath(p.owner, p.name)}/${p.number}/labels`;
+  const r = await call(api, { method: "GET", path });
+  const have = (Array.isArray(r.body) ? r.body as unknown[] : []).flatMap((l) =>
+    l && typeof l === "object" &&
+      typeof (l as Record<string, unknown>).name === "string"
+      ? [(l as Record<string, unknown>).name as string]
+      : []
+  );
+  const next = p.exact ? want : [...new Set([...have, ...want])];
+  const added = next.filter((n) => !have.includes(n)).sort();
+  const removed = have.filter((n) => !next.includes(n)).sort();
+  const base = {
+    owner: p.owner,
+    repo: p.name,
+    number: p.number,
+    added,
+    removed,
+    timestamp: new Date().toISOString(),
+  };
+  if (added.length === 0 && removed.length === 0) {
+    return { ...base, labels: [...have].sort(), action: "unchanged" };
+  }
+  if (p.exact) {
+    await call(api, {
+      method: "PUT",
+      path,
+      body: { labels: next.map((n) => ids.get(n)!) },
+    });
+  } else {
+    await call(api, {
+      method: "POST",
+      path,
+      body: { labels: added.map((n) => ids.get(n)!) },
+    });
+  }
+  return { ...base, labels: [...next].sort(), action: "updated" };
+}
 
 const IssueListArgs = z.object({
   owner: z.string().min(1).describe("Owning org or user login."),
@@ -149,20 +247,9 @@ export async function issueEnsure(
 ): Promise<Issue[]> {
   const parsed = IssueEnsureArgs.parse(a);
   const wanted = [...new Set(parsed.issues.flatMap((i) => i.labels))];
-  const ids = new Map<string, number>();
-  if (wanted.length > 0) {
-    for (const l of await labelsForIssues(api, parsed.owner, parsed.name)) {
-      if (!ids.has(l.name)) ids.set(l.name, l.id);
-    }
-    const missing = wanted.filter((n) => !ids.has(n));
-    if (missing.length > 0) {
-      throw new Error(
-        `label(s) ${missing.map((n) => JSON.stringify(n)).join(", ")} ` +
-          `exist neither on ${parsed.owner}/${parsed.name} nor on ${parsed.owner}; ` +
-          "label_ensure makes them",
-      );
-    }
-  }
+  const ids = wanted.length > 0
+    ? await labelIds(api, parsed.owner, parsed.name, wanted)
+    : new Map<string, number>();
   const results: Issue[] = [];
   for (const spec of parsed.issues) {
     const timestamp = new Date().toISOString();
@@ -257,6 +344,13 @@ export const extension = {
       lifetime: "infinite" as const,
       garbageCollection: 20,
     },
+    issueLabels: {
+      description:
+        "An issue's or pull request's labels after issue_labels_ensure, and which were added or removed.",
+      schema: IssueLabelsInfo,
+      lifetime: "infinite" as const,
+      garbageCollection: 20,
+    },
   },
   methods: [{
     issue_ensure: {
@@ -270,6 +364,34 @@ export const extension = {
           args,
         );
         return await record(context, issues);
+      },
+    },
+    issue_labels_ensure: {
+      description:
+        "Ensure an issue or pull request carries the given labels, by name; additive unless exact. " +
+        "Pull requests are issues to Forgejo, so this labels either by its number.",
+      arguments: IssueLabelsEnsureArgs,
+      execute: async (args: IssueLabelsEnsureArgsT, context: Ctx) => {
+        const info = await issueLabelsEnsure(
+          fetchCaller(context.globalArgs, context.signal),
+          args,
+        );
+        context.logger.info(
+          "Labels of {repo}#{number}: {action} (+{added} -{removed})",
+          {
+            repo: `${info.owner}/${info.repo}`,
+            number: info.number,
+            action: info.action,
+            added: info.added.join(","),
+            removed: info.removed.join(","),
+          },
+        );
+        const handle = await context.writeResource(
+          "issueLabels",
+          safeName(`${info.owner}:${info.repo}:issue:${info.number}:labels`),
+          info,
+        );
+        return { dataHandles: [handle] };
       },
     },
     issue_list: {

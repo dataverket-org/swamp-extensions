@@ -3,6 +3,7 @@ import {
   type ApiCall,
   type Caller,
   issueEnsure,
+  issueLabelsEnsure,
   listIssues,
 } from "./issues.ts";
 
@@ -24,6 +25,7 @@ function fakeApi(
   createStatus = 201,
 ): { api: Caller; calls: ApiCall[] } {
   const calls: ApiCall[] = [];
+  const issueLabels: Record<number, number[]> = { 7: [3] };
   let next = existing.reduce((m, i) => Math.max(m, i.number), 0) + 1;
   const api: Caller = (c) => {
     calls.push(c);
@@ -49,6 +51,29 @@ function fakeApi(
           unknown
         >,
       });
+    }
+    const m = path.match(
+      /^\/api\/v1\/repos\/acme\/tool\/issues\/(\d+)\/labels$/,
+    );
+    if (m) {
+      const n = Number(m[1]);
+      issueLabels[n] ??= [];
+      const names: Record<number, string> = { 3: "bug", 11: "llm-generated" };
+      if (c.method === "GET") {
+        return Promise.resolve({
+          status: 200,
+          body: issueLabels[n].map((x) => ({
+            id: x,
+            name: names[x],
+          })) as unknown as Record<string, unknown>,
+        });
+      }
+      const b = c.body as { labels: number[] };
+      if (c.method === "POST") {
+        issueLabels[n] = [...new Set([...issueLabels[n], ...b.labels])];
+      }
+      if (c.method === "PUT") issueLabels[n] = [...b.labels];
+      return Promise.resolve({ status: 200, body: {} });
     }
     if (path !== PATH) {
       return Promise.resolve({ status: 404, body: { message: "not found" } });
@@ -242,4 +267,65 @@ Deno.test("an unknown label name is refused before any issue is filed", async ()
     '"nope"',
   );
   assertEquals(calls.filter((c) => c.method === "POST").length, 0);
+});
+
+Deno.test("issue_labels_ensure adds the missing label and keeps the others; a PR number works the same", async () => {
+  const { api, calls } = fakeApi([]);
+  const out = await issueLabelsEnsure(api, {
+    owner: "acme",
+    name: "tool",
+    number: 7,
+    labels: ["llm-generated"],
+    exact: false,
+  });
+  assertEquals(out.action, "updated");
+  assertEquals(out.added, ["llm-generated"]);
+  assertEquals(out.labels, ["bug", "llm-generated"]);
+  const post = calls.find((c) => c.method === "POST");
+  assertEquals(post?.path, "/api/v1/repos/acme/tool/issues/7/labels");
+  assertEquals(post?.body, { labels: [11] });
+});
+
+Deno.test("issue_labels_ensure is unchanged when the label is there", async () => {
+  const { api, calls } = fakeApi([]);
+  const out = await issueLabelsEnsure(api, {
+    owner: "acme",
+    name: "tool",
+    number: 7,
+    labels: ["bug"],
+    exact: false,
+  });
+  assertEquals(out.action, "unchanged");
+  assertEquals(calls.filter((c) => c.method !== "GET").length, 0);
+});
+
+Deno.test("issue_labels_ensure exact replaces the set", async () => {
+  const { api, calls } = fakeApi([]);
+  const out = await issueLabelsEnsure(api, {
+    owner: "acme",
+    name: "tool",
+    number: 7,
+    labels: ["llm-generated"],
+    exact: true,
+  });
+  assertEquals(out.removed, ["bug"]);
+  assertEquals(out.labels, ["llm-generated"]);
+  assertEquals(calls.find((c) => c.method === "PUT")?.body, { labels: [11] });
+});
+
+Deno.test("issue_labels_ensure refuses an unknown label before touching the issue", async () => {
+  const { api, calls } = fakeApi([]);
+  await assertRejects(
+    () =>
+      issueLabelsEnsure(api, {
+        owner: "acme",
+        name: "tool",
+        number: 7,
+        labels: ["nope"],
+        exact: false,
+      }),
+    Error,
+    '"nope"',
+  );
+  assertEquals(calls.filter((c) => c.path.includes("/issues/7/")).length, 0);
 });

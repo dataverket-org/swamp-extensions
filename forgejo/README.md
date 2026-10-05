@@ -26,6 +26,7 @@ upstream's model types and read its `apiUrl` and token.
 | `repo_delete`               | Delete a repository, verify-first                                                                                                                |
 | `org_delete`                | Delete an organization, verify-first; refused while it still holds repositories                                                                  |
 | `issue_ensure`              | File issues, several per call, each unless an issue of the same exact title exists, open or closed; one record per issue                         |
+| `issue_labels_ensure`       | The labels of an issue or a pull request, by name; additive unless `exact`                                                                       |
 | `issue_list`                | The issues of a repository in a state, every page, pull requests excluded                                                                        |
 | `label_ensure`              | The labels of an organization, shared by its repositories, or of one repository: create, patch, keep; delete only with `prune`                   |
 | `label_list`                | The labels of an organization or a repository, every page                                                                                        |

@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.05.1"
+version: "2026.10.05.2"
 description: >
   Forgejo operations for swamp that reach past a single repository, as
   extensions to `@thomas/forgejo`.
@@ -23,7 +23,8 @@ description: >
   Forgejo has no undelete. `org_delete` deletes an organization the same way:
   one already gone is a no-op and one that still holds repositories is refused.
   `issues` adds `issue_ensure`, which files several issues in one call unless
-  one of the same exact title exists, open or closed, with labels by name, and
+  one of the same exact title exists, open or closed, with labels by name,
+  `issue_labels_ensure` for an existing issue or pull request, and
   `issue_list`. `labels` adds `label_ensure` and `label_list` for an
   organization's shared labels or one repository's.
 
