@@ -7,7 +7,11 @@
  * of one inventory by that tag, never older data, and records what it finds.
  *
  * Written against versitygw v1.8.0. The admin base URL may carry a path
- * prefix, which later releases add.
+ * prefix, which later releases add. The `backend` argument reads the same
+ * records from a Ceph radosgw, through its admin ops API, or from any S3
+ * endpoint with one key pair, where the buckets are the key's own and there
+ * are no accounts to list; the bucket settings and the rules over them are
+ * plain S3 and the same everywhere.
  *
  * @module
  */
@@ -32,13 +36,26 @@ import {
   parseAcl,
   parseBuckets,
   parseCors,
+  parseListAllMyBuckets,
   parseObjectLock,
   parseOwnership,
+  parseRgwBucketNames,
+  parseRgwBucketOwner,
+  parseRgwUser,
+  parseRgwUserIds,
   parseTags,
   parseVersioning,
   ROOT,
 } from "./parse.ts";
-import { type Finding, findings, FindingSchema, RULES } from "./findings.ts";
+import {
+  DEFAULT_RULES,
+  type Finding,
+  findings,
+  FindingSchema,
+  LOCK_MODES,
+  type Rule,
+  RULES,
+} from "./findings.ts";
 
 /**
  * Global arguments. The root key pair comes from exactly one source: a key
@@ -46,8 +63,13 @@ import { type Finding, findings, FindingSchema, RULES } from "./findings.ts";
  * vault expressions so the definition stores only the reference.
  */
 export const GlobalArgsSchema = z.object({
-  adminUrl: z.string().describe(
-    "Base URL of the admin API, e.g. http://localhost:7071. May end in a path prefix",
+  backend: z.enum(["versitygw", "rgw", "s3"]).default("versitygw").describe(
+    "versitygw: accounts and buckets over its admin API. rgw: a Ceph radosgw, accounts and buckets over the " +
+      "admin ops API at adminUrl (…/admin), signed with an admin user's key pair. s3: any S3 endpoint with one " +
+      "key pair; the key's own buckets, no accounts, no adminUrl",
+  ),
+  adminUrl: z.string().default("").describe(
+    "Base URL of the admin API, e.g. http://localhost:7071, or http://host:8000/admin for rgw. May end in a path prefix. Not used by the s3 backend",
   ),
   s3Url: z.string().describe(
     "Base URL of the S3 API, e.g. https://s3.example.org:443",
@@ -59,7 +81,8 @@ export const GlobalArgsSchema = z.object({
     "PEM file of the CA that signed the gateway's certificate, when it is not in the system store; a relative path is taken from the repository root",
   ),
   healthPath: z.string().default("/health").describe(
-    "The path given to the gateway's --health option",
+    "The path given to versitygw's --health option. Other backends have none: give / and the answer counts " +
+      "as reachable when it is any HTTP status below 500",
   ),
   rootKeyFile: z.string().optional().describe(
     "File of NAME=value lines holding the root key pair, read at call time. " +
@@ -154,6 +177,10 @@ const HealthSchema = z.object({
 
 const InventorySchema = z.object({
   inventoryId: z.string(),
+  backend: z.enum(["versitygw", "rgw", "s3"]).describe(
+    "Which API the accounts and buckets came from; the settings are S3 everywhere",
+  ),
+  region: z.string(),
   accounts: z.number().int(),
   buckets: z.number().int(),
   healthy: z.boolean(),
@@ -163,6 +190,7 @@ const CheckSchema = z.object({
   inventoryId: z.string(),
   rules: z.array(z.enum(RULES)),
   allowedRoles: z.array(z.string()),
+  allowedLockModes: z.array(z.string()),
   clean: z.boolean(),
   findings: z.array(FindingSchema),
 });
@@ -196,6 +224,16 @@ export function resolvePaths<
 
 function endpoint(g: GlobalArgs): Endpoint {
   return g;
+}
+
+/** The argument problem an s3-less backend has: no admin URL. */
+export function backendProblem(
+  g: Pick<GlobalArgs, "backend" | "adminUrl">,
+): string | undefined {
+  if (g.backend !== "s3" && !g.adminUrl) {
+    return `backend ${g.backend} needs adminUrl`;
+  }
+  return undefined;
 }
 
 /** A data name from anything: lowercase letters, digits and dashes. */
@@ -235,15 +273,16 @@ async function readHealth(
       { api: "s3", method: "GET", path: g.healthPath, unsigned: true },
       signal,
     );
+    const reachable = g.backend === "versitygw"
+      ? response.status === 200
+      : response.status < 500;
     return {
       url,
-      reachable: response.status === 200,
+      reachable,
       status: response.status,
       tls: https ? "verified" : "plain",
       latencyMs: Math.round(performance.now() - started),
-      error: response.status === 200
-        ? null
-        : response.body.trim().slice(0, 200),
+      error: reachable ? null : response.body.trim().slice(0, 200),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -260,16 +299,68 @@ async function readHealth(
   }
 }
 
+/** A signed GET on the admin ops API, as radosgw answers it, JSON. */
+async function rgwGet(
+  g: GlobalArgs,
+  key: RootKey,
+  path: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await send(
+    endpoint(g),
+    key,
+    { api: "admin", method: "GET", path, query },
+    signal,
+  );
+  return expectOk(response, `GET ${path}?${query}`, endpoint(g), key).body;
+}
+
+/**
+ * The radosgw users as accounts, the one holding the root key pair left out,
+ * since it is the caller and not an account the rules judge.
+ */
+async function rgwAccounts(
+  g: GlobalArgs,
+  key: RootKey,
+  signal?: AbortSignal,
+): Promise<{ accounts: Account[]; rootUid: string }> {
+  const ids = parseRgwUserIds(await rgwGet(g, key, "/user", "list", signal));
+  const accounts: Account[] = [];
+  let rootUid = "";
+  for (const uid of ids) {
+    const query = `uid=${encodeURIComponent(uid)}`;
+    const { account, accessKeys } = parseRgwUser(
+      await rgwGet(g, key, "/user", query, signal),
+    );
+    if (accessKeys.includes(key.access)) rootUid = uid;
+    else accounts.push(account);
+  }
+  return { accounts, rootUid };
+}
+
 async function listAccounts(
   g: GlobalArgs,
   key: RootKey,
   signal?: AbortSignal,
 ): Promise<Account[]> {
-  const call = { api: "admin", method: "PATCH", path: "/list-users" } as const;
-  const response = await send(endpoint(g), key, call, signal);
-  return parseAccounts(
-    expectOk(response, "PATCH /list-users", endpoint(g), key).body,
-  ).filter((account) => account.access !== key.access);
+  switch (g.backend) {
+    case "versitygw": {
+      const call = {
+        api: "admin",
+        method: "PATCH",
+        path: "/list-users",
+      } as const;
+      const response = await send(endpoint(g), key, call, signal);
+      return parseAccounts(
+        expectOk(response, "PATCH /list-users", endpoint(g), key).body,
+      ).filter((account) => account.access !== key.access);
+    }
+    case "rgw":
+      return (await rgwAccounts(g, key, signal)).accounts;
+    case "s3":
+      return [];
+  }
 }
 
 async function listBuckets(
@@ -277,16 +368,52 @@ async function listBuckets(
   key: RootKey,
   signal?: AbortSignal,
 ): Promise<Bucket[]> {
-  const call = {
-    api: "admin",
-    method: "PATCH",
-    path: "/list-buckets",
-  } as const;
-  const response = await send(endpoint(g), key, call, signal);
-  return parseBuckets(
-    expectOk(response, "PATCH /list-buckets", endpoint(g), key).body,
-    key.access,
-  );
+  switch (g.backend) {
+    case "versitygw": {
+      const call = {
+        api: "admin",
+        method: "PATCH",
+        path: "/list-buckets",
+      } as const;
+      const response = await send(endpoint(g), key, call, signal);
+      return parseBuckets(
+        expectOk(response, "PATCH /list-buckets", endpoint(g), key).body,
+        key.access,
+      );
+    }
+    case "rgw": {
+      const names = parseRgwBucketNames(
+        await rgwGet(g, key, "/bucket", "", signal),
+      );
+      const { rootUid } = await rgwAccounts(g, key, signal);
+      const buckets: Bucket[] = [];
+      for (const name of names) {
+        const owner = parseRgwBucketOwner(
+          await rgwGet(
+            g,
+            key,
+            "/bucket",
+            `bucket=${encodeURIComponent(name)}`,
+            signal,
+          ),
+        );
+        const ownerIsRoot = owner === rootUid;
+        buckets.push({ name, owner: ownerIsRoot ? "" : owner, ownerIsRoot });
+      }
+      return buckets;
+    }
+    case "s3": {
+      const response = await send(
+        endpoint(g),
+        key,
+        { api: "s3", method: "GET", path: "/" },
+        signal,
+      );
+      return parseListAllMyBuckets(
+        expectOk(response, "GET /", endpoint(g), key).body,
+      );
+    }
+  }
 }
 
 /** The error codes that mean "this bucket has no such configuration". */
@@ -350,10 +477,29 @@ async function readSettings(
     policy: policy === null ? null : maskRootInPolicy(policy, key.access),
     acl: parseAcl(acl ?? "", key.access),
     objectLock: lock === null ? null : parseObjectLock(lock),
-    objectOwnership: ownership === null ? null : parseOwnership(ownership),
-    cors: cors === null ? null : parseCors(cors),
-    tags: tagging === null ? null : parseTags(tagging),
+    objectOwnership: ownership === null
+      ? null
+      : unimplemented(() => parseOwnership(ownership)),
+    cors: cors === null ? null : unimplemented(() => parseCors(cors)),
+    tags: tagging === null ? null : unimplemented(() => parseTags(tagging)),
   };
+}
+
+/**
+ * A setting the gateway does not implement, read as "not configured".
+ * radosgw answers a subresource it does not know, ownershipControls among
+ * them, with the bucket's object listing and status 200, so the parser
+ * sees <ListBucketResult> where it expected the setting's element.
+ */
+function unimplemented<T>(parse: () => T): T | null {
+  try {
+    return parse();
+  } catch (err) {
+    if (
+      err instanceof Error && /got <ListBucketResult>/.test(err.message)
+    ) return null;
+    throw err;
+  }
 }
 
 /** Map with at most `limit` calls in flight, results in input order. */
@@ -422,12 +568,16 @@ function writer(context: ModelContext): Writer {
 export const checks = {
   "root-key-named": {
     description:
-      "Exactly one root key source is named: rootKeyFile, rootKeyEnv, or rootAccessKey with rootSecretKey",
+      "Exactly one root key source is named: rootKeyFile, rootKeyEnv, or rootAccessKey with rootSecretKey; and an adminUrl for every backend but s3",
     labels: ["policy"],
     execute: (
       context: { globalArgs: z.input<typeof GlobalArgsSchema> },
     ): Promise<CheckResult> => {
-      const problem = rootKeySourceProblem(context.globalArgs);
+      const problem = rootKeySourceProblem(context.globalArgs) ??
+        backendProblem({
+          backend: context.globalArgs.backend ?? "versitygw",
+          adminUrl: context.globalArgs.adminUrl ?? "",
+        });
       return Promise.resolve(
         problem ? { pass: false, errors: [problem] } : { pass: true },
       );
@@ -475,12 +625,19 @@ const CheckArgs = z.object({
   inventoryId: z.string().optional().describe(
     "The inventory to check; the latest inventory record's id when omitted",
   ),
-  rules: z.array(z.enum(RULES)).default([...RULES]).describe(
-    "Rules to apply; all of them by default",
+  rules: z.array(z.enum(RULES)).default([...DEFAULT_RULES]).describe(
+    "Rules to apply. By default every rule but versioning-enabled, which a gateway meant to hold no versioned " +
+      "bucket at all names explicitly; the three lock rules say what is wrong with versioning otherwise. " +
+      "On the s3 backend the account and owner rules have nothing to read and are skipped",
   ),
   allowedRoles: z.array(z.string()).default(["user"]).describe(
     "Account roles the account-role rule accepts",
   ),
+  allowedLockModes: z.array(z.enum(LOCK_MODES)).default(["GOVERNANCE"])
+    .describe(
+      "Default retention modes the lock-mode rule accepts. COMPLIANCE can be shortened by nobody until it " +
+        "expires, root included, so it is accepted only when named",
+    ),
   failOnFindings: z.boolean().default(false).describe(
     "Fail the method, after recording the result, when anything is found",
   ),
@@ -498,7 +655,7 @@ function records(
 /** A versitygw gateway, read through its admin API and its S3 API. */
 export const model = {
   type: "@dataverket/versitygw/gateway",
-  version: "2026.09.30.3",
+  version: "2026.10.05.1",
   upgrades: [
     {
       toVersion: "2026.09.30.2",
@@ -510,6 +667,12 @@ export const model = {
       toVersion: "2026.09.30.3",
       description:
         "a relative caFile or rootKeyFile is resolved against the repository; absolute and ~/ paths unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.05.1",
+      description:
+        "backend (versitygw, rgw, s3) with versitygw the default; check gains the three lock rules and allowedLockModes, and no longer applies versioning-enabled by default; existing definitions unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -682,6 +845,8 @@ export const model = {
         await out.buckets(buckets);
         await out.settings(settings);
         await out.write("inventory", "inventory", {
+          backend: g.backend,
+          region: g.region,
           inventoryId: out.inventoryId,
           accounts: accounts.length,
           buckets: buckets.length,
@@ -741,15 +906,32 @@ export const model = {
         if (inventory.length === 0) {
           throw new Error(`inventory ${inventoryId} has no inventory record`);
         }
+        // The s3 backend lists no accounts and knows no owner but the
+        // caller, so the rules about them would only say so; they are
+        // skipped there rather than reported.
+        const ACCOUNT_RULES: readonly Rule[] = [
+          "bucket-owner-missing",
+          "bucket-owner-not-same-named",
+          "account-owns-nothing",
+          "account-role",
+        ];
+        const rules = context.globalArgs.backend === "s3"
+          ? args.rules.filter((rule) => !ACCOUNT_RULES.includes(rule))
+          : args.rules;
         const found: Finding[] = findings({
           accounts: records(rows, "account") as Account[],
           buckets: records(rows, "bucket") as Bucket[],
           settings: records(rows, "bucketSettings") as BucketSettings[],
-        }, args);
+        }, {
+          rules,
+          allowedRoles: args.allowedRoles,
+          allowedLockModes: args.allowedLockModes,
+        });
         const result = {
           inventoryId,
-          rules: args.rules,
+          rules,
           allowedRoles: args.allowedRoles,
+          allowedLockModes: args.allowedLockModes,
           clean: found.length === 0,
           findings: found,
         };

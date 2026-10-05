@@ -254,3 +254,82 @@ export function parseTags(body: string): Record<string, string> {
   }
   return tags;
 }
+
+// ---- Other backends: radosgw's admin ops API answers JSON, and any S3
+// endpoint lists the key's own buckets as XML. The same records come out.
+
+function json(body: string, what: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`${what}: expected JSON`);
+  }
+}
+
+/** radosgw `GET /admin/user?list` to user ids, sorted. */
+export function parseRgwUserIds(body: string): string[] {
+  const doc = obj(json(body, "user list"));
+  return list(doc.keys).map(text).filter(Boolean).sort();
+}
+
+/**
+ * radosgw `GET /admin/user?uid=` to an account: the uid is the name, a user
+ * with the system or admin flag is role `admin`, any other `user`. The
+ * answer carries every S3 and Swift secret of the user; only named fields
+ * are copied, so none can reach a record. The access key ids are returned
+ * beside, for telling which user the root key pair belongs to.
+ */
+export function parseRgwUser(
+  body: string,
+): { account: Account; accessKeys: string[] } {
+  const doc = obj(json(body, "user info"));
+  const uid = required(doc.user_id, "a user's user_id");
+  // system and admin are flags; a user whose caps let it manage users or
+  // buckets is an administrator in all but name.
+  const caps = list(doc.caps).map((c) => {
+    const cap = obj(c);
+    return `${text(cap.type)}=${text(cap.perm)}`;
+  });
+  const admin = doc.system === true || doc.system === "true" ||
+    doc.admin === true || doc.admin === "true" ||
+    caps.some((c) => /^(users|buckets)=(\*|write|read, write)$/.test(c));
+  const accessKeys = list(doc.keys).map((k) => text(obj(k).access_key))
+    .filter(Boolean);
+  return {
+    account: {
+      access: uid,
+      role: admin ? "admin" : "user",
+      userId: 0,
+      groupId: 0,
+      projectId: 0,
+    },
+    accessKeys,
+  };
+}
+
+/** radosgw `GET /admin/bucket` to bucket names, sorted. */
+export function parseRgwBucketNames(body: string): string[] {
+  const doc = json(body, "bucket list");
+  return list(doc).map(text).filter(Boolean).sort();
+}
+
+/** radosgw `GET /admin/bucket?bucket=` to the owning user id. */
+export function parseRgwBucketOwner(body: string): string {
+  return required(obj(json(body, "bucket info")).owner, "a bucket's owner");
+}
+
+/**
+ * S3 `GET /` (ListAllMyBuckets) to buckets: every one is the caller's own,
+ * so each is marked as root-owned; a plain S3 endpoint has no other owner
+ * to report.
+ */
+export function parseListAllMyBuckets(body: string): Bucket[] {
+  const root = parseRoot(body, "ListAllMyBucketsResult");
+  const names: string[] = [];
+  for (const container of list(root.Buckets)) {
+    for (const raw of list(obj(container).Bucket)) {
+      names.push(required(obj(raw).Name, "a bucket's Name"));
+    }
+  }
+  return names.sort().map((name) => ({ name, owner: "", ownerIsRoot: true }));
+}

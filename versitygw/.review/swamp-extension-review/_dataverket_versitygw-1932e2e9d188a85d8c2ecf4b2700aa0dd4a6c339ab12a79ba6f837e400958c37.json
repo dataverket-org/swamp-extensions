@@ -1,0 +1,22 @@
+{
+  "extension": "@dataverket/versitygw",
+  "version": "2026.10.05.1",
+  "reviewedAt": "2026-10-05T13:44:03Z",
+  "dimensions": [
+    {"id": "credentials-secrets", "verdict": "pass", "note": "The radosgw user answer carries every S3 and Swift secret; parseRgwUser copies named fields only and a test asserts no RGW-SECRET marker survives. The root key pair is masked in errors as before; the live run against the testbed found no secret in .swamp/. The two push warnings are the names of variables, not values."},
+    {"id": "logging-quality", "verdict": "pass", "note": "Entry and completion lines per method unchanged; findings logged at warning with rule, subject and detail."},
+    {"id": "error-handling", "verdict": "pass", "note": "A backend without adminUrl is refused by the policy check; radosgw's listing-for-an-unknown-subresource is read as absent for ownershipControls, CORS and tags only, through one helper that rethrows anything else; JSON that is not JSON names what was expected."},
+    {"id": "testing-completeness", "verdict": "pass", "note": "90 tests: the three lock rules on every combination of versioning and lock and both retention modes, allowedLockModes named and not, the radosgw parsers with secrets present, the plain S3 listing; a live inventory and check on both new backends against a radosgw seeded with the five cases."},
+    {"id": "idempotency-resilience", "verdict": "pass", "note": "Read-only everywhere; an inventory twice yields identical records, as the existing test asserts."},
+    {"id": "api-contracts", "verdict": "pass", "note": "radosgw admin ops: GET /user?list, /user?uid=, /bucket, /bucket?bucket=, signed SigV4 service s3, answers as observed live; ListAllMyBuckets parsed with Buckets/Bucket nesting; settings subresources unchanged."},
+    {"id": "resource-management", "verdict": "pass", "note": "One request per user and per bucket on rgw, sequential; no files or handles beyond the existing CA client cache."},
+    {"id": "published-surface-hygiene", "verdict": "pass", "note": "README examples use example.org hosts and 127.0.0.1; the smoke README names the testbed's user names, which are throwaway."},
+    {"id": "schema-strictness", "verdict": "pass", "note": "backend is an enum; allowedLockModes an enum array; inventory records gain backend and region, both required."},
+    {"id": "lifetime-gc", "verdict": "pass", "note": "Unchanged: infinite with garbageCollection 10 on every spec."},
+    {"id": "crud-completeness", "verdict": "na", "note": "A read-only audit model by design; no create, update or delete."},
+    {"id": "preflight-checks", "verdict": "pass", "note": "root-key-named now also refuses a non-s3 backend without adminUrl; admin-reachable lists buckets through whichever backend is set."},
+    {"id": "instance-names", "verdict": "pass", "note": "Unchanged: account-, bucket-, settings- prefixes with numbered suffixes on collisions."},
+    {"id": "data-access", "verdict": "pass", "note": "check reads its own inventory by tag through queryData as before."},
+    {"id": "version-upgrades", "verdict": "pass", "note": "Model version 2026.10.05.1 with an upgrades entry; existing definitions need no change, backend defaults to versitygw. The default rule set changes: versioning-enabled is out, the three lock rules are in; a definition that wants the old behaviour names rules explicitly, which the README says."}
+  ]
+}

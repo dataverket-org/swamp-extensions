@@ -1,11 +1,16 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
+import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.13";
 import {
   parseAccounts,
   parseAcl,
   parseBuckets,
   parseCors,
+  parseListAllMyBuckets,
   parseObjectLock,
   parseOwnership,
+  parseRgwBucketNames,
+  parseRgwBucketOwner,
+  parseRgwUser,
+  parseRgwUserIds,
   parseTags,
   parseVersioning,
   ROOT,
@@ -125,4 +130,61 @@ Deno.test("parseOwnership, parseCors and parseTags read their fixtures", () => {
     site: "hov1",
     writer: "cnpg",
   });
+});
+
+Deno.test("radosgw admin ops answers become the same records", () => {
+  assertEquals(
+    parseRgwUserIds(
+      '{"keys":["incusdev","incusdev-admin"],"truncated":false,"count":2}',
+    ),
+    ["incusdev", "incusdev-admin"],
+  );
+  const plain = parseRgwUser(
+    '{"user_id":"incusdev","system":false,"admin":false,"caps":[],"keys":[{"user":"incusdev","access_key":"AKIAPLAIN","secret_key":"RGW-SECRET-plain"}],"swift_keys":[{"secret_key":"RGW-SECRET-swift"}]}',
+  );
+  assertEquals(plain.account, {
+    access: "incusdev",
+    role: "user",
+    userId: 0,
+    groupId: 0,
+    projectId: 0,
+  });
+  assertEquals(plain.accessKeys, ["AKIAPLAIN"]);
+  assertEquals(JSON.stringify(plain).includes("RGW-SECRET"), false);
+  const byCaps = parseRgwUser(
+    '{"user_id":"ops","system":false,"caps":[{"type":"users","perm":"*"}],"keys":[]}',
+  );
+  assertEquals(byCaps.account.role, "admin");
+  const bySystem = parseRgwUser('{"user_id":"sys","system":true,"keys":[]}');
+  assertEquals(bySystem.account.role, "admin");
+  assertEquals(parseRgwBucketNames('["public","locked-gov","plain"]'), [
+    "locked-gov",
+    "plain",
+    "public",
+  ]);
+  assertEquals(
+    parseRgwBucketOwner(
+      '{"bucket":"locked-comp","owner":"incusdev","tenant":""}',
+    ),
+    "incusdev",
+  );
+  assertThrows(() => parseRgwBucketOwner('{"bucket":"x"}'), Error, "owner");
+  assertThrows(() => parseRgwUserIds("<html>"), Error, "expected JSON");
+});
+
+Deno.test("a plain S3 bucket listing is the caller's own buckets", () => {
+  const body =
+    '<?xml version="1.0"?><ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+    "<Owner><ID>incusdev</ID></Owner><Buckets><Bucket><Name>b</Name></Bucket><Bucket><Name>a</Name></Bucket></Buckets>" +
+    "</ListAllMyBucketsResult>";
+  assertEquals(parseListAllMyBuckets(body), [
+    { name: "a", owner: "", ownerIsRoot: true },
+    { name: "b", owner: "", ownerIsRoot: true },
+  ]);
+  assertEquals(
+    parseListAllMyBuckets(
+      "<ListAllMyBucketsResult><Buckets></Buckets></ListAllMyBucketsResult>",
+    ),
+    [],
+  );
 });

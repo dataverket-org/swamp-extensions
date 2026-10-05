@@ -1,10 +1,11 @@
 /**
  * `@dataverket/versitygw` — the rules `check` applies to one inventory.
  *
- * Pure functions over records: no gateway, no clock. Which rules run, and which
- * account roles pass, are arguments; the defaults describe a gateway with one
- * `user` account per writer that owns the bucket of the same name, and no
- * bucket anyone may read.
+ * Pure functions over records: no gateway, no clock. Which rules run, which
+ * account roles pass and which lock modes are acceptable are arguments; the
+ * defaults describe a gateway with one `user` account per writer that owns the
+ * bucket of the same name, no bucket anyone may read, versioning only where
+ * object lock requires it, and GOVERNANCE as the only default retention.
  *
  * @module
  */
@@ -18,11 +19,34 @@ export const RULES = [
   "account-owns-nothing",
   "account-role",
   "versioning-enabled",
+  "versioning-without-lock",
+  "lock-without-versioning",
+  "lock-mode",
   "bucket-public",
 ] as const;
 
 /** A rule's name. */
 export type Rule = typeof RULES[number];
+
+/**
+ * The rules a gateway is checked against by default. `versioning-enabled`
+ * is not among them: a bucket created with object lock is versioned because
+ * S3 requires it, and the three lock rules say what is wrong instead. A
+ * gateway that is to hold no versioned bucket at all names it explicitly.
+ */
+export const DEFAULT_RULES = [
+  "bucket-owner-missing",
+  "bucket-owner-not-same-named",
+  "account-owns-nothing",
+  "account-role",
+  "versioning-without-lock",
+  "lock-without-versioning",
+  "lock-mode",
+  "bucket-public",
+] as const satisfies readonly Rule[];
+
+/** The retention modes object lock knows. */
+export const LOCK_MODES = ["GOVERNANCE", "COMPLIANCE"] as const;
 
 /** One thing `check` found. */
 export const FindingSchema = z.object({
@@ -41,10 +65,16 @@ export interface Inventory {
   settings: BucketSettings[];
 }
 
-/** The rule set and its one parameter. */
+/** The rule set and its parameters. */
 export interface RuleOptions {
   rules: readonly Rule[];
   allowedRoles: readonly string[];
+  /**
+   * Default retention modes the lock-mode rule accepts. COMPLIANCE retention
+   * can be shortened by nobody, the root account included, until it expires,
+   * so a bucket that defaults to it is a commitment a person makes on purpose.
+   */
+  allowedLockModes: readonly string[];
 }
 
 const ANYONE_GROUPS = [
@@ -160,13 +190,53 @@ export function findings(
   }
 
   for (const settings of inventory.settings) {
+    const locked = settings.objectLock?.enabled === true;
+    const versioned = settings.versioning !== "Off";
     if (on.has("versioning-enabled") && settings.versioning === "Enabled") {
       out.push({
         rule: "versioning-enabled",
         subject: settings.bucket,
-        detail: settings.objectLock?.enabled
+        detail: locked
           ? "versioning enabled, as object lock requires"
           : "versioning enabled",
+      });
+    }
+    if (on.has("versioning-without-lock") && versioned && !locked) {
+      out.push({
+        rule: "versioning-without-lock",
+        subject: settings.bucket,
+        detail: `versioning ${settings.versioning.toLowerCase()} ` +
+          "on a bucket without object lock: every non-current version stays until a client deletes it by id",
+      });
+    }
+    if (on.has("lock-without-versioning") && locked && !versioned) {
+      out.push({
+        rule: "lock-without-versioning",
+        subject: settings.bucket,
+        detail:
+          "object lock on an unversioned bucket: a locked object cannot be overwritten at all, " +
+          "which S3 never allows and versitygw permits",
+      });
+    }
+    if (
+      on.has("lock-mode") && locked && settings.objectLock?.mode &&
+      !options.allowedLockModes.includes(settings.objectLock.mode)
+    ) {
+      out.push({
+        rule: "lock-mode",
+        subject: settings.bucket,
+        detail: `default retention ${settings.objectLock.mode}` +
+          `${
+            settings.objectLock.days
+              ? ` for ${settings.objectLock.days} days`
+              : ""
+          }` +
+          `${
+            settings.objectLock.years
+              ? ` for ${settings.objectLock.years} years`
+              : ""
+          }` +
+          `, allowed: ${options.allowedLockModes.join(", ")}`,
       });
     }
     if (on.has("bucket-public")) {

@@ -79,21 +79,66 @@ rejects any other, which this model reports as `IncorrectRegion` with both
 regions named. `caFile` is for a gateway whose certificate a private CA signed;
 without it the system store is used.
 
+## Other backends
+
+The bucket settings and the rules over them are plain S3, so the same model type
+reads a Ceph radosgw, or any S3 endpoint, through `backend`:
+
+| `backend`   | Accounts and buckets                                                                                                                                         | Key pair                                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `versitygw` | The admin API, as above; the default                                                                                                                         | The root account                                                                                                                                |
+| `rgw`       | radosgw's admin ops API at `adminUrl`, `http://host:8000/admin`: users with their caps, buckets with their owners; the user holding the key pair is left out | An admin user with `users=read` and `buckets=read` caps, and the `system` flag, which is what lets it read other users' bucket settings over S3 |
+| `s3`        | No admin API and no accounts; `GET /` lists the key's own buckets, each marked root-owned                                                                    | Any key pair                                                                                                                                    |
+
+```sh
+swamp model create @dataverket/versitygw/gateway ceph \
+  --global-arg backend=rgw \
+  --global-arg adminUrl=http://ceph.example.org:8000/admin \
+  --global-arg s3Url=http://ceph.example.org:8000 \
+  --global-arg healthPath=/ \
+  --global-arg rootKeyFile=~/.config/ceph/admin.env \
+  --global-arg accessKeyName=AWS_ACCESS_KEY_ID \
+  --global-arg secretKeyName=AWS_SECRET_ACCESS_KEY
+```
+
+Neither backend has versitygw's health path: give `healthPath=/`, and the
+endpoint counts as reachable when it answers any status below 500. A user's role
+is `user`, or `admin` when it carries the `system` or `admin` flag or caps over
+users or buckets. radosgw answers a subresource it does not implement,
+`ownershipControls` among them, with the bucket's object listing; the model
+reads that as the setting being absent. On the `s3` backend `check` skips the
+account and owner rules, since there is nothing to read for them. Every
+inventory record names the backend and the region its records came from.
+Verified against the radosgw of an Incus and Ceph testbed on 2026-10-05.
+
 ## Checking an inventory
 
 `check` reads only the records its inventory wrote, found by the tag every one
 of them carries, so a bucket deleted since, or a record another run left, cannot
 enter the result. Without `inventoryId` it checks the latest inventory. The
-rules, and the one parameter they take, are arguments:
+rules, and the parameters they take, are arguments:
 
-| Rule                          | Finds                                                     |
-| ----------------------------- | --------------------------------------------------------- |
-| `bucket-owner-missing`        | A bucket whose owner is no longer an account              |
-| `bucket-owner-not-same-named` | A bucket owned by root, or by an account of another name  |
-| `account-owns-nothing`        | An account that owns no bucket                            |
-| `account-role`                | A role outside `allowedRoles` (default `["user"]`)        |
-| `versioning-enabled`          | Versioning enabled, saying when object lock requires it   |
-| `bucket-public`               | A policy allowing an anonymous principal, or a public ACL |
+| Rule                          | Finds                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `bucket-owner-missing`        | A bucket whose owner is no longer an account                                                                                    |
+| `bucket-owner-not-same-named` | A bucket owned by root, or by an account of another name                                                                        |
+| `account-owns-nothing`        | An account that owns no bucket                                                                                                  |
+| `account-role`                | A role outside `allowedRoles` (default `["user"]`)                                                                              |
+| `versioning-without-lock`     | Versioning enabled or suspended on a bucket without object lock: every non-current version stays until deleted by id            |
+| `lock-without-versioning`     | Object lock on an unversioned bucket, which S3 never allows and versitygw permits: a locked object cannot be overwritten at all |
+| `lock-mode`                   | A default retention mode outside `allowedLockModes` (default `["GOVERNANCE"]`)                                                  |
+| `versioning-enabled`          | Versioning enabled for any reason, object lock included; not on by default                                                      |
+| `bucket-public`               | A policy allowing an anonymous principal, or a public ACL                                                                       |
+
+Versioning and object lock are two settings that S3 ties together one way: a
+bucket with lock is versioned, because lock protects versions. The three lock
+rules judge each combination: versioning without lock is a bucket that keeps
+every old version for no stated reason; lock without versioning is a gateway
+quirk; and the default retention mode is the commitment to judge, since
+`COMPLIANCE` can be shortened by nobody, the root account included, until it
+expires. A gateway where compliance retention is wanted names it in
+`allowedLockModes`. `versioning-enabled` is the older, blunter rule, for a
+gateway meant to hold no versioned bucket at all; it is not in the defaults.
 
 ```yaml
 # a workflow step: fail the run when anything is found
@@ -109,8 +154,10 @@ rules, and the one parameter they take, are arguments:
 ```
 
 The defaults describe one layout: one `user` account per writer, owning the
-bucket of the same name, with versioning off and nothing public. A gateway laid
-out otherwise names its own rules.
+bucket of the same name, versioning only where object lock requires it,
+`GOVERNANCE` as the only default retention, and nothing public. A gateway laid
+out otherwise names its own rules: a radosgw where one user owns several buckets
+drops `bucket-owner-not-same-named`.
 
 ## Errors
 

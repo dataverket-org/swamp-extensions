@@ -116,8 +116,7 @@ Deno.test("check finds every seeded problem in the throwaway gateway", async () 
       "bucket-owner-not-same-named locked",
       "bucket-owner-not-same-named shared-scratch",
       "bucket-public shared-scratch",
-      "versioning-enabled locked",
-      "versioning-enabled shared-scratch",
+      "versioning-without-lock shared-scratch",
     ]);
     assertEquals(result.data.clean, false);
   });

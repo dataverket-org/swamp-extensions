@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/versitygw"
-version: "2026.09.30.3"
+version: "2026.10.05.1"
 description: >
   A versitygw S3 gateway for swamp, read over its admin API and its S3 API.
   Read-only.
@@ -14,7 +14,12 @@ description: >
   does all of that in one execution and tags every record with one id, and
   `check` applies rules to the records of one inventory: bucket owner missing or
   not the account of the same name, an account owning nothing, a role outside
-  the allowed set, versioning enabled, a bucket anyone may read.
+  the allowed set, versioning without object lock, lock without versioning, a
+  default retention mode outside the allowed set, a bucket anyone may read.
+
+  The same type reads a Ceph radosgw through its admin ops API (`backend: rgw`)
+  or any S3 endpoint with one key pair (`backend: s3`); the bucket settings and
+  the rules over them are plain S3 and the same everywhere.
 
   versitygw has no read-only admin role, so every admin call signs with the
   root key pair, from exactly one source: a file of NAME=value lines read at
@@ -44,4 +49,7 @@ labels:
   - audit
   - inventory
   - admin
+  - radosgw
+  - ceph
+  - object-lock
 dependencies: []

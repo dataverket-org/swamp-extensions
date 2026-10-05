@@ -33,7 +33,11 @@ Deno.test("a gateway laid out by the rule is clean", () => {
         { name: "b", owner: "b", ownerIsRoot: false },
       ],
       settings: [settings({ bucket: "a" }), settings({ bucket: "b" })],
-    }, { rules: RULES, allowedRoles: ["user"] }),
+    }, {
+      rules: RULES,
+      allowedRoles: ["user"],
+      allowedLockModes: ["GOVERNANCE"],
+    }),
     [],
   );
 });
@@ -50,30 +54,56 @@ Deno.test("each rule fires on its own case", () => {
     ],
     settings: [settings({ bucket: "a", versioning: "Enabled" })],
   };
-  assertEquals(findings(inventory, { rules: RULES, allowedRoles: ["user"] }), [
-    { rule: "account-owns-nothing", subject: "idle", detail: "owns no bucket" },
-    {
-      rule: "account-role",
-      subject: "ops",
-      detail: "role admin, allowed: user",
-    },
-    {
-      rule: "bucket-owner-missing",
-      subject: "gone",
-      detail: "owner nobody is not an account",
-    },
-    {
-      rule: "bucket-owner-not-same-named",
-      subject: "r",
-      detail: "owned by the root account",
-    },
-    { rule: "bucket-owner-not-same-named", subject: "x", detail: "owned by a" },
-    { rule: "versioning-enabled", subject: "a", detail: "versioning enabled" },
-  ]);
+  assertEquals(
+    findings(inventory, {
+      rules: RULES,
+      allowedRoles: ["user"],
+      allowedLockModes: ["GOVERNANCE"],
+    }),
+    [
+      {
+        rule: "account-owns-nothing",
+        subject: "idle",
+        detail: "owns no bucket",
+      },
+      {
+        rule: "account-role",
+        subject: "ops",
+        detail: "role admin, allowed: user",
+      },
+      {
+        rule: "bucket-owner-missing",
+        subject: "gone",
+        detail: "owner nobody is not an account",
+      },
+      {
+        rule: "bucket-owner-not-same-named",
+        subject: "r",
+        detail: "owned by the root account",
+      },
+      {
+        rule: "bucket-owner-not-same-named",
+        subject: "x",
+        detail: "owned by a",
+      },
+      {
+        rule: "versioning-enabled",
+        subject: "a",
+        detail: "versioning enabled",
+      },
+      {
+        rule: "versioning-without-lock",
+        subject: "a",
+        detail:
+          "versioning enabled on a bucket without object lock: every non-current version stays until a client deletes it by id",
+      },
+    ],
+  );
   assertEquals(
     findings(inventory, {
       rules: ["account-role"],
       allowedRoles: ["user", "admin"],
+      allowedLockModes: ["GOVERNANCE"],
     }),
     [],
   );
@@ -112,5 +142,92 @@ Deno.test("publicReasons finds anonymous policy principals and public groups", (
       },
     })),
     ["ACL grants READ to http://acs.amazonaws.com/groups/global/AllUsers"],
+  );
+});
+
+Deno.test("the lock rules tell versioning from object lock", () => {
+  const base = { accounts: [], buckets: [] };
+  const lock = (mode?: string, extra: Record<string, unknown> = {}) => ({
+    enabled: true,
+    ...(mode ? { mode } : {}),
+    ...extra,
+  });
+  const run = (
+    s: Parameters<typeof settings>[0],
+    allowedLockModes = ["GOVERNANCE"],
+  ) =>
+    findings({ ...base, settings: [settings(s)] }, {
+      rules: [
+        "versioning-without-lock",
+        "lock-without-versioning",
+        "lock-mode",
+      ],
+      allowedRoles: ["user"],
+      allowedLockModes,
+    }).map((f) => f.rule);
+  // Versioning because lock requires it: nothing to say.
+  assertEquals(
+    run({ bucket: "b", versioning: "Enabled", objectLock: lock() }),
+    [],
+  );
+  // Versioning for any other reason, suspended included.
+  assertEquals(run({ bucket: "b", versioning: "Enabled" }), [
+    "versioning-without-lock",
+  ]);
+  assertEquals(run({ bucket: "b", versioning: "Suspended" }), [
+    "versioning-without-lock",
+  ]);
+  // Lock on an unversioned bucket, which versitygw permits and S3 does not.
+  assertEquals(run({ bucket: "b", versioning: "Off", objectLock: lock() }), [
+    "lock-without-versioning",
+  ]);
+  // Default retention modes: GOVERNANCE passes, COMPLIANCE is a finding unless named.
+  assertEquals(
+    run({
+      bucket: "b",
+      versioning: "Enabled",
+      objectLock: lock("GOVERNANCE", { days: 7 }),
+    }),
+    [],
+  );
+  assertEquals(
+    run({
+      bucket: "b",
+      versioning: "Enabled",
+      objectLock: lock("COMPLIANCE", { years: 1 }),
+    }),
+    ["lock-mode"],
+  );
+  assertEquals(
+    run(
+      { bucket: "b", versioning: "Enabled", objectLock: lock("COMPLIANCE") },
+      ["GOVERNANCE", "COMPLIANCE"],
+    ),
+    [],
+  );
+  // Lock with no default retention has no mode to judge.
+  assertEquals(
+    run({ bucket: "b", versioning: "Enabled", objectLock: lock() }),
+    [],
+  );
+});
+
+Deno.test("the lock-mode detail names the mode, the span and what is allowed", () => {
+  const out = findings({
+    accounts: [],
+    buckets: [],
+    settings: [settings({
+      bucket: "b",
+      versioning: "Enabled",
+      objectLock: { enabled: true, mode: "COMPLIANCE", years: 1 },
+    })],
+  }, {
+    rules: ["lock-mode"],
+    allowedRoles: ["user"],
+    allowedLockModes: ["GOVERNANCE"],
+  });
+  assertEquals(
+    out[0].detail,
+    "default retention COMPLIANCE for 1 years, allowed: GOVERNANCE",
   );
 });

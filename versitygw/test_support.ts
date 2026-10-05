@@ -94,6 +94,7 @@ export function keyFile(): { path: string; cleanup(): void } {
 /** Global arguments pointing at the throwaway gateway's recorded answers. */
 export function globalArgs(overrides: Partial<GlobalArgs> = {}): GlobalArgs {
   return {
+    backend: "versitygw",
     adminUrl: "http://127.0.0.1:17071",
     s3Url: "http://127.0.0.1:17070",
     region: "us-east-1",
