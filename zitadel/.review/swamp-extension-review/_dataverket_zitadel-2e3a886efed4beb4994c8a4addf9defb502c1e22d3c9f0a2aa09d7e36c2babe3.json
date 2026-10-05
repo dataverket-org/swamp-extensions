@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/zitadel",
+  "version": "2026.10.05.1",
+  "reviewedAt": "2026-10-05T14:40:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Nothing new carries a secret: the role assertions and login UI are booleans and an enum, the token lifetimes are policy durations. The two rule warnings (passwordCheckLifetime, PasswordResetArgs) are name matches on a lifetime and an argument type, not values; the reset code itself stays in its sensitive spec as before."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "The one new log line is the 403 warning on the token lifetimes, naming no key and no value. ensureOidc logs the application's name and action as before; no body is logged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "loginBaseUri without loginVersion v2 is refused before any call. Only an HTTP 403 on /admin/v1/settings/oidc is downgraded to a warning, matched on the message realCaller formats and the test fake mirrors; a 500 fails the run, unit tested. Zitadel's own refusals keep their status and message."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "106 unit tests (9 new: bodies sent, loginVersion omitted for instance, refusal before any call, redirectSet carry-over, record shaping, lifetimes in seconds, 403 warning, 500 failure, duration parsing). Smoke suite 227 checks on Zitadel 4.15.3 from the working tree, none failed, with new checks in batches D, F, K and P and the self-test workflow asserting idTokenRoleAssertion. The new settings read ran against the real instance with the reader key."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensureOidc with the same flags twice reports unchanged through Zitadel's No changes answer, smoke checked. An update that omits loginVersion resets the client to the instance default on 4.15.3, verified live, so instance converges rather than leaving an earlier choice; documented in the argument."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Fields taken from the instance's own OpenAPI documents: ManagementServiceAddOIDCAppBody and UpdateOIDCAppConfigBody carry idTokenRoleAssertion, accessTokenRoleAssertion, idTokenUserinfoAssertion and loginVersion {loginV1:{}|loginV2:{baseUri}}; AdminService GetOIDCSettings answers v1OIDCSettings with four protobuf durations. Both verified live on 4.15.3."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One more GET per settings read; no new long-lived handles, timers or caches."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README app table and settings section updated; manifest version bumped; .review committed with the release; smoke/machinekey ignored. The manifest description does not name the token lifetimes, which is a detail of one read and not a type."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "loginVersion is an enum of three, the assertions are boolArg with false defaults, so an unknown version or a non-boolean is refused by the schema (smoke D). loginBaseUri is a free string; Zitadel validates the URI and the smoke suite does not exercise a malformed one."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "oidc-tokens is infinite with garbageCollection 10, as every other settings kind; one fixed instance name, so it overwrites rather than accumulates."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "The token lifetimes are read-only on purpose: instance-wide policy writes through the v1 Admin API stay out of this extension, as the module doc says. The app fields are set by ensureOidc and preserved by redirectSet, which is the whole of what the app type writes to an OIDC configuration."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "The shared checks are unchanged and still run before every method."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "oidc-tokens-instance is fixed, since the values are instance-wide whatever organization was asked about; app records keep project-name and app-name keys."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Every new field is a plain attribute a workflow reads with data.latest; the self-test workflow asserts idTokenRoleAssertion that way and ran twice in batch N."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "All seven types move to 2026.10.05.1 with an upgrade entry each; attributes pass through unchanged, since no argument changed meaning and the new ones default to the old behaviour. Batch P migrated a definition from 2026.09.29.1 and reported the type's version afterwards."
+    }
+  ]
+}
