@@ -44,6 +44,7 @@ Deno.test("branchesList reports branches and the default, or nothing for an empt
   const tool = await branchesList(api, "acme", { name: "tool" });
   assertEquals(tool.branches, ["master", "dev"]);
   assertEquals(tool.defaultBranch, "master");
+  assertEquals(tool.truncated, false);
   const empty = await branchesList(api, "acme", { name: "empty" });
   assertEquals(empty.defaultBranch, "");
 });
@@ -66,11 +67,31 @@ Deno.test("branchesList follows every page, so a late branch is not missed", asy
   const big = await branchesList(api, "acme", { name: "big" });
   assertEquals(big.branches.length, 101);
   assertEquals(big.branches.includes("late"), true);
+  assertEquals(big.truncated, false);
   // a short page ends it; no third request
   assertEquals(
     calls.filter((c) => c.path.includes("page=3")).length,
     0,
   );
+});
+
+Deno.test("branchesList says so when the page cap is reached with a full last page", async () => {
+  // 100 full pages is the cap; the record must not pass that off as the whole list
+  const replies: Record<string, { status: number; body?: unknown }> = {
+    "GET /repos/acme/huge": { status: 200, body: { default_branch: "b0" } },
+  };
+  for (let page = 1; page <= 100; page++) {
+    replies[`GET /repos/acme/huge/branches?per_page=100&page=${page}`] = {
+      status: 200,
+      body: Array.from({ length: 100 }, (_, i) => ({ name: `p${page}b${i}` })),
+    };
+  }
+  const { api, calls } = fakeApi(replies);
+  const huge = await branchesList(api, "acme", { name: "huge" });
+  assertEquals(huge.branches.length, 10000);
+  assertEquals(huge.truncated, true);
+  // the cap holds: no page 101
+  assertEquals(calls.some((c) => c.path.includes("page=101")), false);
 });
 
 Deno.test("defaultBranchEnsure patches only when the default differs and the branch exists", async () => {

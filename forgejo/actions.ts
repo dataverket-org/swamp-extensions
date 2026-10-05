@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the forge operations that reach beyond a single
+ * Adds to `@dataverket/forgejo` the forge operations that reach beyond a single
  * repository: Actions secrets (repo- or org-scoped, write-only), a runner
  * registration token, runner listing and pruning, and a verify-first
  * repository rename.
@@ -326,9 +326,9 @@ interface Ctx {
   ) => Promise<{ name: string }>;
 }
 
-/** Extension adding Actions secrets, runner registration and pruning, and renames to @thomas/forgejo. */
+/** Extension adding Actions secrets, runner registration and pruning, and renames. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     actionsSecret: {
       description: "An Actions secret's name and scope. Never the value.",

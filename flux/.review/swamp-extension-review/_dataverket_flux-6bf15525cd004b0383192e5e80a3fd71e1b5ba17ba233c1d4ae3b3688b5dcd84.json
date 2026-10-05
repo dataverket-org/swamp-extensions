@@ -1,0 +1,22 @@
+{
+  "extension": "@dataverket/flux",
+  "version": "2026.10.05.1",
+  "reviewedAt": "2026-10-05T17:20:31Z",
+  "dimensions": [
+    { "id": "credentials-secrets", "verdict": "pass", "note": "No credential is read or stored. kubeconfig is a path and context a name; kubectl and flux resolve access themselves. Nothing sensitive reaches a record or a log line." },
+    { "id": "logging-quality", "verdict": "pass", "note": "Every method logs at info on entry and completion with structured placeholders; a skipped source kind is logged by name." },
+    { "id": "error-handling", "verdict": "pass", "note": "A failing flux or kubectl command throws with the command and its stderr before anything is written; kubectl output that is not JSON is an error naming the command (upstream threw a bare SyntaxError); a single-object method without a namespace refuses by name before spawning. The source list rethrows anything that is not a missing CRD." },
+    { "id": "testing-completeness", "verdict": "pass", "note": "28 unit tests over a strict scripted spawn: argument building, JSON parsing, the three parsers with defaults and chartRef, list and reconcile flows, refusal without namespace, failing commands writing nothing, missing CRD skip and rethrow, the CLI checks, upgrades ending at the version. Not smoke-tested against a live cluster in this round; behaviour is upstream's, which fabrikk-infra has run since 2026-09-18, and the pull into fabrikk-infra is the live test." },
+    { "id": "idempotency-resilience", "verdict": "pass", "note": "list is a read. reconcile, suspend, resume and reset re-run safely and record what the object says afterwards; no partial state can be left behind because nothing is created." },
+    { "id": "api-contracts", "verdict": "pass", "note": "External calls are to the flux and kubectl CLIs, not HTTP. kubectl JSON is read defensively (missing spec, status, conditions, items). flux flags used: reconcile/suspend/resume with -n, --with-source and --reset, all in flux v2.1 and later. Resources are named by their full group so no other CRD can be matched." },
+    { "id": "resource-management", "verdict": "pass", "note": "Subprocess stdout and stderr are piped and fully read; no temporary files; no connections held." },
+    { "id": "published-surface-hygiene", "verdict": "pass", "note": "README and tests use example names and git.example.com; no real hosts, addresses or identifiers." },
+    { "id": "schema-strictness", "verdict": "pass", "note": "All z.object without passthrough; ref is a record of strings; conditions narrowed to the schema's fields before writing." },
+    { "id": "lifetime-gc", "verdict": "pass", "note": "Every spec has lifetime infinite and garbageCollection 10, resetResult 20." },
+    { "id": "crud-completeness", "verdict": "na", "note": "Deliberate scope: these types read and drive objects whose lifecycle lives in the git repository Flux reconciles from. No create, update or delete, as upstream." },
+    { "id": "preflight-checks", "verdict": "pass", "note": "Live checks that flux and kubectl run: on helmrelease through reset.ts, on kustomization directly, kubectl only on source. Verified with swamp model validate in a scratch repo. Nothing policy-labelled: no method mutates a definition." },
+    { "id": "instance-names", "verdict": "pass", "note": "helmrelease and kustomization specs use namespace--name, source uses kind--namespace--name, resetResult uses namespace--name on its own spec. Mechanical check: every schema field is written by every writer of the spec, no written field is outside the schema, no placeholder values." },
+    { "id": "data-access", "verdict": "pass", "note": "No stored state is read back; every method reads the cluster, which is the source of truth here." },
+    { "id": "version-upgrades", "verdict": "pass", "note": "Each type carries one no-op upgrade to 2026.10.05.1, the fork version; globalArguments are unchanged from @ginger_pappa/flux 2026.06.09.1, so a model moved by editing type and typeVersion is stamped on its first run." }
+  ]
+}

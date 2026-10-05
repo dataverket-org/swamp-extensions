@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the deletion of an organization, which upstream
+ * Adds to `@dataverket/forgejo` the deletion of an organization, which upstream
  * has no method for (`org_ensure` only creates and converges). Verify-first,
  * and cautious: the organization is read before anything else, one that is
  * already gone is a no-op, and one that still holds repositories is refused,
@@ -99,9 +99,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding organization deletion to @thomas/forgejo. */
+/** Extension adding organization deletion. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     orgDelete: {
       description:

@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the push-mirror side that upstream lacks (its
+ * Adds to `@dataverket/forgejo` the push-mirror side that upstream lacks (its
  * `mirror_ensure` is a pull mirror, Forgejo fetching from elsewhere). A push
  * mirror makes Forgejo push a repository to a remote, here GitHub, on every
  * commit and on an interval. The remote credential is a vault reference,
@@ -341,9 +341,9 @@ export function staleMirrorRecords(
 const instance = (m: PushMirror) =>
   safeName(`${m.owner}:${m.repo}:push-mirror:${m.remoteName || "new"}`);
 
-/** Extension adding push mirrors (create, audit, sync now) to @thomas/forgejo. */
+/** Extension adding push mirrors (create, audit, sync now). */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     pushMirrorDelete: {
       description:

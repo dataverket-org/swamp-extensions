@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the repository units its `repo_ensure` does not
+ * Adds to `@dataverket/forgejo` the repository units its `repo_ensure` does not
  * reach: Actions, packages and projects. Each is a switch on the repository
  * (`has_actions` and friends in Forgejo's repository object), and a workflow
  * under `.forgejo/workflows/` runs only once Actions is on.
@@ -142,9 +142,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding repository units to @thomas/forgejo. */
+/** Extension adding repository units. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     repoUnits: {
       description:

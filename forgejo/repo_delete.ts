@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the deletion of a repository, which upstream has
+ * Adds to `@dataverket/forgejo` the deletion of a repository, which upstream has
  * no method for (`repo_archive` is the nearest). Verify-first, and cautious
  * by default: the repository is read before anything else, one that is
  * already gone is a no-op, and one with commits is refused unless
@@ -100,9 +100,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding repository deletion to @thomas/forgejo. */
+/** Extension adding repository deletion. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     repoDelete: {
       description:

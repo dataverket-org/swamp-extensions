@@ -11,10 +11,10 @@ independently:
 | `talosctl/`  | `@dataverket/talosctl`  | Talos machines through `talosctl`, with or without Omni; fork of `@magistr/talos-node` (MIT) plus `volumes` |
 | `omnictl/`   | `@dataverket/omnictl`   | Omni through `omnictl`: fleet inventory and join tokens (Reader), config patches and machine-set membership (Operator); fork of `@mccormick/omni` (MIT) |
 | `sops/`      | `@dataverket/sops`      | SOPS + age vault, one encrypted file per secret, writable with public keys only; fork of `@zocc/sops-age` (Apache-2.0) |
-| `forgejo/`   | `@dataverket/forgejo`   | Forgejo past one repository, extending `@thomas/forgejo`: Actions secrets, runners, push mirrors, PR assignment, repository units and delete |
-| `github/`    | `@dataverket/github`    | Repository settings `@goodcraft/github` does not reach: branches, default-branch convergence, verify-first delete |
+| `forgejo/`   | `@dataverket/forgejo`   | Forgejo over its REST API, one type: orgs, repositories, mirrors both ways, pull requests, webhooks, Actions secrets and runners, issues and labels, verify-first deletes; fork of `@thomas/forgejo` (MIT) merged with our former add-ons |
+| `github/`    | `@dataverket/github`    | GitHub repositories, releases, pull requests and repository settings, one type; fork of `@goodcraft/github` (MIT) merged with our former add-ons |
 | `forgejo-github-mirror/` | `@dataverket/forgejo-github-mirror` | One workflow, `@dataverket/mirror-forgejo-to-github`: every repository of a Forgejo org push-mirrored to a GitHub org, with an audit |
-| `flux/`      | `@dataverket/flux`      | A reconcile with `--reset` for Flux HelmReleases stuck at `RetriesExceeded`, extending `@ginger_pappa/flux/helmrelease` |
+| `flux/`      | `@dataverket/flux`      | Flux HelmReleases, Kustomizations and sources, three types, with a `reset` for a release stuck at `RetriesExceeded`; fork of `@ginger_pappa/flux` (MIT) merged with our former add-on |
 | `versitygw/` | `@dataverket/versitygw` | A versitygw S3 gateway, read-only: accounts without their secrets, buckets and owners, every bucket's settings, TLS health, and a `check` of one inventory |
 | `zitadel/`   | `@dataverket/zitadel`   | Zitadel over its API: projects, applications, users, grants and orgs, one model type each; fork of `@thomas/zitadel` (MIT) widened to full CRUD |
 

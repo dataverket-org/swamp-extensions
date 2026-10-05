@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` labels, of an organization or of a repository:
+ * Adds to `@dataverket/forgejo` labels, of an organization or of a repository:
  * `label_ensure` and `label_list`. Upstream has no method for them.
  *
  * An organization's labels are shared by every repository in it, which is
@@ -286,9 +286,9 @@ async function record(context: Ctx, labels: LabelRecord[]) {
   return { dataHandles: handles };
 }
 
-/** Extension adding labels to @thomas/forgejo. */
+/** Extension adding labels. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     label: {
       description:

@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` the assignment of a pull request, which upstream
+ * Adds to `@dataverket/forgejo` the assignment of a pull request, which upstream
  * `pr_ensure` does not take. Every login is checked against the forge first,
  * so a typo is an error and not a silently empty assignee list, and the PR
  * must exist and be open. `PATCH /repos/{owner}/{repo}/pulls/{index}` with
@@ -160,9 +160,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding pull-request assignment to @thomas/forgejo. */
+/** Extension adding pull-request assignment. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     prAssignment: {
       description:

@@ -2,6 +2,9 @@ MIT License
 
 Copyright (c) 2026 Jan Ivar Beddari
 
+Copyright (c) 2026 ginger_pappa (original work: @ginger_pappa/flux,
+https://github.com/mrjson79/civilsnut-labb)
+
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
 the Software without restriction, including without limitation the rights to

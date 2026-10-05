@@ -1,5 +1,5 @@
 /**
- * Pre-flight checks for `@thomas/forgejo`. The methods in this package
+ * Pre-flight checks for `@dataverket/forgejo`. The methods in this package
  * create secrets, rename repositories and delete mirrors and repositories,
  * and until one of them runs there is nothing that says the token still
  * works or that `apiUrl` points where the author meant.
@@ -43,9 +43,9 @@ export function apiUrlProblem(apiUrl: string | undefined): string | undefined {
   return undefined;
 }
 
-/** Adds the pre-flight checks to `@thomas/forgejo`. */
+/** The pre-flight checks of `@dataverket/forgejo`. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   methods: [],
   checks: [{
     "forgejo-api-url-shape": {

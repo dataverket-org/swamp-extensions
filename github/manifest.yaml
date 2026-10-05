@@ -1,28 +1,35 @@
 manifestVersion: 1
 name: "@dataverket/github"
-version: "2026.09.29.2"
+version: "2026.10.05.1"
 description: >
-  Repository settings for swamp that `@goodcraft/github`'s `ensureRepo` does
-  not cover, as an extension to it.
+  GitHub repositories, releases, pull requests and repository settings for
+  swamp, over the REST API. One model type, `@dataverket/github`.
 
-  Three methods: `branches_list` reports the branches a repository has and
-  which one is default, `default_branch_ensure` converges the default branch,
-  and `repo_delete` removes a repository verify-first. The second reports
-  unchanged when the default already matches and refuses to point at a branch
-  the repository does not have, so the failure names the cause rather than
-  leaving a repository pointed at nothing. The third is a no-op for a
-  repository already absent, and `expectMirrorOf` refuses one whose
-  description does not mention the given text.
+  Forked from `@goodcraft/github` 2026.06.14.1 (MIT, copyright GoodCraft) and
+  merged with the former `@dataverket/github` add-on, so one package owns the
+  type. The upstream methods keep their names: `sync` lists the owner's
+  repositories and proves the token; `ensureRepo`, `ensureRelease` and
+  `openPr` are idempotent, find existing state first and default to
+  `dryRun: true`, so a run plans before it writes.
 
-  This is what a push mirror needs. GitHub rejects a mirror push from a
-  repository whose default branch is not the one being pushed, with "refusing
-  to delete the current branch", and the fix is to converge GitHub's default
-  first. Talks to the GitHub REST API with the model's token, which is never
-  recorded.
+  The merged add-on supplies what `ensureRepo` does not reach:
+  `branches_list` reports the branches a repository has and which one is
+  default, `default_branch_ensure` converges the default branch and refuses to
+  point at a branch the repository does not have, and `repo_delete` removes a
+  repository verify-first, a no-op when it is already absent, with
+  `expectMirrorOf` refusing one whose description does not mention the given
+  text. This is what a push mirror needs: GitHub rejects a mirror push from a
+  repository whose default branch is not the one being pushed, and the fix is
+  to converge GitHub's default first.
+
+  A live pre-flight check proves the token is still accepted and can see the
+  model's owner. The token comes from a vault expression and is never
+  recorded or logged.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest
 models:
+  - github.ts
   - repo_settings.ts
 workflows: []
 vaults: []
@@ -35,6 +42,9 @@ labels:
   - github
   - git
   - forge
+  - repos
+  - releases
+  - pull-requests
   - branches
   - mirroring
 dependencies: []

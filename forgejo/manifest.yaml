@@ -1,44 +1,42 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.05.2"
+version: "2026.10.05.3"
 description: >
-  Forgejo operations for swamp that reach past a single repository, as
-  extensions to `@thomas/forgejo`.
+  Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
+  a scoped access token, in one model type, `@dataverket/forgejo`.
 
-  Ten modules add what upstream has no method for. `actions` covers Actions
-  secrets (repo- or org-scoped, write-only), a runner registration token,
-  runner listing, runner pruning and a verify-first repository rename.
-  `push_mirror` adds the push side of mirroring — upstream's `mirror_ensure`
-  is a pull mirror, Forgejo fetching from elsewhere, while a push mirror makes
-  Forgejo push a repository to a remote on every commit and on an interval.
-  `pull_mirror` adds `pull_mirror_ensure`, a pull mirror that sends only the
-  settings it is given, so the forge's own defaults decide visibility and
-  the rest, and an existing mirror is changed only in what is named.
-  `topics` adds `repo_topics_ensure`, the labels Forgejo shows on a
-  repository, additive unless asked to be exact.
-  `pr_assign` assigns a pull request, checking every login against the forge
-  first so a typo is an error rather than a silently empty list.
-  `repo_delete` deletes a repository, verify-first: one already gone is a
-  no-op and one with commits is refused unless asked for explicitly, because
-  Forgejo has no undelete. `org_delete` deletes an organization the same way:
-  one already gone is a no-op and one that still holds repositories is refused.
-  `issues` adds `issue_ensure`, which files several issues in one call unless
-  one of the same exact title exists, open or closed, with labels by name,
-  `issue_labels_ensure` for an existing issue or pull request, and
-  `issue_list`. `labels` adds `label_ensure` and `label_list` for an
-  organization's shared labels or one repository's.
+  A fork of `@thomas/forgejo` 2026.09.04.2 (MIT, copyright Thomas Elliott)
+  merged with the methods dataverket had published as add-ons to it. The
+  upstream base is kept: find-or-create organizations and repositories and
+  converge their settings, collaborators and branch protection, pull mirrors
+  from GitHub with a fleet-wide sync audit, pull requests opened, inspected
+  with mergeability and CI state, and merged behind a guard, and webhooks
+  audited or repointed without ever touching their secret. The base's own
+  reachable check is dropped in favour of this package's two, and a check
+  without the schema's defaults no longer aborts its request at once.
 
-  Install alongside `@thomas/forgejo`; the methods land on its model types and
-  read its `apiUrl` and token. Two pre-flight checks come with them: a policy
-  check that `apiUrl` is the forge's base URL without a trailing `/api/v1`,
-  and a live one that the token is still accepted. No secret value is recorded or logged: the
-  registration token is marked sensitive, so swamp vaults it and records a
-  reference, and a mirror's remote credential is sent to Forgejo once and
-  never stored.
+  The former add-ons, now part of the same type: Actions secrets (repo- or
+  org-scoped, write-only), a runner registration token, runner listing and
+  pruning, a verify-first repository rename, push mirrors (ensure, list,
+  delete, sync now), a pull mirror that sends only the settings it is given,
+  repository topics and units, pull-request assignment with every login
+  checked first, issues filed by title with labels by name, labels of an
+  organization or a repository, and verify-first deletes of a repository and
+  of an organization: one already gone is a no-op, one with commits or with
+  repositories is refused unless asked for explicitly, because Forgejo has no
+  undelete.
+
+  Two pre-flight checks: a policy check that `apiUrl` is the forge's base URL
+  without a trailing `/api/v1`, and a live one that the token is still
+  accepted. No secret value is recorded or logged: the registration token is
+  marked sensitive, so swamp vaults it and records a reference; a mirror's
+  source or remote credential is sent to Forgejo once and never stored; and a
+  token the forge echoes back in an error is masked before it becomes data.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest
 models:
+  - forgejo.ts
   - actions.ts
   - checks.ts
   - push_mirror.ts
@@ -68,4 +66,7 @@ labels:
   - topics
   - issues
   - labels
+  - mirrors
+  - pull-requests
+  - webhooks
 dependencies: []

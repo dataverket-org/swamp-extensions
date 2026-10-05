@@ -1,7 +1,7 @@
 /**
- * Adds to `@goodcraft/github` the repository settings its `ensureRepo` does
- * not cover: the branches a repository has, and converging its default
- * branch. Both are needed by the forge-to-GitHub mirroring workflow: a push
+ * The repository settings of `@dataverket/github` that `ensureRepo` in
+ * `github.ts` does not cover: the branches a repository has, converging its
+ * default branch, and a verify-first delete. Both are needed by the forge-to-GitHub mirroring workflow: a push
  * mirror from a repository whose default branch is not `main` is rejected
  * by GitHub as long as GitHub's default branch is one the mirror does not
  * carry ("refusing to delete the current branch").
@@ -31,7 +31,7 @@ export interface ApiResult {
 /** The authenticated-call seam; swapped for a fake in tests. */
 export type Caller = (call: ApiCall) => Promise<ApiResult>;
 
-/** The @goodcraft/github global arguments this extension reads. */
+/** The `@dataverket/github` global arguments this module reads. */
 export interface GlobalArgs {
   token: string;
   owner: string;
@@ -107,6 +107,9 @@ const BranchesInfo = z.object({
   repo: z.string(),
   defaultBranch: z.string().describe("Empty for a repository with no commits"),
   branches: z.array(z.string()),
+  truncated: z.boolean().describe(
+    "True when the repository has more branches than the page cap allows listing",
+  ),
   timestamp: z.string(),
 });
 const DefaultBranchInfo = z.object({
@@ -127,7 +130,7 @@ const DefaultBranchArgs = z.object({
   ),
 });
 
-/** Every branch of a repository (first 100) and its current default. */
+/** Every branch of a repository and its current default. */
 export async function branchesList(
   api: Caller,
   owner: string,
@@ -140,6 +143,10 @@ export async function branchesList(
   // branch exists from this list, so a repository past one page would have a
   // branch it really has refused as missing.
   const branches: string[] = [];
+  // Stays true only if every page up to the cap was full: then there may be
+  // more, and the record says so instead of passing a shortfall off as the
+  // whole list.
+  let truncated = true;
   for (let page = 1; page <= MAX_BRANCH_PAGES; page++) {
     const list = (await call(api, {
       method: "GET",
@@ -150,13 +157,17 @@ export async function branchesList(
       const n = String(b.name ?? "");
       if (n.length > 0) branches.push(n);
     }
-    if (items.length < 100) break;
+    if (items.length < 100) {
+      truncated = false;
+      break;
+    }
   }
   return {
     owner,
     repo: a.name,
     defaultBranch: branches.length ? String(repo.default_branch ?? "") : "",
     branches,
+    truncated,
     timestamp: new Date().toISOString(),
   };
 }
@@ -260,9 +271,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding branch listing and default-branch convergence to @goodcraft/github. */
+/** Branch listing, default-branch convergence, delete and a live check on `@dataverket/github`. */
 export const extension = {
-  type: "@goodcraft/github",
+  type: "@dataverket/github",
   checks: [{
     "github-token-accepted": {
       description:

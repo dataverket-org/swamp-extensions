@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/github",
+  "version": "2026.10.05.1",
+  "reviewedAt": "2026-10-05T17:15:50Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "token is sensitive in the global schema and comes from a vault expression; the fetch transport in repo_settings.ts masks the token wherever a response echoes it; Octokit receives it only as auth; nothing writes or logs it."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs its outcome at info with structured placeholders; repo_delete also logs on entry. The four upstream methods log completion only, kept as upstream wrote them. No secret reaches a log property."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "getRepo narrows to status 404 and rethrows everything else; the REST transport throws before any writeResource with method, path, status and GitHub's message; repoDelete treats 404 as absent and surfaces any other 4xx/5xx through call()."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "The three repo_settings methods and the check are tested with a strict fake caller and a mocked fetch, success and failure paths, including the new page-cap truncation. The four Octokit methods (sync, ensureRepo, ensureRelease, openPr) have no injectable client and are tested only through their pure planning helpers and argument defaults, as upstream shipped them. Follow-up: a client seam for the base methods."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "ensureRepo, ensureRelease and openPr find existing state first and report exists; default_branch_ensure reports unchanged; repo_delete treats absent as a no-op. Kept from upstream: ensureRepo creates only, so an existing repository's description, visibility and topics are never converged, and a topics call that fails after creation leaves a repository without topics that a rerun reports as exists. Deliberate upstream scope, noted in the README."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Octokit paginate reads every page of repositories, releases and pulls; branches_list follows every page up to a cap and now records truncated when the cap was reached with a full last page. Response fields are read defensively with fallbacks. No Retry-After handling; GitHub secondary rate limits surface as errors rather than being retried."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "No files, handles or cloud resources beyond what is recorded; every request carries the method's abort signal."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and tests use example-org, example-tool, acme and forge.example.net; no real hosts, IPs or account identifiers."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Upstream's .passthrough() on the repos item schema was removed; every schema is a plain z.object."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All seven resource specs declare lifetime infinite and garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "Repositories: sync, ensureRepo (create), default_branch_ensure (one setting), repo_delete. Releases and pull requests: create only, no update or delete, as upstream designed; a release or pull request stays a manual act once opened. Narrow by intent, not an oversight."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "github-token-accepted (label live) runs before every method and proves the token and that it can see the owner; skippable with --skip-check-label live."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated: repos; repo-<slug>; release-<slug>-<slug>; pull-<slug>-<slug>-<slug>; <owner>:<repo>:delete; <owner>:<repo>:branches; <owner>:<repo>:default-branch. Each spec is written by one method and no name collides across specs."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back; every method queries GitHub directly."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Version 2026.10.05.1 with a no-op upgrades entry ending at the model's version; the global arguments are unchanged from @goodcraft/github, so a migrated definition is stamped and not transformed. Tested."
+    }
+  ]
+}

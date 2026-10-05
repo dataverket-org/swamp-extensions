@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` a repository's topics, the labels Forgejo shows
+ * Adds to `@dataverket/forgejo` a repository's topics, the labels Forgejo shows
  * on a repository and searches by (`upstream-mirror`, say). Upstream has no
  * method for them. Additive by default: the topics given are added and any
  * others are kept; `exact` makes the given list the whole set.
@@ -116,9 +116,9 @@ interface Ctx {
   ): Promise<{ name: string }>;
 }
 
-/** Extension adding repository topics to @thomas/forgejo. */
+/** Extension adding repository topics. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     repoTopics: {
       description:

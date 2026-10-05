@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo-github-mirror"
-version: "2026.09.30.1"
+version: "2026.10.05.1"
 description: >
   One workflow, `@dataverket/mirror-forgejo-to-github`, that mirrors every
   repository of a Forgejo org to a GitHub org and keeps it that way.
@@ -17,9 +17,8 @@ description: >
 
   The forge, both orgs and both tokens are inputs. A token is named by vault
   and key, never passed as a value, because workflow inputs are recorded in
-  cleartext in the run history. Built on `@thomas/forgejo` and
-  `@goodcraft/github` with the methods `@dataverket/forgejo` and
-  `@dataverket/github` add to them; all four are dependencies.
+  cleartext in the run history. Built on `@dataverket/forgejo` and
+  `@dataverket/github`, both dependencies.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 paths:
   base: manifest
@@ -40,7 +39,5 @@ labels:
   - forge
   - mirroring
 dependencies:
-  - "@thomas/forgejo"
-  - "@goodcraft/github"
   - "@dataverket/forgejo"
   - "@dataverket/github"

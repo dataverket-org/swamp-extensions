@@ -1,14 +1,16 @@
 /**
- * Adds to `@ginger_pappa/flux/helmrelease` the one action the upstream model
- * lacks: a reconcile with `--reset`, which clears a HelmRelease's failure
+ * Adds to `@dataverket/flux/helmrelease` the one recovery action the base
+ * type lacks: a reconcile with `--reset`, which clears a HelmRelease's failure
  * counters so helm-controller tries again after `RetriesExceeded`. Without it a
  * release whose first install timed out stays failed forever, even when every
  * workload it created is healthy.
  *
- * Same shape as upstream, and deliberately so: `flux` and `kubectl` are run
- * by name from PATH, exactly as `@ginger_pappa/flux` runs them, so a pinned
+ * Same shape as the base type, and deliberately so: `flux` and `kubectl` are
+ * run by name from PATH, exactly as `helmrelease.ts` runs them, so a pinned
  * toolchain is arranged the same way for the base type and for this method.
- * The object is read back with kubectl and the outcome recorded.
+ * The object is read back with kubectl and the outcome recorded. Written as
+ * an extension before the base type was forked in, and kept as one: it
+ * carries the two CLI pre-flight checks the base type's methods rely on.
  *
  * @module
  */
@@ -167,9 +169,9 @@ export async function cliProblem(
   }
 }
 
-/** Adds `reset` to `@ginger_pappa/flux/helmrelease`. */
+/** Adds `reset` and the CLI checks to `@dataverket/flux/helmrelease`. */
 export const extension = {
-  type: "@ginger_pappa/flux/helmrelease",
+  type: "@dataverket/flux/helmrelease",
   checks: [{
     "flux-cli-available": {
       description: "The flux binary runs and reports its version",

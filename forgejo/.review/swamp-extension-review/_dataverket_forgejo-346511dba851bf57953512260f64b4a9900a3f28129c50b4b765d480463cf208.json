@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.10.05.3",
+  "reviewedAt": "2026-10-05T17:20:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "token is sensitive in the schema; mirror source and remote credentials and Actions secret values are write-only; runner registration token is sensitive; both transports (api.ts and the forked base's realCaller) mask a token the forge echoes back, the base one added in this version. The push-time credentials-sensitive-field warnings are the heuristic matching variable names in actions.ts and push_mirror.ts, not unmasked fields."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "structured placeholders throughout; no secret in any log property."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "every HTTP error carries method, path, status and the forge's message; writes happen after the calls that can fail."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "the 21 former add-on methods keep their strict-fake unit tests (negative paths included). The forked base is covered by forgejo_test.ts for type, version, upgrade chain, method inventory, check removal, timeout fallback (negative: a run without httpTimeoutMs is not aborted; a given timeout fires) and token masking, all through health. The other 19 upstream methods carry no unit tests of their own, as upstream shipped none; follow-up."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "every *_ensure probes first and reports created/updated/unchanged; deletes are no-ops when already gone; archive/unarchive are no-ops in the requested state."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "listings paginate to a short page; search and bare-array responses both handled; response fields are read defensively; user_search is the one documented cap (50)."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "fetch timeouts cleared in finally; no files or handles."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and tests use example.com, example-org and placeholder tokens; no IP literals."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "no passthrough anywhere."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "every spec has lifetime and garbageCollection; userMatch is 7d, the rest infinite."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "with the merge, the type now has create/converge (ensure), read (list, status, get) and verify-first delete for repositories, organizations, push mirrors and runners."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "forgejo-api-url-shape (policy) and forgejo-token-accepted (live); upstream's reachable check dropped as a duplicate; verified registered in a scratch repo via swamp model validate."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "the base's safeName turns / into : and PR names carry #index; the add-ons' specs are their own and do not collide with the nine base specs (asserted in forgejo_test.ts that no add-on method name shadows a base method)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "the base reads nothing back. push_mirror_list's drift report lists every stored pushMirror record of the model through the optional, guarded context.dataRepository.findAllForModel, because a spec-wide listing has no single instance for readResource to name; unchanged from 2026.10.05.2 and reviewed there."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "upgrades ends at 2026.10.05.3 with a no-op entry; global arguments unchanged from upstream, so an instance migrates by changing its type line."
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` a repository's issues: `issue_ensure`, which
+ * Adds to `@dataverket/forgejo` a repository's issues: `issue_ensure`, which
  * files the issues given unless an issue of the same title already exists,
  * `issue_labels_ensure` and `issue_list`. Upstream has no method for issues.
  *
@@ -333,9 +333,9 @@ async function record(context: Ctx, issues: Issue[]) {
   return { dataHandles: handles };
 }
 
-/** Extension adding issues to @thomas/forgejo. */
+/** Extension adding issues. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     issue: {
       description:

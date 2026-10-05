@@ -1,5 +1,5 @@
 /**
- * Adds to `@thomas/forgejo` a pull mirror that states only what it is asked
+ * Adds to `@dataverket/forgejo` a pull mirror that states only what it is asked
  * to. Upstream's `mirror_ensure` defaults `private` to true and `lfs`,
  * `service` and the interval to its own values, and converges an existing
  * mirror to those defaults on every run, so running it without `private`
@@ -213,7 +213,7 @@ interface Ctx {
 
 /** Extension adding a pull mirror that sends only what it is given. */
 export const extension = {
-  type: "@thomas/forgejo",
+  type: "@dataverket/forgejo",
   resources: {
     pullMirror: {
       description:

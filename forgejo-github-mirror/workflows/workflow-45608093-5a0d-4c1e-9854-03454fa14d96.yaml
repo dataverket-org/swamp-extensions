@@ -71,16 +71,12 @@ jobs:
         description: Every repository the token sees under the org, one record each.
         task:
           type: model_method
-          modelType: "@thomas/forgejo"
+          modelType: "@dataverket/forgejo"
           modelName: mirror-forgejo-to-github-forgejo
           methodName: repo_list
           globalArgs:
             apiUrl: ${{ inputs.forgejoUrl }}
             token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
-            # the type's reachable check reads this without the schema's default and
-            # aborts at once when it is unset:
-            # github.com/thomas-elliott/swamp-extensions/issues/3
-            httpTimeoutMs: 30000
           inputs:
             owner: ${{ inputs.forgejoOwner }}
   - name: github
@@ -102,7 +98,7 @@ jobs:
         concurrency: 1
         task:
           type: model_method
-          modelType: "@goodcraft/github"
+          modelType: "@dataverket/github"
           modelName: mirror-forgejo-to-github-github
           methodName: ensureRepo
           globalArgs:
@@ -134,13 +130,12 @@ jobs:
         concurrency: 1
         task:
           type: model_method
-          modelType: "@thomas/forgejo"
+          modelType: "@dataverket/forgejo"
           modelName: mirror-forgejo-to-github-forgejo
           methodName: push_mirror_ensure
           globalArgs:
             apiUrl: ${{ inputs.forgejoUrl }}
             token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
-            httpTimeoutMs: 30000
           inputs:
             owner: ${{ inputs.forgejoOwner }}
             name: ${{ self.repo.attributes.name }}
@@ -167,7 +162,7 @@ jobs:
         allowFailure: true
         task:
           type: model_method
-          modelType: "@goodcraft/github"
+          modelType: "@dataverket/github"
           modelName: mirror-forgejo-to-github-github
           methodName: default_branch_ensure
           globalArgs:
@@ -188,13 +183,12 @@ jobs:
         description: Every push mirror under the org with its last push and last error.
         task:
           type: model_method
-          modelType: "@thomas/forgejo"
+          modelType: "@dataverket/forgejo"
           modelName: mirror-forgejo-to-github-forgejo
           methodName: push_mirror_list
           globalArgs:
             apiUrl: ${{ inputs.forgejoUrl }}
             token: ${{ vault.get(inputs.forgejoTokenVault, inputs.forgejoTokenKey) }}
-            httpTimeoutMs: 30000
           inputs:
             owner: ${{ inputs.forgejoOwner }}
       - name: all-mirrors-healthy

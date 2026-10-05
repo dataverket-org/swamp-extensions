@@ -1,6 +1,6 @@
 /**
  * The Forgejo REST transport these extensions share: a `fetch` caller
- * authenticated with a `@thomas/forgejo` model's token, and a `call` wrapper
+ * authenticated with a `@dataverket/forgejo` model's token, and a `call` wrapper
  * that turns any 4xx/5xx into an error carrying Forgejo's own message. Kept
  * apart from the feature modules so each one imports the transport and not
  * another feature.
@@ -24,7 +24,7 @@ export interface ApiResult {
 /** The authenticated-call seam; swapped for a fake in tests. */
 export type Caller = (call: ApiCall) => Promise<ApiResult>;
 
-/** The @thomas/forgejo global arguments this extension reads. */
+/** The `@dataverket/forgejo` global arguments these modules read. */
 export interface GlobalArgs {
   apiUrl: string;
   token: string;
