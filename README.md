@@ -24,10 +24,14 @@ Develop against a swamp repository by loading every extension from source:
 swamp extension source add ~/kode/swamp-extensions/*
 ```
 
-Publish one extension from its directory:
+Publish one extension from its directory. The adversarial review report that
+`swamp extension push` checks lives in the extension's own `.review/`, so it is
+committed with the release and survives any machine; the dry run prints the
+report's exact path there:
 
 ```sh
-cd openstack && swamp extension push manifest.yaml --dry-run
+cd openstack && export SWAMP_EXTENSION_REVIEW_DIR=$PWD/.review
+swamp extension push manifest.yaml --dry-run
 ```
 
 The canonical repository is on the dataverket forge; this GitHub repository is

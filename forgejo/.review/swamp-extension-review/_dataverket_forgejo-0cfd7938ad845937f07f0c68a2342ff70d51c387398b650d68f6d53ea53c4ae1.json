@@ -1,0 +1,22 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.10.05.1",
+  "reviewedAt": "2026-10-05T11:05:00Z",
+  "dimensions": [
+    {"id": "credentials-secrets", "verdict": "pass", "note": "issues.ts and labels.ts carry no secret; bodies and labels are public text; the token stays in api.ts, which redacts it from any response."},
+    {"id": "logging-quality", "verdict": "pass", "note": "One line per issue or label with its action; no body is logged."},
+    {"id": "error-handling", "verdict": "pass", "note": "Forgejo errors surface through call() with its message; an unknown label name is refused before any issue is filed and names every missing label; a create answered without an id is an error. A 200 that is not a list yields an empty list, so an odd answer could lead to a duplicate issue rather than a failure; accepted, covered by a test."},
+    {"id": "testing-completeness", "verdict": "pass", "note": "23 new tests over fake callers: create, exact-title match across states, prefix non-match, batch, duplicates and blanks refused before any call, forge refusal surfaced, second-page match, label resolution and refusal, color normalization, patch in place, prune, pagination, org versus user owner."},
+    {"id": "idempotency-resilience", "verdict": "pass", "note": "Title and name are the identities; a rerun reports unchanged and sends nothing. Labels are patched in place, keeping their id and the issues they are on."},
+    {"id": "api-contracts", "verdict": "pass", "note": "Paths and bodies follow Forgejo's swagger: repos/{owner}/{repo}/issues with type=issues and q; orgs/{org}/labels and repos/{owner}/{repo}/labels; CreateIssueOption.labels as ids; color sent with #, compared without."},
+    {"id": "resource-management", "verdict": "pass", "note": "Pages of 50 followed to at most 20, so a repository past 1000 issues of one search or 1000 labels is not fully read; a match beyond that could lead to a duplicate issue. Accepted for the forge's size."},
+    {"id": "published-surface-hygiene", "verdict": "pass", "note": "README table and two sections added; manifest lists both modules and bumps the version; every export carries JSDoc."},
+    {"id": "schema-strictness", "verdict": "pass", "note": "zod schemas with bounds: titles 1 to 255, label names 1 to 50, descriptions 200, colors six hex digits, at most 20 issues and 100 labels per call; duplicate titles or names refused by refine."},
+    {"id": "lifetime-gc", "verdict": "pass", "note": "issue and label resources are infinite with garbageCollection 20, as topics are."},
+    {"id": "crud-completeness", "verdict": "pass", "note": "Labels: create, update, list, and delete only with prune. Issues: create and list; closing and editing are deliberately absent, since the title is the identity and a closed issue is reported, never reopened."},
+    {"id": "preflight-checks", "verdict": "pass", "note": "The shared checks of checks.ts (apiUrl shape, token accepted) apply to the type; nothing new to check."},
+    {"id": "instance-names", "verdict": "pass", "note": "<owner>:<repo>:issue:<number> and <owner>:<repo or org>:label:<name>, with slashes and whitespace folded to colons."},
+    {"id": "data-access", "verdict": "pass", "note": "writeResource only; no reads of other models' data."},
+    {"id": "version-upgrades", "verdict": "pass", "note": "Two new modules and two new resource types; nothing existing changes shape. 2026.10.04.2 to 2026.10.05.1."}
+  ]
+}
