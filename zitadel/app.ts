@@ -96,6 +96,21 @@ const EnsureOidcArgs = z.object({
   devMode: boolArg(false).describe(
     "Relax redirect-URI checks for non-https hosts. Test instances only.",
   ),
+  idTokenRoleAssertion: boolArg(false).describe(
+    "Assert the project roles the user holds into the ID token; what a groups claim is made of",
+  ),
+  accessTokenRoleAssertion: boolArg(false).describe(
+    "Assert them into the access token as well; only a jwt access token carries claims",
+  ),
+  idTokenUserinfoAssertion: boolArg(false).describe(
+    "Assert the userinfo claims (profile, email) into the ID token",
+  ),
+  loginVersion: z.enum(["instance", "v1", "v2"]).default("instance").describe(
+    "The login UI this client sends a person to; instance sends no choice, so the instance default applies",
+  ),
+  loginBaseUri: z.string().optional().describe(
+    "With loginVersion v2: the login UI's base URI, when it is not the instance's own",
+  ),
 });
 const EnsureApiArgs = z.object({
   project: ProjectRef,
@@ -161,20 +176,43 @@ const WRITABLE_OIDC = [
   "idTokenRoleAssertion",
   "idTokenUserinfoAssertion",
   "clockSkew",
+  "accessTokenRoleAssertion",
   "additionalOrigins",
   "skipNativeAppSuccessPage",
   "backChannelLogoutUri",
+  "loginVersion",
 ];
+
+/**
+ * The `loginVersion` field of an OIDC write: `{loginV1: {}}`, `{loginV2:
+ * {baseUri}}`, or no field at all for `instance`.
+ */
+function loginVersionBody(
+  version: "instance" | "v1" | "v2",
+  baseUri: string | undefined,
+): Record<string, unknown> {
+  if (version === "v1") return { loginVersion: { loginV1: {} } };
+  if (version === "v2") {
+    return { loginVersion: { loginV2: baseUri ? { baseUri } : {} } };
+  }
+  return {};
+}
 
 /** Applications of a Zitadel project. */
 export const model = {
   type: "@dataverket/zitadel/app",
-  version: "2026.10.01.3",
+  version: "2026.10.05.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
       description:
         "An auth method of basic reads as basic; keyJsonFile expands a leading ~/; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.05.1",
+      description:
+        "ensureOidc takes idTokenRoleAssertion, accessTokenRoleAssertion, idTokenUserinfoAssertion, loginVersion and loginBaseUri, all off by default as before; redirectSet carries the role assertion and the login UI over; the app record reads them. No existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -292,6 +330,9 @@ export const model = {
         context: ModelContext,
       ): Promise<MethodResult> => {
         const globalArgs = context.globalArgs;
+        if (args.loginBaseUri !== undefined && args.loginVersion !== "v2") {
+          throw new Error("loginBaseUri needs loginVersion v2");
+        }
         const project = await resolveProject(globalArgs, args.project);
         const projectId = str(project.id);
         const projectName = str(project.name) || projectId;
@@ -312,6 +353,10 @@ export const model = {
             "accessTokenType",
           ),
           devMode: args.devMode,
+          idTokenRoleAssertion: args.idTokenRoleAssertion,
+          accessTokenRoleAssertion: args.accessTokenRoleAssertion,
+          idTokenUserinfoAssertion: args.idTokenUserinfoAssertion,
+          ...loginVersionBody(args.loginVersion, args.loginBaseUri),
         };
         const timestamp = nowIso();
         const existing = await findAppByName(globalArgs, projectId, args.name);

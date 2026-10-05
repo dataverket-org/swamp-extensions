@@ -11,6 +11,8 @@ holds   "a reader key lists the users" "$names | index(\"user-kari-selftest\") !
   ro-user list
 holds   "a reader key reads the instance's settings" '[.dataArtifacts[].attributes.scope] | index("instance") != null' \
   ro-settings read instance=true
+holds   "a reader key reads the OIDC token lifetimes" '[.dataArtifacts[] | select(.name == "oidc-tokens-instance") | .attributes.refreshTokenSeconds] | last > 0' \
+  ro-settings read instance=true
 holds   "a reader key reads the organization and its managers" "$names | map(startswith(\"manager-\")) | any" \
   ro-org managerList
 holds   "a reader key reads what an execution may name" "$names | index(\"catalog-service\") != null" \

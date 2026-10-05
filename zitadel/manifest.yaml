@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/zitadel"
-version: "2026.10.01.3"
+version: "2026.10.05.1"
 description: >
   Zitadel for swamp, over its API: seven model types, one per resource, with
   the whole life cycle of each.

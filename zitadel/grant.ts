@@ -63,12 +63,18 @@ const DeleteArgs = z.object({
 /** Zitadel user grants. */
 export const model = {
   type: "@dataverket/zitadel/grant",
-  version: "2026.10.01.3",
+  version: "2026.10.05.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
       description:
         "list names a grant by username and project name, as ensure does, and forgets the id-named record it wrote before; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.05.1",
+      description:
+        "Released with the app and settings changes of this version; nothing in this type changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

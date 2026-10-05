@@ -57,6 +57,11 @@ Deno.test("ensureOidc treats Zitadel's 'No changes' as idempotent", async () => 
       responseTypes: ["code"],
       accessTokenType: "bearer",
       devMode: false,
+      idTokenRoleAssertion: false,
+      accessTokenRoleAssertion: false,
+      idTokenUserinfoAssertion: false,
+      loginVersion: "instance",
+      loginBaseUri: undefined,
     }, context);
     assertEquals(written.map((w) => w.spec), ["app", "app-credential"]);
     assertEquals(written[0].data.action, "unchanged");
@@ -93,6 +98,11 @@ Deno.test("ensureOidc stores the client secret once, on create", async () => {
       responseTypes: ["code"],
       accessTokenType: "bearer",
       devMode: false,
+      idTokenRoleAssertion: false,
+      accessTokenRoleAssertion: false,
+      idTokenUserinfoAssertion: false,
+      loginVersion: "instance",
+      loginBaseUri: undefined,
     }, context);
     const credential = written.find((w) => w.spec === "app-credential");
     assertEquals(credential?.data.clientSecret, "once-only");
@@ -324,4 +334,186 @@ Deno.test("an application that is neither OIDC nor API gets no auth method", () 
   const bare = shapeApp("1", { id: "3", name: "bare" }, "observed", "t");
   assertEquals(saml.authMethod, undefined);
   assertEquals(bare.authMethod, undefined);
+});
+
+const OIDC_CREATE = `POST /management/v1/projects/${PROJECT.id}/apps/oidc`;
+
+/** The kubelogin client as decision 015 wants it: roles in the ID token, v2 login UI. */
+function ensureKubelogin(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    project: "fabrikk",
+    name: "kubelogin",
+    redirectUris: ["http://localhost:8000"],
+    postLogoutUris: [],
+    appType: "native" as const,
+    authMethod: "none" as const,
+    grantTypes: ["authorization_code" as const],
+    responseTypes: ["code" as const],
+    accessTokenType: "bearer" as const,
+    devMode: false,
+    idTokenRoleAssertion: true,
+    accessTokenRoleAssertion: false,
+    idTokenUserinfoAssertion: false,
+    loginVersion: "v2" as const,
+    loginBaseUri: undefined,
+    ...overrides,
+  };
+}
+
+Deno.test("ensureOidc sends the role assertion and the login UI it was given", async () => {
+  let body: Record<string, unknown> | undefined;
+  const fake = installFake((call) => {
+    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
+    if (line(call) === APP_SEARCH) return page([]);
+    if (line(call) === OIDC_CREATE) {
+      body = call.body as Record<string, unknown>;
+      return { appId: OIDC_APP.id, clientId: "client" };
+    }
+    if (line(call) === APP_GET) return { app: OIDC_APP };
+    return undefined;
+  });
+  const { context } = makeContext();
+  try {
+    await model.methods.ensureOidc.execute(
+      ensureKubelogin({ loginBaseUri: "https://login.example.org" }),
+      context,
+    );
+    assertEquals(body?.idTokenRoleAssertion, true);
+    assertEquals(body?.accessTokenRoleAssertion, false);
+    assertEquals(body?.loginVersion, {
+      loginV2: { baseUri: "https://login.example.org" },
+    });
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("ensureOidc with the instance's login UI sends no loginVersion at all", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const fake = installFake((call) => {
+    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
+    if (line(call) === APP_SEARCH) return page([]);
+    if (line(call) === OIDC_CREATE) {
+      bodies.push(call.body as Record<string, unknown>);
+      return { appId: OIDC_APP.id, clientId: "client" };
+    }
+    if (line(call) === APP_GET) return { app: OIDC_APP };
+    return undefined;
+  });
+  const { context } = makeContext();
+  try {
+    await model.methods.ensureOidc.execute(
+      ensureKubelogin({ loginVersion: "instance" }),
+      context,
+    );
+    await model.methods.ensureOidc.execute(
+      ensureKubelogin({ loginVersion: "v1" }),
+      context,
+    );
+    assertEquals(bodies.length, 2);
+    assert(!("loginVersion" in bodies[0]));
+    assertEquals(bodies[1].loginVersion, { loginV1: {} });
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("a login base URI without the v2 login UI is refused before any call", async () => {
+  const fake = installFake(() => undefined);
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () =>
+        model.methods.ensureOidc.execute(
+          ensureKubelogin({
+            loginVersion: "instance",
+            loginBaseUri: "https://login.example.org",
+          }),
+          context,
+        ),
+      Error,
+      "loginBaseUri needs loginVersion v2",
+    );
+    assertEquals(fake.calls.length, 0);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("redirectSet carries the role assertions and the login UI over", async () => {
+  const configured = {
+    ...OIDC_APP,
+    oidcConfig: {
+      ...(OIDC_APP.oidcConfig as Record<string, unknown>),
+      idTokenRoleAssertion: true,
+      accessTokenRoleAssertion: true,
+      loginVersion: { loginV2: { baseUri: "https://login.example.org" } },
+    },
+  };
+  let body: Record<string, unknown> | undefined;
+  const fake = installFake((call) => {
+    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
+    if (line(call) === APP_SEARCH) return page([configured]);
+    if (line(call) === OIDC_CONFIG) {
+      body = call.body as Record<string, unknown>;
+      return {};
+    }
+    if (line(call) === APP_GET) return { app: configured };
+    return undefined;
+  });
+  const { context } = makeContext();
+  try {
+    await model.methods.redirectSet.execute({
+      project: "fabrikk",
+      app: "kubelogin",
+      add: ["http://localhost:18000"],
+      remove: [],
+    }, context);
+    assertEquals(body?.idTokenRoleAssertion, true);
+    assertEquals(body?.accessTokenRoleAssertion, true);
+    assertEquals(body?.loginVersion, {
+      loginV2: { baseUri: "https://login.example.org" },
+    });
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("the app record reads the assertions and the login UI, absent as off and instance", () => {
+  const plain = shapeApp("p", OIDC_APP, "observed", "t");
+  assertEquals(plain.idTokenRoleAssertion, false);
+  assertEquals(plain.accessTokenRoleAssertion, false);
+  assertEquals(plain.loginVersion, "instance");
+  assertEquals(plain.loginBaseUri, undefined);
+  const v2 = shapeApp(
+    "p",
+    {
+      ...OIDC_APP,
+      oidcConfig: {
+        ...(OIDC_APP.oidcConfig as Record<string, unknown>),
+        idTokenRoleAssertion: true,
+        loginVersion: { loginV2: {} },
+      },
+    },
+    "observed",
+    "t",
+  );
+  assertEquals(v2.idTokenRoleAssertion, true);
+  assertEquals(v2.loginVersion, "v2");
+  assertEquals(v2.loginBaseUri, undefined);
+  const v1 = shapeApp(
+    "p",
+    {
+      ...OIDC_APP,
+      oidcConfig: { loginVersion: { loginV1: {} } },
+    },
+    "observed",
+    "t",
+  );
+  assertEquals(v1.loginVersion, "v1");
+  const api = shapeApp("p", API_APP, "observed", "t");
+  assertEquals(api.loginVersion, undefined);
+  assertEquals(api.idTokenRoleAssertion, undefined);
 });

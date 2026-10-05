@@ -14,6 +14,12 @@ refuses "an unknown user state is refused" \
 refuses "an unknown grant type is refused" \
   "invalid|expected one of|authorization_code" \
   zitadel-app ensureOidc project=selftest name=bogus-app 'grantTypes=["telepathy"]'
+refuses "a login base URI without the v2 login UI is refused before any call" \
+  "loginBaseUri needs loginVersion v2" \
+  zitadel-app ensureOidc project=selftest name=bogus-app loginBaseUri=https://login.example.org
+refuses "an unknown login UI version is refused" \
+  "invalid|expected one of|instance.*v1.*v2" \
+  zitadel-app ensureOidc project=selftest name=bogus-app loginVersion=v3
 refuses "an empty project name is refused" \
   "too small|at least 1|expected string to have|name" \
   zitadel-project ensure name=

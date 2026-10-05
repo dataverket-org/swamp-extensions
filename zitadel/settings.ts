@@ -48,6 +48,7 @@ import {
   LockoutSettings,
   LoginSettings,
   LoginTranslation,
+  OidcTokenSettings,
   PasswordComplexitySettings,
   PasswordExpirySettings,
   SecuritySettings,
@@ -99,6 +100,16 @@ function contextQuery(orgId: string | undefined, instance: boolean): string {
 function flag(value: unknown): boolean {
   return value === true;
 }
+
+/** The seconds a protobuf duration such as `43200s` names; absent otherwise. */
+export function durationSeconds(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = /^(\d+(?:\.\d+)?)s$/.exec(value);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** Where the instance's OIDC token lifetimes are read. */
+const OIDC_TOKENS_PATH = "/admin/v1/settings/oidc";
 
 /** One settings kind: where to read it and how to shape what comes back. */
 interface SettingsKind {
@@ -229,17 +240,30 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.10.01.3",
+  version: "2026.10.05.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
       description: "keyJsonFile expands a leading ~/; no argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
+    {
+      toVersion: "2026.10.05.1",
+      description:
+        "read also stores oidc-tokens-instance, the OIDC token lifetimes from the v1 Admin API; a key that may not read them gets a warning, not a failed run. No argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
   ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {
+    "oidc-tokens": {
+      description:
+        "How long access, ID and refresh tokens live, instance-wide; the refresh token lifetimes are the ones a policy decision is about",
+      schema: OidcTokenSettings,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
     login: {
       description:
         "How a login may be done, and how long each factor is trusted",
@@ -312,7 +336,7 @@ export const model = {
     read: {
       kind: "list" as const,
       description:
-        "Read every settings kind in force for one organization, or for the instance, and store one resource per kind — each saying whether the values are the organization's own or inherited. Read-only, one run, one lock.",
+        "Read every settings kind in force for one organization, or for the instance, and store one resource per kind — each saying whether the values are the organization's own or inherited. The instance's OIDC token lifetimes come with either read, as oidc-tokens-instance, when the key may read the instance. Read-only, one run, one lock.",
       arguments: ReadArgs,
       execute: async (
         args: z.infer<typeof ReadArgs>,
@@ -344,6 +368,51 @@ export const model = {
               orgId ?? (args.instance ? "instance" : "org"),
               { ...kind.shape(raw), ...settingsScope(raw, orgId, timestamp) },
             ),
+          );
+        }
+
+        // Token lifetimes are instance-wide and on the v1 Admin API, so a key
+        // that may read an organization but not the instance is told, and the
+        // organization's settings are still stored.
+        try {
+          const result = await call(globalArgs, {
+            method: "GET",
+            path: OIDC_TOKENS_PATH,
+          });
+          const raw = obj(result.body.settings);
+          handles.push(
+            ...await writeOne(
+              context,
+              "oidc-tokens",
+              "oidc-tokens",
+              "instance",
+              {
+                accessTokenLifetime: optStr(raw.accessTokenLifetime),
+                idTokenLifetime: optStr(raw.idTokenLifetime),
+                refreshTokenIdleExpiration: optStr(
+                  raw.refreshTokenIdleExpiration,
+                ),
+                refreshTokenExpiration: optStr(raw.refreshTokenExpiration),
+                accessTokenSeconds: durationSeconds(raw.accessTokenLifetime),
+                idTokenSeconds: durationSeconds(raw.idTokenLifetime),
+                refreshTokenIdleSeconds: durationSeconds(
+                  raw.refreshTokenIdleExpiration,
+                ),
+                refreshTokenSeconds: durationSeconds(
+                  raw.refreshTokenExpiration,
+                ),
+                scope: "instance",
+                orgId,
+                action: "observed",
+                timestamp,
+              },
+            ),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/HTTP 403/.test(message)) throw err;
+          context.logger.warning(
+            "this key may not read the instance's OIDC token lifetimes; no oidc-tokens record this run",
           );
         }
 

@@ -1,6 +1,11 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { model } from "./settings.ts";
-import { installFake, line, makeContext } from "./test_support.ts";
+import { durationSeconds, model } from "./settings.ts";
+import {
+  type FakeResponse,
+  installFake,
+  line,
+  makeContext,
+} from "./test_support.ts";
 
 const KINDS = [
   "GET /v2/settings/login",
@@ -13,12 +18,23 @@ const KINDS = [
   "GET /v2/settings/security",
   "GET /v2/settings",
   "GET /v2/settings/login/idps",
+  "GET /admin/v1/settings/oidc",
 ];
 
+const OIDC_TOKENS = {
+  settings: {
+    accessTokenLifetime: "43200s",
+    idTokenLifetime: "43200s",
+    refreshTokenIdleExpiration: "2592000s",
+    refreshTokenExpiration: "7776000s",
+  },
+};
+
 /** Answer every settings read with something shaped right. */
-function settingsFake(query: string) {
+function settingsFake(query: string, tokens: FakeResponse = OIDC_TOKENS) {
   return installFake((call) => {
     const path = line(call);
+    if (path === "GET /admin/v1/settings/oidc") return tokens;
     if (!path.startsWith("GET /v2/settings")) return undefined;
     if (!path.endsWith(query) && query !== "") return undefined;
     const bare = path.replace(query, "");
@@ -96,7 +112,10 @@ Deno.test("reading one organization scopes every call to it", async () => {
   const { context } = makeContext();
   try {
     await model.methods.read.execute({ orgId: "42", instance: false }, context);
-    assert(fake.calls.every((call) => call.path.includes("ctx.orgId=42")));
+    const scoped = fake.calls.filter((call) =>
+      !call.path.startsWith("/admin/")
+    );
+    assert(scoped.every((call) => call.path.includes("ctx.orgId=42")));
   } finally {
     fake.restore();
   }
@@ -107,7 +126,10 @@ Deno.test("reading the instance asks for the instance, not an organization", asy
   const { context } = makeContext();
   try {
     await model.methods.read.execute({ orgId: "42", instance: true }, context);
-    assert(fake.calls.every((call) => call.path.includes("ctx.instance=true")));
+    const scoped = fake.calls.filter((call) =>
+      !call.path.startsWith("/admin/")
+    );
+    assert(scoped.every((call) => call.path.includes("ctx.instance=true")));
     assert(fake.calls.every((call) => !call.path.includes("ctx.orgId")));
   } finally {
     fake.restore();
@@ -164,4 +186,73 @@ Deno.test("translations need a scope to be set for", async () => {
   } finally {
     fake.restore();
   }
+});
+
+Deno.test("read stores the OIDC token lifetimes as Zitadel reports them and in seconds", async () => {
+  const fake = settingsFake("?ctx.instance=true");
+  const { context, written } = makeContext();
+  try {
+    await model.methods.read.execute(
+      { orgId: undefined, instance: true },
+      context,
+    );
+    const tokens = written.find((w) => w.spec === "oidc-tokens");
+    assertEquals(tokens?.name, "oidc-tokens-instance");
+    assertEquals(tokens?.data.scope, "instance");
+    assertEquals(tokens?.data.refreshTokenExpiration, "7776000s");
+    assertEquals(tokens?.data.refreshTokenSeconds, 7776000);
+    assertEquals(tokens?.data.refreshTokenIdleSeconds, 2592000);
+    assertEquals(tokens?.data.accessTokenSeconds, 43200);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("a key that may not read the token lifetimes is warned, and the rest is still stored", async () => {
+  const fake = settingsFake("", {
+    status: 403,
+    body: { message: "permission denied" },
+  });
+  const { context, written, logs } = makeContext();
+  try {
+    await model.methods.read.execute(
+      { orgId: undefined, instance: false },
+      context,
+    );
+    assertEquals(written.find((w) => w.spec === "oidc-tokens"), undefined);
+    assert(written.some((w) => w.spec === "login"));
+    assert(
+      logs.some((l) =>
+        l.startsWith("warning:") && l.includes("token lifetimes")
+      ),
+    );
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("any other failure reading the token lifetimes fails the run", async () => {
+  const fake = settingsFake("", { status: 500, body: { message: "boom" } });
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () =>
+        model.methods.read.execute(
+          { orgId: undefined, instance: false },
+          context,
+        ),
+      Error,
+      "HTTP 500",
+    );
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("durationSeconds reads a protobuf duration and nothing else", () => {
+  assertEquals(durationSeconds("43200s"), 43200);
+  assertEquals(durationSeconds("0.5s"), 0.5);
+  assertEquals(durationSeconds("12h"), undefined);
+  assertEquals(durationSeconds(undefined), undefined);
+  assertEquals(durationSeconds(43200), undefined);
 });

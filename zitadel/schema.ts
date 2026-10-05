@@ -98,6 +98,21 @@ export const AppInfo = z.object({
   responseTypes: z.array(z.string()).optional(),
   grantTypes: z.array(z.string()).optional(),
   devMode: z.boolean().optional(),
+  idTokenRoleAssertion: z.boolean().optional().describe(
+    "Whether the project roles the user holds are asserted into the ID token",
+  ),
+  accessTokenRoleAssertion: z.boolean().optional().describe(
+    "Whether they are asserted into a JWT access token as well",
+  ),
+  idTokenUserinfoAssertion: z.boolean().optional().describe(
+    "Whether the userinfo claims are asserted into the ID token",
+  ),
+  loginVersion: z.string().optional().describe(
+    "The login UI this client sends a person to: instance, v1 or v2",
+  ),
+  loginBaseUri: z.string().optional().describe(
+    "The v2 login UI's base URI, when the client names one of its own",
+  ),
   action: Action,
   timestamp: z.string(),
 });
@@ -380,9 +395,37 @@ export function shapeApp(
     devMode: isOidc
       ? (typeof oidc.devMode === "boolean" ? oidc.devMode : false)
       : undefined,
+    idTokenRoleAssertion: isOidc
+      ? oidc.idTokenRoleAssertion === true
+      : undefined,
+    accessTokenRoleAssertion: isOidc
+      ? oidc.accessTokenRoleAssertion === true
+      : undefined,
+    idTokenUserinfoAssertion: isOidc
+      ? oidc.idTokenUserinfoAssertion === true
+      : undefined,
+    ...(isOidc ? loginVersionOf(oidc.loginVersion) : {}),
     action,
     timestamp,
   };
+}
+
+/**
+ * The login UI an OIDC client names, as Zitadel reports it: `{loginV1: {}}`,
+ * `{loginV2: {baseUri}}`, or nothing when the instance default applies.
+ */
+export function loginVersionOf(
+  raw: unknown,
+): { loginVersion: string; loginBaseUri?: string } {
+  const value = obj(raw);
+  if (value.loginV2 !== undefined) {
+    return {
+      loginVersion: "v2",
+      loginBaseUri: optStr(obj(value.loginV2).baseUri),
+    };
+  }
+  if (value.loginV1 !== undefined) return { loginVersion: "v1" };
+  return { loginVersion: "instance" };
 }
 
 /** Shape a v2 user record, flattening the human and machine halves. */
@@ -658,6 +701,32 @@ const settingsBase = {
   action: Action,
   timestamp: z.string(),
 };
+
+/** How long the tokens OIDC issues live; instance-wide, on the v1 Admin API. */
+export const OidcTokenSettings = z.object({
+  accessTokenLifetime: z.string().optional().describe(
+    "As Zitadel reports it, a protobuf duration such as 43200s",
+  ),
+  idTokenLifetime: z.string().optional(),
+  refreshTokenIdleExpiration: z.string().optional().describe(
+    "How long a refresh token stays valid unused",
+  ),
+  refreshTokenExpiration: z.string().optional().describe(
+    "How long a refresh token stays valid at all",
+  ),
+  accessTokenSeconds: z.number().optional(),
+  idTokenSeconds: z.number().optional(),
+  refreshTokenIdleSeconds: z.number().optional(),
+  refreshTokenSeconds: z.number().optional(),
+  scope: z.string().describe(
+    "Always instance: these apply to every organization",
+  ),
+  orgId: z.string().optional().describe(
+    "The organization asked about, when one was",
+  ),
+  action: Action,
+  timestamp: z.string(),
+});
 
 /** How a login may be done, and how long each factor is trusted for. */
 export const LoginSettings = z.object({

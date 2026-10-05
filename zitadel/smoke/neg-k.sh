@@ -8,6 +8,10 @@ holds "... and each says whether it is the org's own or the instance's" '[.dataA
   zitadel-settings read
 holds "the login settings carry the MFA flags an audit asks about" '[.dataArtifacts[] | select(.name | startswith("login-")) | .attributes | has("forceMfa")] | all(. == true)' \
   zitadel-settings read
+holds "the OIDC token lifetimes come with the instance's settings, in seconds too" '[.dataArtifacts[] | select(.name == "oidc-tokens-instance") | .attributes] | last | .scope == "instance" and (.refreshTokenExpiration | length) > 0 and .refreshTokenSeconds > 0 and .refreshTokenIdleSeconds > 0 and .accessTokenSeconds > 0' \
+  zitadel-settings read instance=true
+holds "... and with an organization's, since they apply to every organization" '[.dataArtifacts[] | select(.name == "oidc-tokens-instance") | .attributes.scope] | last == "instance"' \
+  zitadel-settings read
 holds "reading the instance is a different scope from reading an org" '[.dataArtifacts[] | select(.name == "lockout-instance") | .attributes.scope] | last == "instance"' \
   zitadel-settings read instance=true
 

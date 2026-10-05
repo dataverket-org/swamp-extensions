@@ -36,19 +36,19 @@ arguments and the same service-user key.
 
 ### `@dataverket/zitadel/app`
 
-| Method         | What it does                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `list`, `get`  | A project's applications and their configuration, never a secret                                 |
-| `ensureOidc`   | Find or create an OIDC client and converge it; the client secret comes back once, on create      |
-| `ensureApi`    | Find or create an API application (a resource server for machine-to-machine calls)               |
-| `redirectSet`  | Add and remove redirect URIs by read-modify-write, so nothing else about a shared client changes |
-| `update`       | Rename                                                                                           |
-| `setState`     | `active` or `inactive`                                                                           |
-| `secretRotate` | A new client secret, returned once                                                               |
-| `delete`       | Guarded delete, `confirm` + `dryRun`                                                             |
-| `keyCreate`    | A JSON key for private-key authentication, returned once                                         |
-| `keyList`      | The application's keys by id and expiry                                                          |
-| `keyDelete`    | Verify-first, `dryRun`-able                                                                      |
+| Method         | What it does                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`, `get`  | A project's applications and their configuration, never a secret                                                                                |
+| `ensureOidc`   | Find or create an OIDC client and converge it, role assertions and login UI included; the secret comes back once, on create                     |
+| `ensureApi`    | Find or create an API application (a resource server for machine-to-machine calls)                                                              |
+| `redirectSet`  | Add and remove redirect URIs by read-modify-write, so nothing else about a shared client changes, the role assertions and the login UI included |
+| `update`       | Rename                                                                                                                                          |
+| `setState`     | `active` or `inactive`                                                                                                                          |
+| `secretRotate` | A new client secret, returned once                                                                                                              |
+| `delete`       | Guarded delete, `confirm` + `dryRun`                                                                                                            |
+| `keyCreate`    | A JSON key for private-key authentication, returned once                                                                                        |
+| `keyList`      | The application's keys by id and expiry                                                                                                         |
+| `keyDelete`    | Verify-first, `dryRun`-able                                                                                                                     |
 
 ### `@dataverket/zitadel/user`
 
@@ -100,6 +100,12 @@ settings and the active identity providers — and stores one resource per kind,
 each carrying the `scope` it came from: the organization's own, or inherited
 from the instance. That is what an audit is actually asking, and it is one run
 and one lock rather than ten.
+
+The same run stores `oidc-tokens-instance`: how long access, ID and refresh
+tokens live, read from the v1 Admin API, as Zitadel's durations and in seconds.
+They are instance-wide, so they come with an organization's read as well. A key
+that may read the organization but not the instance gets a warning in the log
+and no such record, and the rest of the run stands.
 
 `securitySet` (iframe embedding and impersonation) and `loginTranslationSet` are
 the only writes v2 exposes. Writing a login policy, lockout, password

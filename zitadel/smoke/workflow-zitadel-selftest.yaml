@@ -63,6 +63,7 @@ jobs:
             appType: native
             authMethod: none
             redirectUris: ["http://localhost:8000", "http://localhost:18000"]
+            idTokenRoleAssertion: true
         dependsOn:
           - step: project
             condition:
@@ -108,13 +109,14 @@ jobs:
             condition:
               type: succeeded
       - name: assert-app
-        description: The client is a public native client, named by project and app
+        description: The client is a public native client with roles in its ID token, named by project and app
         task:
           type: assert
           expr: >-
             data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.appType == "native" &&
-            data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.authMethod == "none"
-          message: the kubelogin client is not the public native client kubelogin needs
+            data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.authMethod == "none" &&
+            data.latest("zitadel-app", "app-kubernetes-kubelogin").attributes.idTokenRoleAssertion == true
+          message: the kubelogin client is not the public native client, asserting roles into the ID token, that kubelogin needs
           severity: high
         dependsOn:
           - step: app
