@@ -6,17 +6,33 @@
  * file in a private temporary directory that is removed afterwards; it is
  * never an argument. Decryption uses whatever sops would use anyway (the
  * `SOPS_AGE_KEY_FILE` of the caller, the default key file, an age plugin);
- * `ageKeyFile` overrides that only when set.
+ * `ageKeyFile` overrides that only when set, and `ageKeyName` names an
+ * identity file beside sops's own `keys.txt`, used when it exists.
  *
  * @module
  */
 import { z } from "npm:zod@4";
-import { resolve } from "jsr:@std/path@1.0.8";
+import { join, resolve } from "jsr:@std/path@1.0.8";
+
+/** A file name beside `keys.txt`: one path segment, no dot names, no control characters. */
+export function isKeyName(name: string): boolean {
+  if (name === "" || name === "." || name === "..") return false;
+  return ![...name].some((ch) => {
+    const c = ch.charCodeAt(0);
+    return ch === "/" || ch === "\\" || c < 0x20 || c === 0x7f;
+  });
+}
 
 /** What both providers need to know about the key material and the binary. */
 export const CommonConfig = z.object({
   ageKeyFile: z.string().default("").describe(
     "age identity file for decryption (SOPS_AGE_KEY_FILE); empty keeps the caller's environment",
+  ),
+  ageKeyName: z.string().default("").refine(
+    (n) => n === "" || isKeyName(n),
+    "ageKeyName is a file name, not a path",
+  ).describe(
+    "age identity <name>.txt in the directory where sops keeps keys.txt ($XDG_CONFIG_HOME/sops/age, else ~/.config/sops/age, or ~/Library/Application Support/sops/age on macOS); used when that file exists and the caller sets no SOPS_AGE_KEY_FILE; a name, never a path, so a vault config carries no operator's home",
   ),
   agePublicKey: z.string().min(1).describe(
     "age recipients for encryption, comma separated; every value is encrypted to all of them",
@@ -24,7 +40,10 @@ export const CommonConfig = z.object({
   sopsPath: z.string().default("sops").describe(
     "Path to the sops binary; override when it is not on PATH",
   ),
-});
+}).refine(
+  (c) => c.ageKeyFile === "" || c.ageKeyName === "",
+  "ageKeyFile and ageKeyName are alternatives; set one",
+);
 /** {@link CommonConfig} */
 export type CommonConfigData = z.infer<typeof CommonConfig>;
 
@@ -88,11 +107,47 @@ const defaultRunner: Runner = async (argv, env, opts = {}) => {
   };
 };
 
-/** The subprocess environment: the caller's, with the key file overridden when configured. */
-export function sopsEnv(cfg: CommonConfigData): Record<string, string> {
-  const env = Deno.env.toObject();
-  if (cfg.ageKeyFile !== "") env.SOPS_AGE_KEY_FILE = cfg.ageKeyFile;
-  return env;
+/**
+ * The directory sops reads `keys.txt` from when nothing names a key file:
+ * `$XDG_CONFIG_HOME/sops/age`, else the user's config directory, which is
+ * `~/Library/Application Support` on macOS and `~/.config` elsewhere.
+ * Undefined when the environment names no home.
+ */
+export function sopsAgeDir(
+  env: Record<string, string>,
+  os: string = Deno.build.os,
+): string | undefined {
+  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, "sops", "age");
+  if (!env.HOME) return undefined;
+  if (os === "darwin") {
+    return join(env.HOME, "Library", "Application Support", "sops", "age");
+  }
+  return join(env.HOME, ".config", "sops", "age");
+}
+
+/**
+ * The subprocess environment: the caller's, with `SOPS_AGE_KEY_FILE` set
+ * from the configuration. `ageKeyFile` is passed verbatim. `ageKeyName`
+ * resolves to `<sopsAgeDir>/<name>.txt` and is used only when that file
+ * exists and the caller has not set the variable: an exported key file wins,
+ * and a host without the file leaves sops to `keys.txt` and its plugins.
+ */
+export async function sopsEnv(
+  cfg: CommonConfigData,
+  env: Record<string, string> = Deno.env.toObject(),
+  exists: (path: string) => Promise<boolean> = fileExists,
+): Promise<Record<string, string>> {
+  const out = { ...env };
+  if (cfg.ageKeyFile !== "") {
+    out.SOPS_AGE_KEY_FILE = cfg.ageKeyFile;
+    return out;
+  }
+  if (cfg.ageKeyName === "" || env.SOPS_AGE_KEY_FILE) return out;
+  const dir = sopsAgeDir(env);
+  if (dir === undefined) return out;
+  const file = join(dir, `${cfg.ageKeyName}.txt`);
+  if (await exists(file)) out.SOPS_AGE_KEY_FILE = file;
+  return out;
 }
 
 /** Run sops; a non-zero exit throws with its stderr, labelled by subcommand. */
@@ -103,7 +158,7 @@ export async function sops(
 ): Promise<string> {
   const r = await (testRunner ?? defaultRunner)(
     [cfg.sopsPath, ...args],
-    sopsEnv(cfg),
+    await sopsEnv(cfg),
     opts,
   );
   if (r.code !== 0) {

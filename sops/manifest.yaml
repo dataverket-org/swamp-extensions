@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/sops"
-version: "2026.09.20.2"
+version: "2026.10.19.1"
 description: >
   SOPS + age vault for swamp: one encrypted file per secret.
 
@@ -15,11 +15,14 @@ description: >
   Forked from `@zocc/sops-age` (Apache-2.0), see NOTICE.md; that provider
   keeps every secret in one file and decrypts it all to write. sops runs
   with an argument vector, never a shell; values reach it through a private
-  temporary directory, never as an argument. `ageKeyFile` is optional: empty
-  leaves the caller's SOPS_AGE_KEY_FILE and age plugins in charge of
-  decryption, so a YubiKey identity works unchanged. `swamp vault migrate
-  <vault> --to-type @dataverket/sops` splits an existing single-file vault.
+  temporary directory, never as an argument. Decryption is the caller's
+  unless configured: `ageKeyFile` names a path, `ageKeyName` a file beside
+  sops's own keys.txt that is used when it exists, so a vault config can name
+  a process key without an operator's home path, and a YubiKey identity works
+  unchanged where the file is absent. `swamp vault migrate <vault> --to-type
+  @dataverket/sops` splits an existing single-file vault.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "Apache-2.0"
 paths:
   base: manifest
 models: []

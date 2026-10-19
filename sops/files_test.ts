@@ -6,7 +6,7 @@ import {
 import {
   assertVaultConformance,
   assertVaultExportConformance,
-} from "jsr:@swamp-club/swamp-testing";
+} from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 import { assertPathKey, vault } from "./files.ts";
 import { haveTools, scratchAge } from "./test_support.ts";
 
@@ -14,8 +14,22 @@ const tools = await haveTools();
 
 Deno.test("export conforms", () => {
   assertVaultExportConformance(vault, {
-    validConfigs: [{ secretsDir: "vaults/produced", agePublicKey: "age1x" }],
-    invalidConfigs: [{}, { secretsDir: "", agePublicKey: "age1x" }],
+    validConfigs: [
+      { secretsDir: "vaults/produced", agePublicKey: "age1x" },
+      { secretsDir: "v", agePublicKey: "age1x", ageKeyName: "swamp-infra" },
+      { secretsDir: "v", agePublicKey: "age1x", ageKeyFile: "/k/age.txt" },
+    ],
+    invalidConfigs: [
+      {},
+      { secretsDir: "", agePublicKey: "age1x" },
+      { secretsDir: "v", agePublicKey: "age1x", ageKeyName: "a/b" },
+      {
+        secretsDir: "v",
+        agePublicKey: "age1x",
+        ageKeyName: "a",
+        ageKeyFile: "/k/age.txt",
+      },
+    ],
   });
 });
 
@@ -65,7 +79,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "put ignores a .sops.yaml in the working directory whose rules match nothing",
+  name:
+    "put ignores a .sops.yaml in the working directory whose rules match nothing",
   ignore: !tools,
   fn: async () => {
     const a = await scratchAge();
