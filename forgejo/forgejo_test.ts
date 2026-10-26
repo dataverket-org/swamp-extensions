@@ -10,11 +10,14 @@ import { extension as issues } from "./issues.ts";
 import { extension as labels } from "./labels.ts";
 import { extension as orgDelete } from "./org_delete.ts";
 import { extension as prAssign } from "./pr_assign.ts";
+import { extension as prComment } from "./pr_comment.ts";
+import { extension as prMergeState } from "./pr_merge_state.ts";
 import { extension as pullMirror } from "./pull_mirror.ts";
 import { extension as pushMirror } from "./push_mirror.ts";
 import { extension as repoDelete } from "./repo_delete.ts";
 import { extension as topics } from "./topics.ts";
 import { extension as units } from "./units.ts";
+import { extension as workItemSync } from "./work_item_sync.ts";
 
 /** The upstream base, as forked: every method @thomas/forgejo 2026.09.04.2 had. */
 const BASE_METHODS = [
@@ -63,6 +66,10 @@ const ADDED_METHODS = [
   "issue_list",
   "label_ensure",
   "label_list",
+  "pr_comment",
+  "pr_feedback",
+  "pr_merge_state",
+  "work_item_sync",
 ];
 
 const MODULES = [
@@ -72,16 +79,19 @@ const MODULES = [
   labels,
   orgDelete,
   prAssign,
+  prComment,
+  prMergeState,
   pullMirror,
   pushMirror,
   repoDelete,
   topics,
   units,
+  workItemSync,
 ];
 
 Deno.test("the base owns the dataverket type at the published version", () => {
   assertEquals(model.type, "@dataverket/forgejo");
-  assertEquals(model.version, "2026.10.05.4");
+  assertEquals(model.version, "2026.10.26.1");
 });
 
 Deno.test("the upgrade chain ends at the model's version and is a no-op", () => {

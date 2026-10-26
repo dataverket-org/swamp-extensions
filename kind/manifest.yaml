@@ -1,0 +1,31 @@
+manifestVersion: 1
+name: "@dataverket/kind"
+version: "2026.10.26.1"
+description: >
+  One named kind (Kubernetes in Docker) cluster for swamp, created on demand
+  for end-to-end tests.
+
+  `@dataverket/kind/cluster` creates the cluster from a kind config file only
+  when `kind get clusters` does not list it, checks that its API server
+  answers, applies a list of manifests, and records the kube context and API
+  server URL for other models to target. `get` records whether it exists
+  without creating it, and `delete` removes it, succeeding when it is already
+  gone.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - cluster.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - kind
+  - kubernetes
+  - e2e
+  - testing
+dependencies: []

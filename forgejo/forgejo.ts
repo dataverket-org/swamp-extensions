@@ -1174,7 +1174,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.10.05.4",
+  version: "2026.10.26.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1187,6 +1187,12 @@ export const model = {
       toVersion: "2026.10.05.4",
       description:
         "forgejo-token-accepted passes a 403 that names a missing scope; no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.26.1",
+      description:
+        "pr_comment, pr_feedback, pr_merge_state and work_item_sync join the type; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

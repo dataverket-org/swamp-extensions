@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.05.4"
+version: "2026.10.26.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in one model type, `@dataverket/forgejo`.
@@ -26,6 +26,13 @@ description: >
   repositories is refused unless asked for explicitly, because Forgejo has no
   undelete.
 
+  For software factories: a pull request's discussion read back (comments,
+  reviews with their state, inline review comments) and a comment posted on
+  it, a pull request's merge commit, time and merger, and a
+  `@swamp/software-factory` work item mirrored one way into a Forgejo issue
+  that is rewritten from the factory's records, commented on when the stage
+  changes or a blocking finding appears, and closed when the work item ends.
+
   Two pre-flight checks: a policy check that `apiUrl` is the forge's base URL
   without a trailing `/api/v1`, and a live one that the token is still
   accepted. No secret value is recorded or logged: the registration token is
@@ -48,6 +55,9 @@ models:
   - org_delete.ts
   - issues.ts
   - labels.ts
+  - pr_comment.ts
+  - pr_merge_state.ts
+  - work_item_sync.ts
 workflows: []
 vaults: []
 datastores: []

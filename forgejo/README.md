@@ -168,6 +168,10 @@ Idempotent provisioning:
 | `issue_labels_ensure`       | The labels of an issue or a pull request by name; additive unless `exact`                                            |
 | `label_ensure`              | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`           |
 | `webhook_retarget`          | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                  |
+| `pr_feedback`               | Read a pull request's comments, reviews with their state, and each review's inline comments                          |
+| `pr_comment`                | Post a comment on a pull request; every call posts a new one                                                         |
+| `pr_merge_state`            | A pull request's head and, once merged, its merge commit, time and merger                                            |
+| `work_item_sync`            | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                     |
 
 Lifecycle and deletes:
 
@@ -324,6 +328,23 @@ mirrors would otherwise have had a second mirror created to a remote it already
 had, and a runner past the first page would have survived every `runner_prune`.
 `user_search` is the one deliberate cap: it is a search, and it returns
 Forgejo's top 50 matches.
+
+## Work items as issues
+
+`work_item_sync --input factory=<model> --input workItem=<ref>` mirrors one work
+item of a `@swamp/software-factory` model into one issue of the given
+repository. The first run creates the issue, titled with the work item and the
+first sentence of its outcome, or adopts `issue` when it is given. Every run
+rewrites the section of the body between `<!-- swamp-factory:start -->` and
+`<!-- swamp-factory:end -->` from the factory's records (stage, outcome,
+decisions, blocking review findings, pull request, merge) and keeps the rest of
+the body; comments only when the stage changed or a new critical or high finding
+is unresolved; and closes the issue when the work item is done or aborted.
+Nothing in the issue flows back into the factory.
+
+`pr_merge_state` reports the head branch's commit as Forgejo has it now, which
+is not necessarily the commit that was merged: compare the merge commit's tree
+when that matters.
 
 ## Secrets
 

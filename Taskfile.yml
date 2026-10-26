@@ -1,0 +1,13 @@
+version: '3'
+
+#
+# Commands for this repository. A task that needs conditionals, loops or
+# computed variables becomes a script in bin/. Options after -- go to the
+# script: task push -- --dry-run.
+#
+
+tasks:
+  default:  { cmds: [{ task: help }] }
+  help:     { desc: "This list",                                                cmds: [task --list], silent: true }
+  push:     { desc: "Publish every extension whose version is not in the registry", cmds: ["bin/push {{.CLI_ARGS}}"] }
+  push:*:   { desc: "Publish one extension, e.g. task push:salmon",            cmds: ["bin/push {{.CLI_ARGS}} {{index .MATCH 0}}"] }

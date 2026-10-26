@@ -1,0 +1,32 @@
+manifestVersion: 1
+name: "@dataverket/docker-compose"
+version: "2026.10.26.1"
+description: >
+  Two methods for `@smith/docker-compose` that end-to-end setups need.
+
+  `ensure` starts the given services with `docker compose up -d --wait` only
+  when one of them is not already running, or not healthy where the service
+  has a healthcheck, so a workflow can call it every time. `teardown` is
+  `docker compose down` with orphans and, by default, volumes, and fails when
+  docker compose does. Both write only the `state` resource: the upstream
+  methods also write a resource named `latest`, which current swamp reserves,
+  so they fail after doing their work.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - compose.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - docker
+  - docker-compose
+  - e2e
+  - testing
+dependencies:
+  - "@smith/docker-compose"

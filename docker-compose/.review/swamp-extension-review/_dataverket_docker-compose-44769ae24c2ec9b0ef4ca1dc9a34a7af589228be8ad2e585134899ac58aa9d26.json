@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/docker-compose",
+  "version": "2026.10.26.1",
+  "reviewedAt": "2026-10-26T15:53:53Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "na",
+      "note": "No credentials; docker compose runs with the caller's docker."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Each docker compose call is logged with its argv; ensure logs what was already up or started, teardown what it removed."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A failing docker compose throws with the subcommand, exit code and stderr, before the state resource is written."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "A fake docker covers the argv (file, project directory, profiles), the ready rule (running, healthy where checked), ensure starting nothing, ensure starting only the services not ready, teardown with and without volumes, and a failure writing nothing; ensure, a second ensure and teardown were also run live against a real stack."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensure starts only services that are not running and healthy; teardown is docker compose down, which succeeds when the stack is gone."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "docker compose ps --format json is parsed line by line with every field defaulted."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Subprocess output is read to the end; teardown removes orphans and, by default, volumes."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "No addresses or identifiers in README or tests."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Argument schemas are z.object without passthrough; the records follow the upstream state schema."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "na",
+      "note": "The methods write the upstream type's state spec, whose lifetime and GC the upstream defines."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Two methods added to an upstream type that has the rest of the lifecycle."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "The methods act on the compose project the definition names."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Both write state/current, the instance the upstream ps method writes, with the same shape."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Nothing is read back from stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial version; the extension adds methods only and defines no type version."
+    }
+  ]
+}

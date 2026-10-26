@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/kind",
+  "version": "2026.10.26.1",
+  "reviewedAt": "2026-10-26T15:53:53Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "na",
+      "note": "No credentials: kind and kubectl use the caller's own docker and kubeconfig."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "ensure, get and delete log what they do (create, exists, apply each manifest, delete, already gone) with structured placeholders."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A failing kind or kubectl throws with its argv and stderr; an existing cluster whose API server does not answer throws with how to restart its container, before anything is written."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "A fake kind/kubectl covers create-when-missing, leave-when-present, unreachable API server (no write), get without creating, delete when already gone, and the argv/stderr error; ensure, a second ensure, delete and a second delete were also run live against a real kind cluster."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensure creates only when kind get clusters does not list the cluster and re-applies the manifests (kubectl apply is idempotent); delete succeeds when the cluster is already gone."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "na",
+      "note": "No HTTP calls; kind and kubectl output is read as text (cluster names, the server URL)."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Subprocess output is read to the end; the cluster created is recorded by name and context so delete can remove it."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README uses placeholders; no addresses or identifiers."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "z.object without passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "The cluster spec is lifetime infinite with garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "ensure (create), get (read), delete; a kind cluster has no update beyond re-applying manifests, which ensure does."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "The mutating methods act on a local kind cluster the definition names."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "One cluster instance per execution."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Nothing is read back from stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial version of @dataverket/kind/cluster (ported from Salmon's @eskpil/kind-cluster)."
+    }
+  ]
+}
