@@ -28,6 +28,8 @@ Deno.test("Salmon runs in /tmp with salmon.yaml mounted there", () => {
 
 Deno.test("Salmon waits for healthy Postgres and LDAP", () => {
   const p = JSON.parse(composeProject(args()));
+  // The socket-only server of the image's first start must not count.
+  assert(p.services.postgres.healthcheck.test[1].includes("-h 127.0.0.1"));
   assertEquals(p.services.salmon.depends_on, {
     postgres: { condition: "service_healthy" },
     ldap: { condition: "service_healthy" },

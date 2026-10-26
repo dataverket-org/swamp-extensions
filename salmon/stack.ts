@@ -155,8 +155,10 @@ export function composeProject(g: GlobalArgs): string {
             POSTGRES_PASSWORD: "salmon",
             POSTGRES_DB: "salmon",
           },
+          // Over TCP: on first start the image runs a temporary server on
+          // the Unix socket only, which a socket check reports as ready.
           healthcheck: {
-            test: ["CMD-SHELL", "pg_isready -U salmon -d salmon"],
+            test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U salmon -d salmon"],
             interval: "2s",
             retries: 30,
           },
