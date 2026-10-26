@@ -188,6 +188,10 @@ export const model = {
 
         // Only the claims are kept; the token itself is never stored.
         const claims = jwtClaims(body.access_token);
+        ctx.logger.info("Salmon issued a token for {sub} with roles {roles}", {
+          sub: String(claims.sub ?? ""),
+          roles: Array.isArray(claims.roles) ? claims.roles.join(",") : "",
+        });
         const handle = await ctx.writeResource("result", "result", {
           passed: true,
           tokenEndpoint: endpoint,

@@ -189,18 +189,24 @@ async function psql(sql: string, ctx: Context): Promise<string> {
   ], { stdin: sql, signal: ctx.signal });
 }
 
-async function record(
-  ctx: Context,
-  revoked: Set<string>,
-): Promise<DataHandle> {
+/** Records the fixture, reading which of its grants still exist. */
+async function record(ctx: Context): Promise<DataHandle> {
   const g = ctx.globalArgs;
   const id = await ids(g);
+  const present = new Set(
+    (await psql(
+      `SELECT id FROM grants WHERE id IN (${
+        id.grants.map((gr) => lit(gr.id)).join(", ")
+      });`,
+      ctx,
+    )).split("\n").map((l) => l.trim()).filter(Boolean),
+  );
   return await ctx.writeResource("fixture", "fixture", {
     project: g.project,
     teamId: id.teamId,
     apps: id.apps,
     trustId: id.trustId,
-    grants: id.grants.map((gr) => ({ ...gr, revoked: revoked.has(gr.app) })),
+    grants: id.grants.map((gr) => ({ ...gr, revoked: !present.has(gr.id) })),
     seededAt: new Date().toISOString(),
   });
 }
@@ -229,6 +235,10 @@ export const model = {
       }),
       execute: async (args: { timeoutSeconds: number }, ctx: Context) => {
         const g = ctx.globalArgs;
+        ctx.logger.info("Seeding fixture {name} into {project}", {
+          name: g.name,
+          project: g.project,
+        });
         const deadline = Date.now() + args.timeoutSeconds * 1000;
         while (
           (await psql("SELECT to_regclass('public.grants') IS NOT NULL", ctx))
@@ -247,7 +257,7 @@ export const model = {
           trust: id.trustId,
           count: id.grants.length,
         });
-        return { dataHandles: [await record(ctx, new Set())] };
+        return { dataHandles: [await record(ctx)] };
       },
     },
     revoke: {
@@ -256,6 +266,7 @@ export const model = {
         app: z.string().describe("Key of the app whose grants to delete"),
       }),
       execute: async (args: { app: string }, ctx: Context) => {
+        ctx.logger.info("Revoking the grants at {app}", { app: args.app });
         const id = await ids(ctx.globalArgs);
         const grantIds = id.grants.filter((gr) => gr.app === args.app).map((
           gr,
@@ -274,7 +285,8 @@ export const model = {
             `no grant at app ${args.app} was there to delete; run seed first`,
           );
         }
-        return { dataHandles: [await record(ctx, new Set([args.app]))] };
+        ctx.logger.info("Revoked the grants at {app}", { app: args.app });
+        return { dataHandles: [await record(ctx)] };
       },
     },
   },

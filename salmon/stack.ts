@@ -271,6 +271,10 @@ export const model = {
       arguments: z.object({}),
       execute: async (_args: Record<string, never>, ctx: Context) => {
         const g = ctx.globalArgs;
+        ctx.logger.info("Starting stack {project} with {image}", {
+          project: g.project,
+          image: g.image,
+        });
         await run("docker", [
           "compose",
           "-f",
@@ -311,6 +315,9 @@ export const model = {
       description: "Remove the stack's containers, network and volumes",
       arguments: z.object({}),
       execute: async (_args: Record<string, never>, ctx: Context) => {
+        ctx.logger.info("Removing stack {project}", {
+          project: ctx.globalArgs.project,
+        });
         await run("docker", [
           "compose",
           "-p",
