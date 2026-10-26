@@ -1,0 +1,40 @@
+manifestVersion: 1
+name: "@dataverket/salmon"
+version: "2026.10.26.1"
+description: >
+  A throwaway Salmon for end-to-end tests of anything that takes Salmon's
+  tokens: database validators, message brokers, services.
+
+  `@dataverket/salmon/stack` runs the published Salmon image with a Postgres
+  and an OpenLDAP seeded with Salmon's reference directory, as one docker
+  compose project generated in code, and waits until Salmon's discovery
+  document answers. `@dataverket/salmon/fixture` writes the team, apps, trust
+  and grants a test needs into that Salmon, with ids stable across runs, and
+  revokes a grant to test refusals. `@dataverket/salmon/token-exchange` mints a
+  Kubernetes ServiceAccount token, exchanges it at Salmon (RFC 8693) for a
+  token for one app, and records the token's subject and roles, never the
+  token.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+paths:
+  base: manifest
+models:
+  - stack.ts
+  - fixture.ts
+  - token_exchange.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - salmon
+  - oauth
+  - oidc
+  - token-exchange
+  - e2e
+  - testing
+  - docker-compose
+  - ldap
+dependencies: []

@@ -17,6 +17,7 @@ independently:
 | `flux/`      | `@dataverket/flux`      | Flux HelmReleases, Kustomizations and sources, three types, with a `reset` for a release stuck at `RetriesExceeded`; fork of `@ginger_pappa/flux` (MIT) merged with our former add-on |
 | `versitygw/` | `@dataverket/versitygw` | A versitygw S3 gateway, read-only: accounts without their secrets, buckets and owners, every bucket's settings, TLS health, and a `check` of one inventory |
 | `zitadel/`   | `@dataverket/zitadel`   | Zitadel over its API: projects, applications, users, grants and orgs, one model type each; fork of `@thomas/zitadel` (MIT) widened to full CRUD |
+| `salmon/`    | `@dataverket/salmon`    | A throwaway Salmon for end-to-end tests: the published image with Postgres and a seeded OpenLDAP, a fixture of teams, apps, trusts and grants, and a token-exchange check |
 
 Develop against a swamp repository by loading every extension from source:
 
