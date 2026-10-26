@@ -42,6 +42,20 @@ manages each granted role.
 `sub` and `roles`, never the token. It fails with Salmon's error when the
 exchange is refused.
 
+## Commands
+
+The types drive docker and kubectl as subprocesses, with arguments as argv
+arrays, never through a shell:
+
+- `stack`: `docker compose -f - up` with the generated project on stdin,
+  `docker compose -p <project> logs|down`. `project` is restricted to
+  `[a-z0-9][a-z0-9_-]*`.
+- `fixture`: `docker ps` to find the project's Postgres container, then
+  `docker exec -i <container> psql` with the SQL on stdin; every value in it is
+  quoted as an SQL literal.
+- `token-exchange`: `kubectl --context <ctx> -n <ns> get|create serviceaccount`
+  and `create token`.
+
 ## A kind cluster as the workload's issuer
 
 Salmon runs in a container, so it cannot reach a kind API server at `127.0.0.1`.

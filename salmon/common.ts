@@ -35,6 +35,8 @@ export async function exec(
   args: string[],
   opts: { signal?: AbortSignal; stdin?: string } = {},
 ): Promise<CommandResult> {
+  // docker and kubectl are the interfaces being driven; see README "Commands".
+  // swamp-quality-ignore deno-command
   const child = new Deno.Command(bin, {
     args,
     stdin: opts.stdin === undefined ? "null" : "piped",
