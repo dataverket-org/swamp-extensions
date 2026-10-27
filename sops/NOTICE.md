@@ -25,3 +25,11 @@ Modifications, 2026-10-19, Jan Ivar Beddari (dataverket):
   `SOPS_AGE_KEY_FILE`. A vault config can name a process key without a path into
   anyone's home. The test task now grants `--allow-run`, so the integration
   tests run instead of being skipped.
+
+Modifications, 2026-10-27, Jan Ivar Beddari (dataverket):
+
+- Checked against sops 3.13.3, which applies a matching `.sops.yaml` rule's
+  `encrypted_regex` even when `--age` is given: the test of the temporary
+  working directory now uses a rule that matches and asserts the stored value is
+  encrypted. The key-directory unit test no longer depends on the host OS, and
+  the tool probe skips sops's online update check.

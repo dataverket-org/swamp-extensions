@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/sops"
-version: "2026.10.27.1"
+version: "2026.10.27.2"
 description: >
   SOPS + age vault for swamp: one encrypted file per secret.
 

@@ -1,0 +1,67 @@
+{
+  "extension": "@dataverket/sops",
+  "version": "2026.10.27.2",
+  "reviewedAt": "2026-10-27T15:31:29Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged code. A value reaches sops only as plain.json, mode 0600, inside a makeTempDir private directory that is removed in finally; recipients are public keys on argv. ageKeyName is a file name the schema refuses as a path; the extension stats the file and hands the path to sops in SOPS_AGE_KEY_FILE, never reading the identity, and a caller's own export wins. sops 3.13.3 (age/keysource.go loadIdentities) still reads keys.txt, SOPS_AGE_KEY and SOPS_AGE_KEY_CMD alongside that file, so the named key adds to the caller's identities rather than replacing them, as the README says. The standing credentials-sensitive-field warning on secretsDir is a directory name, not a secret."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "A vault provider has no logger and this one prints nothing. Errors carry sops's stderr; checked live on 3.13.3 that a failed decrypt names recipients and key locations, never key material or the value."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Verified live against 3.13.3: a malformed recipient fails put with sops's parse error, a file that is not sops output fails get with 'sops metadata not found', a value edited after encryption fails get with exit 25 and the MAC error, and a missing SOPS_AGE_KEY_FILE path fails get with sops's list of locations tried; each is rethrown with the subcommand, exit code and stderr. A missing key throws Secret not found before any sops call; fileExists swallows only NotFound."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "deno task test on macOS against sops 3.13.3 and age-keygen: 15 passed, 0 failed. The ageKeyName unit test previously expected the Linux key directory and failed on macOS, so the earlier 15-of-15 could not have held on every platform the manifest lists; it now sets XDG_CONFIG_HOME. The .sops.yaml test used a rule that matched nothing and passed with the temporary working directory removed; it now uses a matching rule with another valid recipient and encrypted_regex ^nothing$ and asserts the stored value starts with ENC[ and names the configured recipient alone, and removing the cwd makes it fail (checked by mutation). An uncommitted probe round-tripped empty, NUL, CRLF, tab, unicode, PEM and 200 KB values, keys with spaces, unicode and four path segments, two comma-separated recipients, and eight concurrent puts."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "put overwrites the key's file (conformance suite, live test, and six concurrent puts to one key leaving one valid file). delete of an absent key returns. Nothing is cached: the environment and the key-file existence are computed per call. sops writes --output in place rather than through a rename, so a get racing a put of the same key can read a partial file and fail; a retry reads the finished file, and no other secret's file is touched."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Checked against the sops 3.13.3 source and binary. decrypt --extract of a string emits the raw bytes with no trailing newline (cmd/sops/decrypt.go extract), which get depends on. Identity lookup in age/keysource.go getUserConfigDir honours XDG_CONFIG_HOME on macOS explicitly, else os.UserConfigDir, which sopsAgeDir mirrors. Config discovery (config.LookupConfigFile) walks up from the working directory, and 3.13.3 applies a matching creation rule's encrypted_regex and parses its recipients even with --age on argv: from a directory with such a rule the value was written in plaintext, from the temporary directory it was encrypted to the configured recipient only, so the cwd in encryptJson is the guard the README describes and the new test pins. --version contacts GitHub unless SOPS_DISABLE_VERSION_CHECK is set, which the test probe now sets; no runtime path calls --version."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The temporary directory is removed in finally on success and failure; the child's stdout and stderr are read to the end by output() and stdin is closed after the write; no handles or timers outlive a call."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, NOTICE and test fixtures use placeholders (age1…, vaults/infra, swamp-infra); no addresses, hostnames or identifiers. Manifest 2026.10.27.2, license AGPL-3.0-only with the upstream Apache notice kept; NOTICE records the 2026-10-27 changes; README's Tests section names the sops version checked; the review is committed in .review with the release. The deno-command warning is the sops subprocess the extension exists to run, argument vector only, unchanged."
+    },
+    {
+      "id": "vault-get-throws",
+      "verdict": "pass",
+      "note": "A missing key throws Secret not found before any sops call; a sops failure throws with its stderr; an empty string value is returned as an empty string, not confused with missing (probed live)."
+    },
+    {
+      "id": "vault-put-idempotent",
+      "verdict": "pass",
+      "note": "put overwrites the key's file without error; covered by the conformance suite, the per-file live test and the concurrent-put probe."
+    },
+    {
+      "id": "vault-list-keys-only",
+      "verdict": "pass",
+      "note": "list walks the directory and derives names from file paths, decrypting nothing; a non-sops file with the suffix is listed by name only."
+    },
+    {
+      "id": "vault-getname",
+      "verdict": "pass",
+      "note": "The constructor's name is returned; covered by the conformance suite."
+    }
+  ]
+}

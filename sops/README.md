@@ -81,9 +81,10 @@ changes.
 `deno task test` runs the export and behavioural conformance suites from
 `@swamp-club/swamp-testing`, unit tests of the key lookup against a fake file
 system that refuses any path it was not told about, and integration tests
-against real `sops` and `age-keygen` with a throwaway identity, both the
-decrypting and the refused case; the integration tests are skipped when the
-tools are absent.
+against real `sops` and `age-keygen` with a throwaway identity: the decrypting
+and the refused case, and a `.sops.yaml` in the working directory whose rule
+would otherwise leave the value in plaintext; the integration tests are skipped
+when the tools are absent. Last checked against sops 3.13.3.
 
 ## License
 
