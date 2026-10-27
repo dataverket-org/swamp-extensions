@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:07:50Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged from 2026.10.05.4: the token is sensitive in the schema and api.ts masks a token the forge echoes back. The four new methods go through the same fetchCaller, so they inherit the masking; they read and write no other secret."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "The new methods log on entry and completion with structured placeholders; no secret in any log property."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The new methods use call(), so every HTTP error carries method, path, status and the forge's message; pr_merge_state refuses a merged PR without a merge commit; work_item_sync refuses a work item the factory does not have before any call; records are written after the calls succeed."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "The new methods have strict-fake unit tests: pr_feedback (all three note kinds, a 403), pr_comment, pr_merge_state (open, merged, merged without a commit, 404), and work_item_sync (blocking findings, section merge, create, update with stage-change and new-blocker comment, no comment and close when finished, unknown work item). They ran against the live forge while they lived in Salmon's repository, not again from this package. As before, 19 upstream methods carry no unit tests of their own; follow-up."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "pr_feedback and pr_merge_state are read-only; work_item_sync rewrites one marked section and comments only on a stage change or a new blocking finding; pr_comment is documented as posting a new comment on every call. The rest is unchanged from 2026.10.05.4."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Bare-array responses (comments, reviews) are handled as arrays and every field is read defensively. The forge lists a PR's comments and reviews without pagination for these sizes; unchanged otherwise."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "fetch timeouts are cleared in finally in the shared caller; no files or handles."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Tests and README use example-org, example-repo and forge.example.com."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "No passthrough anywhere."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "The four new specs are lifetime infinite with garbageCollection 20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Unchanged from 2026.10.05.4; the new methods are reads, one comment, and an issue converged from a source of truth."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: forgejo-api-url-shape (policy) and forgejo-token-accepted (live)."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "New specs are their own (prFeedback, prComment, prMergeState, workItemIssue) with safeName'd instance names; forgejo_test.ts asserts no add-on method shadows a base method, now including the four new ones."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "work_item_sync reads its previous link with readResource and the factory's records with readModelData; the rest unchanged from 2026.10.05.4."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "upgrades ends at 2026.10.26.1 with a no-op entry; global arguments unchanged; forgejo_test.ts checks the chain ends at the model's version. 2026.10.27.1 relicenses the extension to AGPL-3.0-only (LICENSE.md, manifest license, README); no code change, apart from a deprecation note in a method description."
+    }
+  ]
+}

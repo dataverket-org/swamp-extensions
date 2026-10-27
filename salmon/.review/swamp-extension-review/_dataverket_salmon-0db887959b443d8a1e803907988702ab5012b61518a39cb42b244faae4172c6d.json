@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/salmon",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:07:50Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No credential is an argument and none is stored: the issued access token is never written, only its sub and roles claims. The Postgres (salmon/salmon), LDAP admin (admin/admin) and seeded user (password) credentials are fixed throwaway values of a local test stack, reachable only on the compose network; only Salmon's port is published. The push-time credentials-sensitive-field warnings on tokenDuration (a lifetime such as 10m) and tokenSubject (the token's sub claim) are the name heuristic, not secrets."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs at info on entry and completion with structured placeholders; nothing secret is logged (the token's sub and roles are identifiers, not credentials)."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Commands throw with their argv and stderr; ensure throws with the tail of Salmon's logs when discovery does not answer in time; the fixture throws when the stack's Postgres is not running, when Salmon's schema never appears, or when there is no grant to revoke; token-exchange throws with Salmon's OAuth error. Every record is written after the work succeeded."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "Unit tests cover the generated compose project, the LDAP seed, salmon.yaml, the issuer path rule, stable ids, SQL quoting and the seed transaction, the grant-names-an-app refinement and JWT claim decoding. The execute paths (docker and kubectl subprocesses) are not unit-tested with a mocked command; they were exercised live against a throwaway stack and kind cluster: ensure, seed, a token exchange returning roles [ldap/Registry-Push], revoke followed by an invalid_target refusal, reseeding replacing rows and resetting revoked flags, and stop leaving no containers. 2026.10.26.2 adds an assertion that the Postgres healthcheck uses TCP."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensure is docker compose up -d (a no-op for a running, unchanged project) and stop is down (succeeds when the project is gone); seed replaces the fixture's rows in one transaction with ids derived from project, name and keys; revoking a grant that is already gone throws on purpose so a test notices a missing seed. 2026.10.26.2: the Postgres healthcheck runs pg_isready over TCP (-h 127.0.0.1); the socket check passed during the image's first-start init server, which listens on the Unix socket only, so Salmon could start, be refused over TCP and exit (seen in a pg-validator e2e run). Four consecutive fresh starts succeeded with the fix."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Discovery is accepted only on a 2xx; the token response must carry a string access_token, otherwise Salmon's error and error_description are reported; no list endpoints, so no pagination."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Subprocess output is read to the end and fetch bodies are cancelled; nothing is written to disk (the compose project goes on stdin); stop removes containers, network and volumes."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README examples use localhost and <cluster> placeholders; salmon.local is the LDAP domain of the seeded test directory, not infrastructure; the default image is the public registry.dataverket.org/tools/salmon the package exists to run."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "All schemas are z.object without passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource spec is lifetime infinite with garbageCollection 10 (stack, fixture) or 20 (token-exchange result)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Test fixtures, not managed resources: stack has ensure and stop, fixture has seed (create-or-replace) and revoke, token-exchange has test; update and sync have no meaning for a throwaway stack."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "The mutating methods act on a local throwaway compose project and its database, which the definitions name; there is no shared or remote resource to guard."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Each method writes one instance of one spec (stack, fixture, result)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads back stored state; the fixture reads the live database for which grants exist."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Only the package version moves to 2026.10.26.2; the model types and their schemas are unchanged, so no upgrade entry is needed. 2026.10.27.1 relicenses the extension to AGPL-3.0-only (LICENSE.md, manifest license, README); no code change."
+    }
+  ]
+}

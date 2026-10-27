@@ -87,5 +87,6 @@ tools are absent.
 
 ## License
 
-Apache License 2.0, see [LICENSE.md](./LICENSE.md); the original work is
-`@zocc/sops-age`, and [NOTICE.md](./NOTICE.md) records the modifications.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). The original work,
+`@zocc/sops-age`, is copyright 2026 CashlessConsumer under the Apache License
+2.0, kept in LICENSE.md; [NOTICE.md](./NOTICE.md) records the modifications.

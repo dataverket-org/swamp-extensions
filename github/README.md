@@ -154,5 +154,6 @@ the `type` line.
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md). The original work is copyright 2026
-GoodCraft; this package is copyright 2026 Jan Ivar Beddari.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@goodcraft/github`, is copyright 2026 GoodCraft under the
+MIT License, whose notice LICENSE.md keeps.

@@ -102,12 +102,12 @@ Under `swamp serve` the same values can go in a trigger override instead:
 ## What gets recorded
 
 The workflow creates two models on first use, named for it so they do not
-collide with your own: `mirror-forgejo-to-github-forgejo` (`@dataverket/forgejo`)
-and `mirror-forgejo-to-github-github` (`@dataverket/github`). Their definitions
-hold the last run's URLs and orgs and a `vault.get` over the workflow's inputs,
-never a token, so they belong to the workflow: run their methods through it
-rather than by hand. Runs for different org pairs share them and wait on the
-same model lock, so run one pair at a time.
+collide with your own: `mirror-forgejo-to-github-forgejo`
+(`@dataverket/forgejo`) and `mirror-forgejo-to-github-github`
+(`@dataverket/github`). Their definitions hold the last run's URLs and orgs and
+a `vault.get` over the workflow's inputs, never a token, so they belong to the
+workflow: run their methods through it rather than by hand. Runs for different
+org pairs share them and wait on the same model lock, so run one pair at a time.
 
 ```sh
 swamp data query 'modelName == "mirror-forgejo-to-github-forgejo" && specName == "pushMirror"' --json
@@ -116,4 +116,4 @@ swamp data query 'modelName == "mirror-forgejo-to-github-github" && specName == 
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md).
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari.

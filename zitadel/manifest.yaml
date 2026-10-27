@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/zitadel"
-version: "2026.10.05.1"
+version: "2026.10.27.1"
 description: >
   Zitadel for swamp, over its API: seven model types, one per resource, with
   the whole life cycle of each.
@@ -45,6 +45,7 @@ description: >
   Forked from `@thomas/zitadel` (MIT, copyright Thomas Elliott), which is one
   type and machine identities only, and widened to full CRUD across five types.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

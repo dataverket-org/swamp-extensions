@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.26.1"
+version: "2026.10.27.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in one model type, `@dataverket/forgejo`.
@@ -40,6 +40,7 @@ description: >
   source or remote credential is sent to Forgejo once and never stored; and a
   token the forge echoes back in an error is masked before it becomes data.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

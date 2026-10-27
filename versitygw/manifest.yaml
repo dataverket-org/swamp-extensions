@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/versitygw"
-version: "2026.10.05.1"
+version: "2026.10.27.1"
 description: >
   A versitygw S3 gateway for swamp, read over its admin API and its S3 API.
   Read-only.
@@ -28,6 +28,7 @@ description: >
   is SigV4 by aws4fetch; errors are the gateway's S3 error codes. Written
   against versitygw v1.8.0.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

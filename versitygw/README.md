@@ -179,3 +179,7 @@ The unit tests replay answers recorded from a throwaway gateway (`fixtures/`),
 and include a negative suite (`negative_test.ts`). `smoke/` runs the model
 through swamp against two throwaway gateways in podman, one of them behind its
 own CA; see `smoke/README.md`.
+
+## License
+
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari.

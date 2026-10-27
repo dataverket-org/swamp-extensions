@@ -8,10 +8,15 @@
   },
   "lint": {
     "rules": {
-      "tags": ["recommended"]
+      "tags": [
+        "recommended"
+      ]
     }
   },
   "fmt": {
-    "lineWidth": 80
+    "lineWidth": 80,
+    "exclude": [
+      "LICENSE.md"
+    ]
   }
 }

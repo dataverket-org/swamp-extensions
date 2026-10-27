@@ -496,7 +496,8 @@ export const extension = {
     runner_registration_token: {
       description:
         "Fetch a registration token for a repository or organization runner, for `forgejo-runner register` " +
-        "on the runner host. The token is stored in the vault; read it with `swamp vault read-secret`.",
+        "on the runner host. The token is stored in the vault; read it with `swamp vault read-secret`. " +
+        "The endpoint is deprecated since Forgejo 15 and still served by 17.0.1.",
       arguments: RunnerRegistrationTokenArgs,
       execute: async (
         args: z.infer<typeof RunnerRegistrationTokenArgs>,

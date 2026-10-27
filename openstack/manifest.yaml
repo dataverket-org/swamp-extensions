@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/openstack"
-version: "2026.10.01.1"
+version: "2026.10.27.1"
 description: >
   OpenStack for swamp, through the official `openstack` CLI.
 
@@ -23,6 +23,7 @@ description: >
   from a vault (env overrides, secret redacted from errors). Creates reuse an
   existing resource of the same name; deletes are no-ops when already gone.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

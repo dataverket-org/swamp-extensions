@@ -39,3 +39,7 @@ argv arrays, never through a shell.
 To exchange this cluster's ServiceAccount tokens at a Salmon from
 `@dataverket/salmon`, which runs in a container, name the issuer after the
 control-plane container in the kind config, as that package's README shows.
+
+## License
+
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Linus Johansen.

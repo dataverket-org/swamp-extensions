@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/flux"
-version: "2026.10.05.1"
+version: "2026.10.27.1"
 description: >
   Flux for swamp: HelmReleases, Kustomizations and sources as three model
   types, read with kubectl and driven with the flux CLI.
@@ -29,6 +29,7 @@ description: >
   group. `flux` and `kubectl` are run by name from PATH and the model's
   namespace, kubeconfig and context are honoured, as upstream did.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

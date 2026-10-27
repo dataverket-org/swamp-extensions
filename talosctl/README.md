@@ -152,4 +152,6 @@ swamp data query 'modelName == "lab" && specName == "volumeLayout" && isLatest' 
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md); the original work is copyright magistr.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@magistr/talos-node`, is copyright 2026 magistr under the
+MIT License, whose notice LICENSE.md keeps.

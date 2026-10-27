@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/sops"
-version: "2026.10.19.1"
+version: "2026.10.27.1"
 description: >
   SOPS + age vault for swamp: one encrypted file per secret.
 
@@ -22,7 +22,7 @@ description: >
   unchanged where the file is absent. `swamp vault migrate <vault> --to-type
   @dataverket/sops` splits an existing single-file vault.
 repository: "https://github.com/dataverket-org/swamp-extensions"
-license: "Apache-2.0"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models: []

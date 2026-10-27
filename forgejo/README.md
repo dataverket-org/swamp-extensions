@@ -161,7 +161,7 @@ Idempotent provisioning:
 | `repo_units_ensure`         | Switch a repository's Actions, packages or projects unit; sends only what is given                                   |
 | `repo_rename`               | Rename a repository, verify-first                                                                                    |
 | `actions_secret_put`        | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value            |
-| `runner_registration_token` | A registration token for `forgejo-runner register`, vaulted                                                          |
+| `runner_registration_token` | A registration token for `forgejo-runner register`, vaulted; its endpoint is deprecated since Forgejo 15, see below  |
 | `pr_ensure`                 | Open a pull request, find-or-create on the head and base pair, converging title and body                             |
 | `pr_assign`                 | Assign a pull request, every login checked against the forge first                                                   |
 | `issue_ensure`              | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name |
@@ -346,6 +346,16 @@ Nothing in the issue flows back into the factory.
 is not necessarily the commit that was merged: compare the merge commit's tree
 when that matters.
 
+## Checked against Forgejo 17.0.1
+
+Every endpoint, method, request body field and query parameter this type uses
+exists in the API of Forgejo 17.0.1. One of them is deprecated:
+`runner_registration_token` reads `GET .../actions/runners/registration-token`,
+deprecated since Forgejo 15 and still served by 17.0.1. Its replacement,
+`POST .../actions/runners`, registers the runner itself and answers with the
+runner's own token, which `forgejo-runner create-runner-file` takes, so moving
+to it is a new method rather than a change to this one.
+
 ## Secrets
 
 No secret value is written to a resource or a log. Two carry a credential and
@@ -384,5 +394,6 @@ out of band shows up as drift rather than going quiet.
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari; the
-original work, `@thomas/forgejo`, is copyright 2026 Thomas Elliott.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@thomas/forgejo`, is copyright 2026 Thomas Elliott under the
+MIT License, whose notice LICENSE.md keeps.

@@ -159,5 +159,6 @@ those live in the git repository Flux reconciles from.
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md). The original work is copyright
-ginger_pappa; the fork and `reset` are copyright Jan Ivar Beddari.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@ginger_pappa/flux`, is copyright 2026 ginger_pappa under
+the MIT License, whose notice LICENSE.md keeps.

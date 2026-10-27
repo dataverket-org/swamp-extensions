@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/salmon"
-version: "2026.10.26.2"
+version: "2026.10.27.1"
 description: >
   A throwaway Salmon for end-to-end tests of anything that takes Salmon's
   tokens: database validators, message brokers, services.
@@ -15,6 +15,7 @@ description: >
   token for one app, and records the token's subject and roles, never the
   token.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

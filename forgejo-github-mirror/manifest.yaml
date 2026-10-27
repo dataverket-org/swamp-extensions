@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo-github-mirror"
-version: "2026.10.05.1"
+version: "2026.10.27.1"
 description: >
   One workflow, `@dataverket/mirror-forgejo-to-github`, that mirrors every
   repository of a Forgejo org to a GitHub org and keeps it that way.
@@ -20,6 +20,7 @@ description: >
   cleartext in the run history. Built on `@dataverket/forgejo` and
   `@dataverket/github`, both dependencies.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models: []

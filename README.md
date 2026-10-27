@@ -3,7 +3,8 @@
 [swamp](https://github.com/swamp-club/swamp) extensions published under the
 `@dataverket` collective. Each extension lives in its own directory with its own
 manifest, README, license and swamp repository marker, and is published
-independently:
+independently. Every extension is licensed AGPL-3.0-only; the forks keep the
+notice of the upstream work's license, MIT or Apache-2.0, in their `LICENSE.md`:
 
 | Directory                | Extension                           | What it covers                                                                                                                                                                                                                            |
 | ------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -37,8 +38,8 @@ cd openstack && export SWAMP_EXTENSION_REVIEW_DIR=$PWD/.review
 swamp extension push manifest.yaml --dry-run
 ```
 
-`task push` (`bin/push`) does that for every extension whose manifest version is not yet in
-the registry, refusing a directory with uncommitted changes:
+`task push` (`bin/push`) does that for every extension whose manifest version is
+not yet in the registry, refusing a directory with uncommitted changes:
 
 ```sh
 task push -- --dry-run  # what would be published, through push --dry-run

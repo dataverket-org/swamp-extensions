@@ -88,6 +88,15 @@ Deno.test("ready means running, and healthy where there is a healthcheck", () =>
   assertEquals(ready(undefined), false);
 });
 
+Deno.test("ps is parsed as one object per line or as one array", () => {
+  const lines = [psLine("a", "running", "healthy"), psLine("b", "exited")];
+  const expected = parsePs(lines.join("\n"));
+  assertEquals(expected.map((s) => s.service), ["a", "b"]);
+  assertEquals(parsePs(`[${lines.join(",")}]`), expected);
+  assertEquals(parsePs(""), []);
+  assertEquals(parsePs("[]\n"), []);
+});
+
 Deno.test("ensure starts nothing when every service is ready", async () => {
   const f = fake([[psLine("postgres", "running", "healthy")]]);
   try {

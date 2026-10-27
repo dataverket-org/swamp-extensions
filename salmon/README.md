@@ -106,3 +106,7 @@ globalArguments:
 `ensure`, `seed` and `test` then exchange a token for one carrying
 `roles: [ldap/Registry-Push]`; after `revoke --input app=db` the exchange fails
 with `invalid_target`.
+
+## License
+
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Linus Johansen.

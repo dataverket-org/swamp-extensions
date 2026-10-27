@@ -225,4 +225,4 @@ upgrading.
 
 ## License
 
-MIT — see [LICENSE.md](./LICENSE.md).
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari.

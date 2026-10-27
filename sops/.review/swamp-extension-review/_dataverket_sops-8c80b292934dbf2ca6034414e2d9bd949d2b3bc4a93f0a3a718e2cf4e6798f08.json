@@ -1,0 +1,67 @@
+{
+  "extension": "@dataverket/sops",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:07:50Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "ageKeyName is a file name, never a path or a value: the extension computes a path, stats it and hands it to sops in SOPS_AGE_KEY_FILE; it never reads the identity. A caller's exported SOPS_AGE_KEY_FILE wins, so no configuration can redirect a person's own key. The standing credentials-sensitive-field warning on secretsDir is a directory name, not a secret, unchanged since 2026.09.20.2."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "A vault provider has no logger and this one prints nothing; no path, name or value reaches a log line. Errors carry sops's stderr, which names recipients and locations, never key material."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The schema refuses a name with a path separator, a dot name or a control character, and refuses ageKeyFile and ageKeyName together, before any sops call. A missing file is not an error: the environment is left alone and sops reports its own failure to decrypt, which get rethrows with the exit code and stderr. Only NotFound is swallowed by fileExists; other stat errors propagate."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "15 tests, 0 failed: 9 unit tests of sopsAgeDir and sopsEnv with a fake existence check that rejects any path it was not told about (file present, absent, caller's export wins, no home, ageKeyFile verbatim, neither set, bad names, both set); conformance with new valid and invalid configs; two live tests against sops 3.13.3 and age-keygen, one decrypting through a key found by name in a scratch XDG_CONFIG_HOME and one refused when the named file is absent. The test task now passes --allow-run, so the integration tests run instead of being silently ignored, as they were in 2026.09.20.2."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "put, list and delete are unchanged. The environment is computed per sops call from the current process environment, so a key file that appears or disappears between runs is honoured on the next call; nothing is cached."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "sopsAgeDir mirrors sops's own lookup for keys.txt: XDG_CONFIG_HOME when set, else the user config directory, ~/Library/Application Support on macOS and ~/.config elsewhere. The XDG branch is exercised live against sops 3.13.3; the home branches are unit tested for both operating systems the manifest lists. Windows is not a declared platform."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One stat per sops invocation and no handles, timers or temporary files beyond the existing private directory for encryption, which is still removed on every path."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README documents ageKeyName and ageKeyFile as alternatives with a placeholder name; no addresses, hostnames or identifiers. Manifest version 2026.10.19.1, description updated, license declared; NOTICE records the modification; the review is committed in .review with the release. The deno-command safety warning is the sops subprocess the extension exists to run, argument vector only, unchanged since the first release."
+    },
+    {
+      "id": "vault-get-throws",
+      "verdict": "pass",
+      "note": "Unchanged: a missing key throws Secret not found before any sops call; a sops failure throws with its stderr, covered by the new live negative test."
+    },
+    {
+      "id": "vault-put-idempotent",
+      "verdict": "pass",
+      "note": "Unchanged: put overwrites the key's file; the conformance suite and the per-file live test write the same key twice."
+    },
+    {
+      "id": "vault-list-keys-only",
+      "verdict": "pass",
+      "note": "Unchanged: list walks the directory and returns names derived from file paths, decrypting nothing."
+    },
+    {
+      "id": "vault-getname",
+      "verdict": "pass",
+      "note": "Unchanged: the constructor's name is returned."
+    }
+  ]
+}

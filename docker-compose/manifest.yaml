@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/docker-compose"
-version: "2026.10.26.1"
+version: "2026.10.27.1"
 description: >
   Two methods for `@smith/docker-compose` that end-to-end setups need.
 
@@ -12,6 +12,7 @@ description: >
   methods also write a resource named `latest`, which current swamp reserves,
   so they fail after doing their work.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

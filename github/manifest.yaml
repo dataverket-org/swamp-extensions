@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/github"
-version: "2026.10.05.1"
+version: "2026.10.27.1"
 description: >
   GitHub repositories, releases, pull requests and repository settings for
   swamp, over the REST API. One model type, `@dataverket/github`.
@@ -26,6 +26,7 @@ description: >
   model's owner. The token comes from a vault expression and is never
   recorded or logged.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

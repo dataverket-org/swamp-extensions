@@ -255,3 +255,9 @@ of its effort on what should not happen — a `confirm` that does not match, a
 delete of something already gone, a credential that is missing or doubled, a
 converge that must not clobber the rest of a client. See
 [smoke/README.md](smoke/README.md).
+
+## License
+
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@thomas/zitadel`, is copyright 2026 Thomas Elliott under the
+MIT License, whose notice LICENSE.md keeps.

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/docker-compose",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T00:54:48Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "na",
+      "note": "No credentials; docker compose runs with the caller's docker."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Each docker compose call is logged with its argv; ensure logs what was already up or started, teardown what it removed."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A failing docker compose throws with the subcommand, exit code and stderr, before the state resource is written."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "A fake docker covers the argv (file, project directory, profiles), the ready rule (running, healthy where checked), ps parsed as one object per line and as one array, ensure starting nothing, ensure starting only the services not ready, teardown with and without volumes, and a failure writing nothing (7 tests). ensure, a second ensure, the state record and teardown twice were also run live against a two-service stack on a podman machine through docker compose v5.6.1, with the README's CLI lines."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensure starts only services that are not running and healthy; teardown is docker compose down, which succeeds when the stack is gone."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "docker compose ps --format json is parsed as one object per line (Compose v2.21 and later) or as one JSON array (earlier Compose), with every field defaulted."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Subprocess output is read to the end; teardown removes orphans and, by default, volumes."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "No addresses or identifiers in README or tests; the README's examples name placeholder services and a definition in the reader's repository."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Argument schemas are z.object without passthrough; the records follow the upstream state schema."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "na",
+      "note": "The methods write the upstream type's state spec, whose lifetime and GC the upstream defines."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Two methods added to an upstream type that has the rest of the lifecycle."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "The methods act on the compose project the definition names."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Both write state/current, the instance the upstream ps method writes, with the same shape."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Nothing is read back from stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "The extension adds methods only and defines no type version; this release changes the ps parser, the README and the manifest's license."
+    }
+  ]
+}

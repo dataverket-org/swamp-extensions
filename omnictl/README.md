@@ -186,5 +186,6 @@ totalNodes: ${{ data.latest("omni", "summary").attributes.totalNodes }}
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md); the original work is copyright Tommy
-McCormick.
+AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;
+the original work, `@mccormick/omni`, is copyright 2026 Tommy McCormick under
+the MIT License, whose notice LICENSE.md keeps.

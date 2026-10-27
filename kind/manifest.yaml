@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/kind"
-version: "2026.10.26.1"
+version: "2026.10.27.1"
 description: >
   One named kind (Kubernetes in Docker) cluster for swamp, created on demand
   for end-to-end tests.
@@ -12,6 +12,7 @@ description: >
   without creating it, and `delete` removes it, succeeding when it is already
   gone.
 repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
 paths:
   base: manifest
 models:

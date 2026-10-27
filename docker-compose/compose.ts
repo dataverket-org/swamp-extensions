@@ -110,18 +110,22 @@ async function compose(sub: string[], ctx: Context): Promise<string> {
   return out.stdout;
 }
 
-/** Parses `docker compose ps --format json`, one object per line. */
+/**
+ * Parses `docker compose ps --format json`: one object per line since Compose
+ * v2.21, one JSON array before that.
+ */
 export function parsePs(stdout: string): ComposeService[] {
-  return stdout.trim().split("\n").filter(Boolean).map((line) => {
-    const o = JSON.parse(line);
-    return {
-      name: String(o.Name ?? ""),
-      service: String(o.Service ?? ""),
-      status: String(o.Status ?? ""),
-      state: String(o.State ?? ""),
-      health: o.Health ? String(o.Health) : undefined,
-    };
-  });
+  const text = stdout.trim();
+  const objects: Record<string, unknown>[] = text.startsWith("[")
+    ? JSON.parse(text)
+    : text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return objects.map((o) => ({
+    name: String(o.Name ?? ""),
+    service: String(o.Service ?? ""),
+    status: String(o.Status ?? ""),
+    state: String(o.State ?? ""),
+    health: o.Health ? String(o.Health) : undefined,
+  }));
 }
 
 /** Running, and healthy when the service has a healthcheck. */
