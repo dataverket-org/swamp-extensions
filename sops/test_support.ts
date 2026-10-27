@@ -30,12 +30,17 @@ export async function scratchAge(): Promise<
   };
 }
 
-/** Whether sops and age-keygen are on PATH; the integration tests need both. */
+/**
+ * Whether sops and age-keygen are on PATH; the integration tests need both.
+ * `sops --version` asks GitHub whether it is the latest release unless told
+ * not to; the variable is ignored by versions that do not know it.
+ */
 export async function haveTools(): Promise<boolean> {
   for (const bin of ["sops", "age-keygen"]) {
     try {
       const r = await new Deno.Command(bin, {
         args: ["--version"],
+        env: { SOPS_DISABLE_VERSION_CHECK: "1" },
         stdout: "null",
         stderr: "null",
       }).output();

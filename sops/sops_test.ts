@@ -48,15 +48,17 @@ Deno.test("sopsAgeDir follows sops: XDG_CONFIG_HOME, then the home's config dire
 });
 
 Deno.test("ageKeyName names the file beside keys.txt when it exists", async () => {
-  const f = onlyFile("/h/.config/sops/age/swamp-infra.txt", true);
+  // XDG_CONFIG_HOME is honoured on every OS, so the expected path does not
+  // depend on the host; the HOME fallbacks are covered by the sopsAgeDir test.
+  const f = onlyFile("/x/sops/age/swamp-infra.txt", true);
   const env = await sopsEnv(
     cfg({ ageKeyName: "swamp-infra" }),
-    { HOME: "/h", PATH: "/bin" },
+    { HOME: "/h", XDG_CONFIG_HOME: "/x", PATH: "/bin" },
     f.exists,
   );
-  assertEquals(env.SOPS_AGE_KEY_FILE, "/h/.config/sops/age/swamp-infra.txt");
+  assertEquals(env.SOPS_AGE_KEY_FILE, "/x/sops/age/swamp-infra.txt");
   assertEquals(env.PATH, "/bin");
-  assertEquals(f.asked, ["/h/.config/sops/age/swamp-infra.txt"]);
+  assertEquals(f.asked, ["/x/sops/age/swamp-infra.txt"]);
 });
 
 Deno.test("ageKeyName leaves the environment alone when the file is absent", async () => {
