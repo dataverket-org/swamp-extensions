@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/openstack",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:24:51Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "GlobalArgsSchema.applicationCredentialSecret is .meta({ sensitive: true }) and documented as a vault expression; keypair.ts PrivateKeySchema.privateKey and application_credential.ts SecretSchema.secret are sensitive fields written once at create and never re-read. cli.ts passes the secret only through the subprocess env (clearEnv: true, inherited OS_* stripped when a cloud or credential is named) and redactSecret masks it in every CliError; no log call carries a secret, a private key or user data."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs info on entry with structured placeholders (listing/reading/creating/deleting ... {name}); list, create, delete, find and the reuse/no-op branches also log completion, writeAll warns on duplicate names and release warns when still bound. The update/attach/bind/start/stop/reboot methods log only the entry line and rely on the refreshed resource for completion, a minor gap against the rubric but not a defect."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "Validation throws before any write (server create boot/NIC checks, volume create sizeGb, port fixedIp, bind/attach exactly-one), CLI failures become CliError with argv words, exit code and stderr, settle/pollUntil throw on error states and timeouts. Issue: cli.ts NOT_FOUND includes the bare /not found/i and /\\(HTTP 404\\)/, so an auth or catalog failure such as keystoneauth's \"Could not find versioned identity endpoints ... Not Found (HTTP 404)\" or \"public endpoint for volumev3 service in RegionOne region not found\" makes showRawOrNull/showKeypairOrNull/showCredentialOrNull return null, and every delete/release then logs \"already gone\" and succeeds without touching the cloud; anchor the patterns on the resource phrasings (\"No <noun> with a name or ID of\", \"No <noun> found for\", \"could not be found\", ResourceNotFound) and drop the two generic ones."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Ran ~/.swamp/deno/deno test --allow-env --allow-read --allow-write --allow-run --allow-net: 121 passed, 0 failed; deno check, lint and fmt --check are clean. test_support.ts installs a scripted fake runner (__setRunner) plus a recording context, and every model has tests for list fan-out, create (new, reuse, invalid), update/rename, delete (present, already gone, CLI refusal drops nothing), waits (poll interval overridden), error states and flag-looking targets; method_kind_test.ts pins the twelve deletes to kind action. No live OpenStack is available here: smoke/delete-kind.sh (needs CLOUD, IMAGE_FILE and a swamp repo with this source added) was read but not run, and a local openstack 10.5.0 binary was used only to confirm the CLI flags via --help."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Every create first runs show (or image list --name, floating ip by address/description) and reuses the existing resource; every delete/release treats not-found as a no-op and only calls deleteResource after the CLI succeeded (method_kind_test.ts covers the refusal case). addRule tolerates isConflict, removeRule tolerates isNotFound, addSubnet/removeSubnet/addRoute/removeRoute compare against the live router first; an interrupted create with wait leaves a named resource that the next run adopts."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP: all calls go through python-openstackclient -f json, whose output is checked by assertShow/assertList and coerced by str/num/bool/strList/objList before any field is read; pagination and microversions are the CLI's. Every flag the models emit was verified against openstack 10.5.0 --help (server create --nic/--block-device/--use-config-drive/--hint, server add volume --enable-delete-on-termination, server group create --rule, image list --property/--tag, security group create --stateless, router create --external-gateway, router set --route, subnet set --no-*, port set --no-*, port list --status, floating ip list --status, application credential create --restricted). Truncation check: no method caps or pages results itself (listThenShow stores every id; image find selects the newest by design), so no truncated field is required."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "withTempFile removes the --user-data and --public-key files in finally with mode 0600; Deno.Command uses stdin null and piped stdout/stderr read to completion, with context.signal propagated and sleep aborting on it. Created resources are stored by id in the spec and deletes resolve by show before acting."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md and smoke/README.md use example.net, REPLACE, RegionOne and only RFC 5737 addresses (192.0.2.x, 198.51.100.x, 203.0.113.x); fixtures.ts uses RFC 5737 addresses, made-up UUIDs, placeholder project/user ids and rbd://example. The author's ~/kode path appears in the Development section as a local source-add example, not an infrastructure identifier."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "All 23 schemas (16 resource specs, nested Attachment/Rule/pool/route objects and every argument schema) are z.object without passthrough, z.any or z.unknown (grep). Schema-write conformance and field coverage: every write goes through writeAll with a normalizeX(raw) object whose declared return type is z.infer of the target spec, so deno check (clean) guarantees 1:1 field coverage with no extra or missing fields; the two direct writeResource calls (keypair privateKey {name, privateKey}, application-credential secret {name, id, secret}) match their schemas exactly and no field is a hardcoded placeholder (zone id is <service>/<name>, floatingIp name is the address by design)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All 18 specs across the 16 models set lifetime \"infinite\" with garbageCollection 10 (5 for the read-only flavor/zone/volumeType lookups, 3 for the privateKey and secret specs)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "server, image, volume, security-group, network, subnet, router and port have create/update/delete plus list/get; keypair, server-group, snapshot and application-credential have create/delete and list/get (OpenStack offers no update for them, snapshot rename excepted); floating-ip has allocate/bind/unbind/release; flavor, availability-zone and volume-type are read-only lookups. No model has a method named sync: list and get re-read live state and overwrite the stored resource, which is this collection design's drift mechanism, and every delete is kind action so one deletion does not tombstone the collection."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "common.ts exports checks auth-configured (labels [\"policy\"], offline via describeAuth(buildEnv)) and openstack-cli (labels [\"live\"], runs openstack --version) and all 16 models attach them, so --skip-check-label live works offline."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Instance-name check: each spec is written by one prefix (server-, image-, keypair-/privatekey-, servergroup-, flavor-, zone-<service>-, volume-, volumetype-, snapshot-, securitygroup-, network-, subnet-, router-, port-, floatingip-, appcred-/secret-), so the two-spec models never collide; every method writing a spec does so through the same normalizeX so shapes are identical across list/get/create/update. writeAll suffixes a duplicate name with the id and update deletes the old instance on rename."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back: update/delete/attach/bind re-read the live object with openstack show and only call context.deleteResource by instance name; there is no dataRepository or readResource use (grep)."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "issue",
+      "note": "The registry's latest is 2026.10.01.1 (pushed from commit 1dfbcfc, which already carried server.ts 2026.09.20.1), so 2026.10.27.1 bumps no behavior version and only relicenses. However no model declares an upgrades array, and server.ts was bumped 2026.09.18.1 -> 2026.09.20.1 (hostId added) in the published 2026.09.20.1 without one, so instances created under 2026.09.18.1 do not auto-migrate; the push dry-run warns version-bump-upgrade for all sixteen files. Add an upgrades entry per model (a no-op for the fifteen at 2026.09.18.1, and for server one that notes hostId is filled on the next list/get) or pass --skip-upgrade-check knowingly."
+    }
+  ]
+}

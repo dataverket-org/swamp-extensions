@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/omnictl",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:23:21Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "The key is serviceAccountKey (.meta sensitive, vault expression) or serviceAccountKeyFile read at call time, never both (common.ts resolveServiceAccountKey); it reaches omnictl only through OMNI_SERVICE_ACCOUNT_KEY in a clearEnv allow-listed environment (omnictl.ts buildEnv), never in argv, and run() redacts it from any failing stderr. joinTokens stores a SHA-256 fingerprint instead of the token; the stored talosconfig carries Omni's proxy and an identity, no key."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "issue",
+      "note": "Every log line uses structured placeholders, and discover, joinTokens and removeMachine log entry and completion. applyPatch, addMachine, setExtensions (non-dryRun path) and talosconfig log only their intent, and deleteMachine logs the count of patches before deleting but nothing after the Link is gone: a workflow log reads 'applying config patch X' with no line saying it was applied and read back. Add one info line after each writeResource/deleteResource."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "omnictl.ts isNotFound() matches /not found|doesn't exist|does not exist|NotFound/i on the whole error text, and defaultRunner's own missing-binary error reads 'omnictl binary not found; ...', so getResource() returns null instead of throwing when omnictl is not installed or omnictlPath is wrong. With --skip-check-label live (which the README recommends), deleteMachine then returns success as 'Omni already has no machine', removeMachine says 'is in no machine set', and addMachine says 'machine set X does not exist', all misleading. Match omnictl's resource-not-found text specifically (or throw a distinct error class from the runner and check it before the regex). Otherwise good: run() throws with exit code and redacted stderr, every Omni read happens before any writeResource, and apply-then-read-back throws when Omni returns nothing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Ran deno test --allow-env --allow-read --allow-write --allow-run --allow-net: 40 passed, 0 failed, across checks_test.ts, cluster_test.ts, common_test.ts and inventory_test.ts, using the __setRunner fake for omnictl and a hand-rolled context recording writes and deletes. Covered: both pre-flight checks (value, file, missing, empty, both, http, expired key, redaction), applyPatch with data and dataFile, dryRun, addMachine refusals, removeMachine, deleteMachine (own patches then Link, refusal, no-op), setExtensions, temp-file cleanup on success and failure, joinTokens never storing the token. No live Omni was available, so nothing was run against a real instance; discover's success path is tested only through mergeInventory, not through execute()."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "applyPatch, addMachine and setExtensions are omnictl apply (create or update), so a rerun updates; deleteMachine is a no-op when the Link is gone and recomputes the machine's own patches on each run, so a failure between patch and Link deletion is safe to retry. removeMachine deliberately refuses a machine in no machine set (documented), so a retry after success fails rather than succeeds; that is a documented design choice."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP; every call is omnictl. Checked offline against the local omnictl help text: cluster machine delete takes --timeout, talosconfig takes -c, --merge, --force and a path, apply takes -f and --dry-run, and --insecure-skip-tls-verify is global. COSI output is narrowed field by field with typeof guards (transform.ts asString/asNumber, inventory.ts joinTokenFromStatus, cluster.ts configPatchFromResource); parseOmnictlJson handles concatenated objects, a JSON array and empty output."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "mintTalosconfig and applyResource write into a private makeTempDir and remove it in finally on every path (tests verify file and dir are gone on success and failure); Deno.Command output() reads both pipes to the end, stdin is null, and the method signal is passed through. removeMachine deletes the stored machineSetNode record through context.deleteResource."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "issue",
+      "note": "Placeholders are clean: omni.example.net, <uuid>, ~/.talos/omni/*.key; no real IPs or hostnames in README.md or LICENSE.md (test fixtures use 10.0.0.x, RFC 1918 rather than RFC 5737, harmless). The README is however wrong about the code in two places: the 'When a machine is gone' section says deleteMachine deletes the machine's own patches 'and its Machine', while since 2026.10.01.3 cluster.ts deletes the Link (the table row above it says Link); and 'applyPatch and addMachine take dryRun=true' omits setExtensions, which also takes it (the manifest says every apply does)."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "All eleven z.object schemas in schema.ts, common.ts, inventory.ts and cluster.ts are plain z.object without passthrough; argument schemas constrain machine UUIDs, resource ids, extension names and the timeout with regexes."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All eight specs set both: inventory's node, cluster, summary (30d, gc 20), talosconfig and joinToken (30d, gc 5); cluster's configPatch, machineSetNode and extensionsConfiguration (infinite, gc 5)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "inventory is read-only by design (discover, talosconfig, joinTokens). cluster can create or update a ConfigPatch and an ExtensionsConfiguration and add or remove a machine, but has no method to delete a single ConfigPatch (a cluster- or machine-set-scoped one is only ever deletable by hand; deleteMachine removes a machine's own patches wholesale) or an ExtensionsConfiguration (extensions: [] empties it but leaves the resource), and no sync for any of the three specs, so a patch edited in the Omni UI is never detected as drift."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Both models carry checks.ts: service-account-key (label policy: https endpoint, key set once, file readable and non-empty) and omni-authenticates (label live: one omnictl get Clusters.omni.sidero.dev); checks_test.ts asserts both labels and that an expired key is explained without leaking the key."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "Each spec has one writer and the names are prefixed (node-, cluster-, summary, talosconfig-, jointoken-, configpatch-, machinesetnode-) except two. joinTokens names instances jointoken-<spec.name>, falling back to the fingerprint only when the name is empty; Omni does not make token names unique, so two tokens with the same name overwrite each other within one execution, and the fingerprint (the unique key) should be in the name. setExtensions writes sanitizeInstanceName(id) with no spec prefix, against the convention schema.ts states (instance names are global across specs), so a user-chosen id like configpatch-x collides with a configPatch instance."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "No method reads stored state back; every decision is made from a live omnictl get. The only stored-state access is removeMachine's context.deleteResource of the machineSetNode record; there is no dataRepository access. deleteResource is optional on MethodContext, so a context without it leaves the record behind."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "inventory is 2026.10.01.1 with upgrades entries for 2026.09.29.1 and 2026.10.01.1; cluster is 2026.10.01.3 with entries for 2026.09.29.1, 2026.10.01.1, 2026.10.01.2 and 2026.10.01.3, each with a description and an identity upgradeAttributes since global arguments never changed. Extension 2026.10.27.1 relicenses to AGPL-3.0-only (LICENSE.md, manifest license, README License section, deno.json fmt exclude) with no code or model version change."
+    }
+  ]
+}

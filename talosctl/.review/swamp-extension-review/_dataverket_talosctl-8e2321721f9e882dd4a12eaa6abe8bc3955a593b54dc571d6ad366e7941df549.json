@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/talosctl",
+  "version": "2026.10.27.1",
+  "reviewedAt": "2026-10-27T01:21:38Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "serviceAccountKey and talosconfigContent are .meta({ sensitive: true }) in GlobalArgsSchema; the kubeconfig spec is sensitiveOutput with its field sensitive, and serviceLog.lines is sensitive. The Omni key reaches talosctl only as OMNI_SERVICE_ACCOUNT_KEY in an allow-listed environment (buildEnv drops every other ambient variable, clearEnv: true), is redacted from error text with the talosconfig content (redactSecrets, also on the talos-context-exists path), and the key file variant reads at call time and errors name the path, never the value."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "issue",
+      "note": "Only etcdStatus, serviceLogs, processes and volumes call context.logger (node.ts lines 278-1125, all with structured placeholders, no interpolation); the other twelve methods never log, so applyConfig, patchConfig, bootstrap, reboot, shutdown, reset and upgrade emit no info line before or after the talosctl call that names the nodes and mode, and no method logs on entry. Add an info line before and after each talosctl call in those methods (the result record's message already has the text)."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "talosctl() throws with the subcommand, exit code and redacted stderr, retries only isTransientError text, and serviceLogs/processes check every per-node answer before writing anything. version (node.ts 720-741) does not: it interleaves one talosctl call and one writeResource per node, so a node failing after another answered leaves version-<node> records behind in a failed execution; collect the answers first as serviceLogs does. version also JSON.parses stdout with no shape check and writes tag \"unknown\" instead of throwing when version.tag is missing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Ran `deno test --allow-env --allow-read --allow-write --allow-run --allow-net`: 42 passed, 0 failed (21 node_test, 12 cluster_test, 3 layout_test, 6 tables_test). A scripted fake runner (__setRunner via installFake) and a recording context cover success and failure paths: failing talosctl, retries then give-up, key file missing/empty/both set, invalid regex, a worker refusing etcd, a down control plane, redaction of the key and the talosconfig, temp-file removal, and every check. Gaps: services, kubeconfig, applyConfig, patchConfig, bootstrap, shutdown and upgrade have no argv-pinning test, and a hand-rolled makeContext is used instead of createModelTestContext. No live Talos cluster was available, so no live run was done."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "The methods are reads or one-shot operations on machines the definition names, not create/delete of swamp-owned resources; applyConfig and patchConfig retry 12 times and bootstrap 20 times on transient gRPC errors, and per-node fan-out (perNode) keeps the other nodes' answers when one is down. A second bootstrap fails on talosctl's own error rather than succeeding silently, which the README states (\"once\"). narrow() refuses nodes outside the definition before anything runs."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP; talosctl output is parsed by header-aligned parseTable (etcd status, processes), parseConcatJson (get -o json), parseUsage, parseLogs and the whitespace parsers for services, etcd members and config contexts, with fixtures recorded from talosctl 1.14. Table parsers tolerate missing columns (optional schema fields) and skip talosctl's `error from node` lines; the version shape fallback is noted under error-handling."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "talosconfigContent is written to a Deno.makeTempFile and removed in a finally (tested); subprocess output is read to completion by Deno.Command.output() with stdin null; context.signal is passed to every spawn and to the retry sleep so a cancelled execution does not keep waiting."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md and the test fixtures use RFC 5737 addresses (192.0.2.x) and example.com/example.net hostnames; no account identifiers, internal hostnames or subnet topology. The additional files are README.md and LICENSE.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Every schema in node.ts and layout.ts is z.object without .passthrough() (grep finds none); enums constrain mode, sort and the argument ranges."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All nine resource specs set lifetime and garbageCollection: version, service, etcdMember, result infinite/10; kubeconfig infinite/5; volumeLayout and etcdStatus 30d/20; serviceLog and processes 7d/20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Not a CRUD lifecycle behavior: the machines exist outside swamp and the methods read them or run talosctl operations (apply, reboot, reset, upgrade); nothing is created or deleted for swamp to sync."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Four model checks with labels: talosctl-available (live), talosconfig-exists (policy), omni-key-readable (policy), talos-context-exists (live); each is unit-tested, and the two policy checks never read a node or print a key value."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Mechanical check enumerated every writeResource: version-<node>, service-<node>-<id>, etcd-<hostname>, etcd-status-<node> (control planes and unknown targets are disjoint sets), log-<node>-<service>, processes-<node>, volume-<hostname>, kubeconfig main, and result named per method (applyConfig, bootstrap, reboot, shutdown, reset, upgrade, patchConfig, health) all writing the same ResultSchema shape, one per execution. No two writes in one execution share a name; schema-write conformance and field coverage are 1:1 for all nine specs (version 6/6, service 5/5, etcdMember 6/6, kubeconfig 2/2, volumeLayout 14/14 with Disk 7/7 and Partition 6/6, result 4/4, etcdStatus both the reachable and unreachable paths, serviceLog 12/12, processes 7/7 with Process 8/8); processes is the one capped method and writes truncated = processes.length < total, serviceLog carries read/tail and matched/lines counts as its equivalent. Observations, not failures: result.success is only ever written true (failure throws), and processRecord falls back to pid -1 when PID is unparseable."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back; there is no readResource and no dataRepository access."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "The behavior version stays 2026.09.30.1 and node.ts is unchanged in this release (last modified 2026-10-15; 2026.10.27.1 relicenses the extension to AGPL-3.0-only in LICENSE.md, manifest.yaml and README.md), so no new upgrades entry is due; the existing chain 2026.09.29.1 -> .2 -> .3 -> 2026.09.30.1 has an identity upgradeAttributes for each, correct since only optional global fields were added."
+    }
+  ]
+}
