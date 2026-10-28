@@ -1,0 +1,92 @@
+id: a360195c-7a3a-45ad-9cdf-473fbf6be70c
+name: '@dataverket/platform-health'
+description: >-
+  One read-only check of the forges and S3 gateways a repository names: the health method of every
+  @dataverket/forgejo model in forgeModels and of every @dataverket/versitygw/gateway model in gatewayModels, each
+  recorded as that model's own status or health record, then one assertion per model that fails the run when a
+  forge answers unhealthy or a gateway is unreachable, or slower than maxLatencyMs when that is set. Nothing is
+  written to any service: a forge health is GET /api/v1/version and /api/healthz with the model's token, a gateway
+  health is an unsigned GET of its health path on the S3 port. The models are the caller's, named by the caller,
+  so their URLs, tokens and CA files stay in the caller's definitions and nothing here carries a value. Runs in a
+  few seconds; made to be run often, by hand, on a schedule, or as the first step of something larger.
+version: 1
+inputs:
+  properties:
+    forgeModels:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Names of @dataverket/forgejo models whose health is checked; each must exist in the repository
+    gatewayModels:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Names of @dataverket/versitygw/gateway models whose health is checked; each must exist in the repository
+    maxLatencyMs:
+      type: integer
+      default: 0
+      description: Fail a gateway whose health GET took longer than this many milliseconds; 0 checks reachability only
+jobs:
+  - name: forges
+    steps:
+      - name: forge-${{ self.m }}
+        description: Server version and health of one forge, recorded as its status record. Read-only.
+        forEach:
+          item: m
+          in: ${{ inputs.forgeModels }}
+        task:
+          type: model_method
+          modelIdOrName: ${{ self.m }}
+          methodName: health
+  - name: gateways
+    steps:
+      - name: gateway-${{ self.m }}
+        description: Reachability, TLS and latency of one gateway's S3 port, recorded as its health record. Read-only.
+        forEach:
+          item: m
+          in: ${{ inputs.gatewayModels }}
+        task:
+          type: model_method
+          modelIdOrName: ${{ self.m }}
+          methodName: health
+  - name: verify
+    dependsOn:
+      - job: forges
+        condition:
+          type: succeeded
+      - job: gateways
+        condition:
+          type: succeeded
+    steps:
+      - name: forge-${{ self.m }}-healthy
+        description: The forge's status record says healthy.
+        forEach:
+          item: m
+          in: ${{ inputs.forgeModels }}
+        task:
+          type: assert
+          expr: >-
+            data.latest(self.m, "status").attributes.healthy == true
+          message: >-
+            Forge ${{ self.m }} is not healthy: version ${{ data.latest(self.m, "status").attributes.version }}
+          severity: high
+      - name: gateway-${{ self.m }}-reachable
+        description: The gateway's health record says reachable with no error, and within maxLatencyMs when set.
+        forEach:
+          item: m
+          in: ${{ inputs.gatewayModels }}
+        task:
+          type: assert
+          expr: >-
+            data.latest(self.m, "health").attributes.reachable == true
+            && data.latest(self.m, "health").attributes.error == null
+            && (inputs.maxLatencyMs == 0 || data.latest(self.m, "health").attributes.latencyMs <= inputs.maxLatencyMs)
+          message: >-
+            Gateway ${{ self.m }} failed its health check: ${{ data.latest(self.m, "health").attributes.url }}
+            reachable=${{ data.latest(self.m, "health").attributes.reachable }}
+            status=${{ data.latest(self.m, "health").attributes.status }}
+            latencyMs=${{ data.latest(self.m, "health").attributes.latencyMs }}
+            error=${{ data.latest(self.m, "health").attributes.error }}
+          severity: high
