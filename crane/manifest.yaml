@@ -1,0 +1,59 @@
+manifestVersion: 1
+name: "@dataverket/crane"
+version: "2026.10.29.1"
+description: >
+  A container registry driven through crane, the registry client of
+  go-containerregistry: tags resolved to digests, images and indexes
+  described, images mirrored in by digest, digests given tags, and a file
+  read out of an artifact's layer, every outcome a swamp record.
+
+  One model type, `@dataverket/crane/registry`. `digest` resolves references
+  to digests and records, per tag, the digest it held last time and since
+  when it has been the current one, so a quarantine can wait for a base image
+  to stay unchanged. `describe` records an image or an index: media type,
+  platforms, created time, labels, annotations, layers and size. `copy`
+  brings an upstream image pinned by digest under <registry>/<namespace>,
+  leaves one already there with that digest unchanged, and checks the digest
+  after. `tag` points a tag at a digest already in a repository and records
+  the digest the tag held before, for a promotion that is a retag. `blob`
+  reads one file out of an artifact's tar+gzip layer, such as release.json
+  out of a Flux artifact, and records it as text and as JSON.
+
+  Two workflows: `@dataverket/mirror-image` resolves upstream tags to digests
+  and copies every image under the namespace, asserting each; and
+  `@dataverket/base-image-watch`, read-only and made to run daily, records
+  the digest of every watched upstream tag. A skill, `crane`, says which to
+  run for what. A credential comes from a vault, reaches crane on stdin into
+  a docker config that exists for one run only, and is never an argument;
+  without one crane uses the container config of the user running swamp.
+  crane runs as a subprocess with argv arrays, never through a shell. Written
+  against crane 0.22.1.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - registry.ts
+workflows:
+  - workflow-8cbf0907-ea6e-4a8f-8da9-5d7292478ffd.yaml
+  - workflow-a6bbc439-9318-42e8-8ae4-50c8d927ab11.yaml
+skills:
+  - crane
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - crane
+  - registry
+  - oci
+  - container
+  - image
+  - mirror
+  - digest
+  - flux
+  - artifact
+  - supply-chain
+dependencies: []

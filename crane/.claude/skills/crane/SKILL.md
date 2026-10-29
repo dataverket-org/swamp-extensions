@@ -1,0 +1,5 @@
+---
+name: crane
+description: >
+  Skeleton.
+---
