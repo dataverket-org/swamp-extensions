@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/ko",
+  "version": "2026.10.28.1",
+  "reviewedAt": "2026-10-28T21:20:30Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No argument carries a secret; ko reads registry credentials from the container config of the user running swamp. Nothing sensitive is recorded or logged."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs what it is about to do and what it did with structured placeholders; the subprocess env is never logged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A ko or go failure throws before any write with argv, directory and stderr. Refused before ko runs: a main-package set that is empty, bare naming with several commands, a tag with bad characters, an ldflags entry with a comma, a tarball with several platforms or several commands (ko rewrites the file per run), a tarball or layout together with the daemon (ko never writes them), and a layout path ko cannot name (lowercase only). A printed reference not among the recorded ones throws."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "21 unit tests with a fake go and ko cover describe (with and without a main package), build (patterns, daemon, no registry, multi-platform index and children, every refusal, failures) and resolve; the KO_E2E test runs ko 0.19.1 against fixtures/hello pushing nowhere: two commands into an OCI layout, one into a tarball, and a resolve; the three workflows ran through swamp, including ko.local into podman and a two-platform build."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Builds are reproducible by ko (trimpath); re-running build or resolve pushes the same digests; an OCI layout is appended to across runs, a tarball is one image by rule; the temporary image-refs file is removed on every path."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP; the contract is ko 0.19.1's CLI: --image-refs is parsed by digest against the last line of stdout, and the daemon publisher's digest-as-tag form is parsed too, each checked in tests. go list -f output is parsed as import path and package name."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The only temporary file is the image-refs file, removed in finally; subprocesses are awaited with the context signal."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, skill and fixtures use example.org and registry.example.org; the fixture module is example.org/hello with no real infrastructure named."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Every resource schema is a closed z.object; no passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource and the manifests file spec declare lifetime infinite and garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Builds are evidence, not a managed resource: nothing to update or delete; apply and delete were left out on purpose, rollout belongs to the deploy tooling."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "arguments (policy), module-found (local) and ko-installed (local, live) run before build and resolve; describe is read."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "module, build, resolution, manifests (file) and image-<command> never collide across specs; image names derive from the command's path under the module."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored data back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial version."
+    }
+  ]
+}

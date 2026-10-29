@@ -1,0 +1,216 @@
+id: c0ab6bef-ac1a-4169-9a0f-426cecde87be
+name: "@dataverket/ko-signed-images"
+description: >-
+  A signed build: every command of one Go module built into an image by ko and pushed, every image signed by
+  digest with cosign using a key held in a vault, and every signature verified, in one run that fails unless
+  all three happened for all of them. ko's part is @dataverket/ko-images without its assertion: describe, then
+  one build per command, each recorded with its digest. cosign's part takes those digests from this run's
+  image records, never from an input, so what is signed is exactly what was built. The key and its passphrase
+  are named by vault and key; with tlog false, the default, signatures go to the registry only. Registry
+  credentials come from the container config of the user running swamp. Its models are created on first use
+  as ko-signed-images-ko and ko-signed-images-cosign; runs for different modules share them, so run one
+  module at a time.
+version: 1
+inputs:
+  properties:
+    dir:
+      type: string
+      default: .
+      description: The Go module's directory, absolute or relative to the repository root
+    repo:
+      type: string
+      description: Registry path the images are pushed under (KO_DOCKER_REPO)
+    tags:
+      type: array
+      items:
+        type: string
+      default: [latest]
+      description: Tags for every image, such as a commit id and latest
+    importPaths:
+      type: array
+      items:
+        type: string
+      default: ["."]
+      description: Commands to build, relative to the module (./cmd/api) or as patterns (./cmd/...)
+    naming:
+      type: string
+      enum: [default, preserve-import-paths, base-import-paths, bare]
+      default: base-import-paths
+      description: How an image is named under repo; bare is repo itself and needs exactly one command
+    platforms:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Platforms as os/arch, or all; empty is ko's default, linux/amd64
+    sbom:
+      type: string
+      enum: [spdx, none]
+      default: spdx
+      description: The SBOM pushed beside each image
+    baseImage:
+      type: string
+      default: ""
+      description: Base image for every command, overriding .ko.yaml; pin it by digest
+    cache:
+      type: string
+      default: ""
+      description: Directory where ko caches base images, relative to the repository root
+    keyVault:
+      type: string
+      description: Vault holding the signing key as a PEM
+    keyKey:
+      type: string
+      description: Key of the signing key in keyVault
+    passphraseVault:
+      type: string
+      default: ""
+      description: Vault holding the key's passphrase; keyVault when empty
+    passphraseKey:
+      type: string
+      description: Key of the passphrase in that vault; store an empty passphrase there for a key that has none
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations every signature carries and verification requires, key=value, such as a commit id
+    recursive:
+      type: boolean
+      default: false
+      description: For a multi-platform build, also sign every image in each index
+    tlog:
+      type: boolean
+      default: false
+      description: Record signatures in a transparency log and require a log entry when verifying
+    signingConfig:
+      type: string
+      default: ""
+      description: A Sigstore signing config file, relative to the repository root, replacing what tlog chooses
+    trustedRoot:
+      type: string
+      default: ""
+      description: A Sigstore trusted root file, relative to the repository root, for private infrastructure
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP, for ko, or whose certificate does not verify, for cosign
+  required:
+    - repo
+    - keyVault
+    - keyKey
+    - passphraseKey
+jobs:
+  - name: describe
+    steps:
+      - name: module
+        description: What ko works with, as evidence beside the images. Read-only.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: ko-signed-images-ko
+          methodName: describe
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ${{ inputs.repo }}
+            naming: ${{ inputs.naming }}
+            platforms: ${{ inputs.platforms }}
+            sbom: ${{ inputs.sbom }}
+            baseImage: ${{ inputs.baseImage }}
+            cache: ${{ inputs.cache }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+  - name: build
+    dependsOn:
+      - job: describe
+        condition:
+          type: succeeded
+    steps:
+      - name: images
+        description: One ko build per command, pushed; one image record each with its digest, and one build record.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: ko-signed-images-ko
+          methodName: build
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ${{ inputs.repo }}
+            naming: ${{ inputs.naming }}
+            platforms: ${{ inputs.platforms }}
+            sbom: ${{ inputs.sbom }}
+            baseImage: ${{ inputs.baseImage }}
+            cache: ${{ inputs.cache }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            importPaths: ${{ inputs.importPaths }}
+            tags: ${{ inputs.tags }}
+            push: true
+  - name: sign
+    dependsOn:
+      - job: build
+        condition:
+          type: succeeded
+    steps:
+      - name: signatures
+        description: cosign sign of every image this run built, by repository and digest from its image records.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-images-cosign
+          methodName: sign
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            signingConfig: ${{ inputs.signingConfig }}
+            trustedRoot: ${{ inputs.trustedRoot }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("ko-signed-images-ko", "image").filter(i, i.tags.?workflowRunId.orValue("") == run.id).map(i, i.attributes.repository + "@" + i.attributes.digest) }}
+            annotations: ${{ inputs.annotations }}
+            recursive: ${{ inputs.recursive }}
+  - name: verify
+    dependsOn:
+      - job: sign
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: cosign verify of the same images against the key's public half.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-images-cosign
+          methodName: verify
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            signingConfig: ${{ inputs.signingConfig }}
+            trustedRoot: ${{ inputs.trustedRoot }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("ko-signed-images-ko", "image").filter(i, i.tags.?workflowRunId.orValue("") == run.id).map(i, i.attributes.repository + "@" + i.attributes.digest) }}
+            annotations: ${{ inputs.annotations }}
+      - name: every-image-built-signed-verified
+        description: >-
+          This run built at least one image, as many as the build record counts, and recorded one signature and
+          one verification per image, every verification verified.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.latest("ko-signed-images-ko", "build").attributes.count >= 1
+            && data.findBySpec("ko-signed-images-ko", "image").filter(i, i.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("ko-signed-images-ko", "build").attributes.count
+            && data.findBySpec("ko-signed-images-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("ko-signed-images-ko", "build").attributes.count
+            && data.findBySpec("ko-signed-images-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == data.latest("ko-signed-images-ko", "build").attributes.count
+          message: >-
+            The signed build of ${{ inputs.dir }} is incomplete: ${{ data.latest("ko-signed-images-ko", "build").attributes.count }} images built,
+            ${{ data.findBySpec("ko-signed-images-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() }} signed,
+            ${{ data.findBySpec("ko-signed-images-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} verified
+          severity: high

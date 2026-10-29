@@ -1,0 +1,3 @@
+# The base image, pinned by digest so that a run with KOCACHE set needs the
+# network only once. cgr.dev/chainguard/static is ko's own default.
+defaultBaseImage: cgr.dev/chainguard/static:latest

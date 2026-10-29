@@ -1,0 +1,58 @@
+manifestVersion: 1
+name: "@dataverket/ko"
+version: "2026.10.28.1"
+description: >
+  Go programs built into container images by ko, https://ko.build: no
+  Dockerfile, no container daemon, one image per main package, pushed to a
+  registry, loaded into the local daemon, or written to a tarball.
+
+  One model type, `@dataverket/ko/module`, a Go module. `describe` records
+  what ko works with: module path, Go and ko versions, the config file and
+  base image in effect, every main package. `build` builds the commands named
+  (paths or patterns, each checked to be a main package with go list), one ko
+  run per command, and records every image with its reference and digest.
+  `resolve` builds and publishes the ko:// references in a set of manifests
+  and records the rendered manifests as a file, plus every image in them that
+  is not pinned by digest. Images are named <repo>/<command> by default. A
+  base image pinned by digest and a cache directory make a build need the
+  network only once.
+
+  Three workflows, each bringing its own model and ending in an assertion:
+  `@dataverket/ko-verify` proves every command builds, without a registry;
+  `@dataverket/ko-images` builds and pushes, or loads into the daemon; and
+  `@dataverket/ko-manifests` renders manifests with every image pinned by
+  digest, for kubectl, flux or kustomize to take further. A skill, `ko`, says
+  which to run for what. ko and go run as subprocesses in the module's
+  directory with argv arrays, never through a shell; registry credentials
+  come from the container config, never from an argument. Written against ko
+  0.19.1.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - module.ts
+workflows:
+  - workflow-2e4b9047-f0e9-4641-8a1a-9b730bc7f4a3.yaml
+  - workflow-39d3cf77-6a01-46b8-9ef3-c7f5d8fa95bd.yaml
+  - workflow-a134f13a-a1a2-485f-8b4b-f68f305848da.yaml
+skills:
+  - ko
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - ko
+  - go
+  - golang
+  - container
+  - image
+  - oci
+  - build
+  - registry
+  - sbom
+  - kubernetes
+dependencies: []

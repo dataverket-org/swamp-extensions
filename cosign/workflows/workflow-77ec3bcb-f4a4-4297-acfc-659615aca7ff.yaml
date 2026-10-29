@@ -1,0 +1,126 @@
+id: 77ec3bcb-f4a4-4297-acfc-659615aca7ff
+name: "@dataverket/cosign-sign"
+description: >-
+  Sign images named by digest with a private key held in a vault, then verify every one of them against that
+  key's public half and fail unless all verify. The key and its passphrase are named by vault and key, never
+  passed as values, because workflow inputs are recorded in cleartext in the run history; the key reaches
+  cosign through its environment, never a file or an argument. With tlog false, the default, signatures go to
+  the registry only, through a signing config with no transparency log, and verification ignores the log; with
+  tlog true they are recorded in Rekor and a log entry is required. Registry credentials come from the
+  container config of the user running swamp. Its model is created on first use as cosign-sign.
+version: 1
+inputs:
+  properties:
+    refs:
+      type: array
+      items:
+        type: string
+      description: Images to sign, each pinned by digest, <repository>@sha256:<digest>
+    keyVault:
+      type: string
+      description: Vault holding the private key as a PEM
+    keyKey:
+      type: string
+      description: Key of the private key in keyVault
+    passphraseVault:
+      type: string
+      default: ""
+      description: Vault holding the key's passphrase; keyVault when empty
+    passphraseKey:
+      type: string
+      description: Key of the passphrase in that vault; store an empty passphrase there for a key that has none
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations every signature carries and verification requires, key=value
+    recursive:
+      type: boolean
+      default: false
+      description: For an image index, also sign every image in it
+    tlog:
+      type: boolean
+      default: false
+      description: Record signatures in a transparency log and require a log entry when verifying
+    signingConfig:
+      type: string
+      default: ""
+      description: A Sigstore signing config file, relative to the repository root, replacing what tlog chooses
+    trustedRoot:
+      type: string
+      default: ""
+      description: A Sigstore trusted root file, relative to the repository root, for private infrastructure
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry whose certificate does not verify
+    httpRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP
+  required:
+    - refs
+    - keyVault
+    - keyKey
+    - passphraseKey
+jobs:
+  - name: sign
+    steps:
+      - name: signatures
+        description: One cosign sign per image; one signature record each.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: cosign-sign
+          methodName: sign
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            signingConfig: ${{ inputs.signingConfig }}
+            trustedRoot: ${{ inputs.trustedRoot }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.httpRegistry }}
+          inputs:
+            refs: ${{ inputs.refs }}
+            annotations: ${{ inputs.annotations }}
+            recursive: ${{ inputs.recursive }}
+  - name: verify
+    dependsOn:
+      - job: sign
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: One cosign verify per image against the key's public half; one verification record each.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: cosign-sign
+          methodName: verify
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            signingConfig: ${{ inputs.signingConfig }}
+            trustedRoot: ${{ inputs.trustedRoot }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.httpRegistry }}
+          inputs:
+            refs: ${{ inputs.refs }}
+            annotations: ${{ inputs.annotations }}
+      - name: every-image-verified
+        description: This run recorded one verification per image, every one verified.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("cosign-sign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).size() == inputs.refs.size()
+            && data.findBySpec("cosign-sign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).size() == 0
+          message: >-
+            Not every image signed by this run verifies: ${{ data.findBySpec("cosign-sign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }}
+          severity: high

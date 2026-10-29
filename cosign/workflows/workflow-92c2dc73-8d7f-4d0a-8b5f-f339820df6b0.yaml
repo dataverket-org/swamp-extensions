@@ -1,0 +1,79 @@
+id: 92c2dc73-8d7f-4d0a-8b5f-f339820df6b0
+name: "@dataverket/cosign-verify"
+description: >-
+  Verify images named by digest against a public key and fail unless every one carries a signature that
+  checks out, with the required annotations when any are given. Read-only: nothing is pushed anywhere. The
+  public key is a PEM or a file in the repository, nothing secret. With tlog false, the default, the
+  transparency log is ignored; with tlog true a log entry is required. Made to gate a deploy: run it on the
+  digests a manifest pins before anything applies them. Its model is created on first use as cosign-verify.
+version: 1
+inputs:
+  properties:
+    refs:
+      type: array
+      items:
+        type: string
+      description: Images to verify, each pinned by digest, <repository>@sha256:<digest>
+    publicKey:
+      type: string
+      description: The public key, as a PEM or a file absolute or relative to the repository root
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations a signature must carry to count, key=value
+    tlog:
+      type: boolean
+      default: false
+      description: Require a transparency log entry for every signature
+    trustedRoot:
+      type: string
+      default: ""
+      description: A Sigstore trusted root file, relative to the repository root, for private infrastructure
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry whose certificate does not verify
+    httpRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP
+  required:
+    - refs
+    - publicKey
+jobs:
+  - name: verify
+    steps:
+      - name: verifications
+        description: One cosign verify per image; one verification record each, verified or not.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: cosign-verify
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            trustedRoot: ${{ inputs.trustedRoot }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.httpRegistry }}
+          inputs:
+            refs: ${{ inputs.refs }}
+            annotations: ${{ inputs.annotations }}
+      - name: every-image-verified
+        description: This run recorded one verification per image, every one verified.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("cosign-verify", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).size() == inputs.refs.size()
+            && data.findBySpec("cosign-verify", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).size() == 0
+          message: >-
+            Not every image verifies: ${{ data.findBySpec("cosign-verify", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }}
+          severity: high

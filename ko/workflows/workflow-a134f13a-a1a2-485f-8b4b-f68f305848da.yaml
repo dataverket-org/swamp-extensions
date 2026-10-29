@@ -1,0 +1,106 @@
+id: a134f13a-a1a2-485f-8b4b-f68f305848da
+name: "@dataverket/ko-verify"
+description: >-
+  Prove that every command of one Go module builds into a container image, without a registry: ko builds each
+  for the platforms given, pushes nowhere, records every image's digest, and optionally writes the images to a
+  tarball for a local load. First records what ko worked with (module path, Go and ko versions, the base
+  image in effect). Fails unless every command was built and recorded with a digest. Made for a check before
+  merge, or as the first job of a release: with a base image pinned by digest and a cache directory it needs
+  no network at all after the first run. Its model is created on first use as ko-verify; runs for different
+  modules share it, so run one module at a time.
+version: 1
+inputs:
+  properties:
+    dir:
+      type: string
+      default: .
+      description: The Go module's directory, absolute or relative to the repository root
+    importPaths:
+      type: array
+      items:
+        type: string
+      default: ["."]
+      description: Commands to build, relative to the module (./cmd/api) or as patterns (./cmd/...)
+    platforms:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Platforms as os/arch, or all; empty is ko's default, linux/amd64
+    baseImage:
+      type: string
+      default: ""
+      description: Base image for every command, overriding .ko.yaml; pin it by digest
+    cache:
+      type: string
+      default: ""
+      description: Directory where ko caches base images, relative to the repository root
+    tarball:
+      type: string
+      default: ""
+      description: Write the image to this tarball, relative to the repository root, for docker load or podman load; one command on one platform
+    tags:
+      type: array
+      items:
+        type: string
+      default: [latest]
+      description: Tags the images carry in the tarball
+jobs:
+  - name: describe
+    steps:
+      - name: module
+        description: What ko works with. Read-only.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: ko-verify
+          methodName: describe
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ""
+            platforms: ${{ inputs.platforms }}
+            sbom: none
+            baseImage: ${{ inputs.baseImage }}
+            cache: ${{ inputs.cache }}
+  - name: build
+    dependsOn:
+      - job: describe
+        condition:
+          type: succeeded
+    steps:
+      - name: images
+        description: One ko build per command, pushed nowhere, each recorded with its digest.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: ko-verify
+          methodName: build
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ""
+            platforms: ${{ inputs.platforms }}
+            sbom: none
+            baseImage: ${{ inputs.baseImage }}
+            cache: ${{ inputs.cache }}
+          inputs:
+            importPaths: ${{ inputs.importPaths }}
+            tags: ${{ inputs.tags }}
+            push: false
+            tarball: ${{ inputs.tarball }}
+  - name: verify
+    dependsOn:
+      - job: build
+        condition:
+          type: succeeded
+    steps:
+      - name: every-command-built
+        description: This run recorded as many images as the build counts, at least one, every one with a sha256 digest.
+        task:
+          type: assert
+          expr: >-
+            data.latest("ko-verify", "build").attributes.count >= 1
+            && data.findBySpec("ko-verify", "image").filter(i, i.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("ko-verify", "build").attributes.count
+            && data.findBySpec("ko-verify", "image").filter(i, i.tags.?workflowRunId.orValue("") == run.id && !i.attributes.digest.matches("^sha256:[0-9a-f]{64}$")).size() == 0
+          message: >-
+            Not every command of ${{ inputs.dir }} was built and recorded with a digest; see the image records of ko-verify
+          severity: high

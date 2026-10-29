@@ -1,0 +1,58 @@
+manifestVersion: 1
+name: "@dataverket/cosign"
+version: "2026.10.28.1"
+description: >
+  Container images signed and verified with cosign, https://github.com/sigstore/cosign,
+  key-based, with or without a transparency log.
+
+  One model type, `@dataverket/cosign/signer`, one signing identity. `sign`
+  signs images named by digest with annotations, `verify` checks them against
+  the public key and records what it found, verified or not, so a workflow
+  can assert; `attest` attaches a predicate file as an attestation of a type
+  and `verifyAttestation` checks those; `signBlob` and `verifyBlob` do the
+  same for a file, with a Sigstore bundle beside it; `describe` records
+  cosign's version and the public key in effect with its fingerprint;
+  `generateKeyPair` makes a key pair and records it with the private key as a
+  sensitive field, in the vault. The
+  private key is a PEM from a vault expression, a KMS or HSM reference, or a
+  key file: a PEM reaches cosign through its environment, never a file or an
+  argument, and never appears in a record, a log or an error. Tags are
+  refused: what is signed is a digest.
+
+  With `tlog` false, the default, signatures go to the registry only, through
+  a signing config with no transparency log that the model generates per run;
+  with `tlog` true they are recorded in Rekor and a log entry is required to
+  verify. A signing config or trusted root of your own, for private Sigstore
+  infrastructure, replaces that. Two workflows: `@dataverket/cosign-sign`
+  signs digests with a key from a vault and verifies them; `@dataverket/cosign-verify`
+  gates on a public key, read-only. A skill, `cosign`, says which to run for
+  what, and how to put a key in the vault. Written against cosign 3.1.4.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - signer.ts
+workflows:
+  - workflow-77ec3bcb-f4a4-4297-acfc-659615aca7ff.yaml
+  - workflow-92c2dc73-8d7f-4d0a-8b5f-f339820df6b0.yaml
+skills:
+  - cosign
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - cosign
+  - sigstore
+  - signing
+  - signature
+  - attestation
+  - supply-chain
+  - container
+  - image
+  - oci
+  - registry
+dependencies: []

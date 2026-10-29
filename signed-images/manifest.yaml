@@ -1,0 +1,44 @@
+manifestVersion: 1
+name: "@dataverket/signed-images"
+version: "2026.10.28.1"
+description: >
+  One workflow, `@dataverket/ko-signed-images`: a signed build. Every command
+  of one Go module is built into an image by ko and pushed, every image is
+  signed by digest with cosign using a key held in a vault, and every
+  signature is verified, in one run that fails unless all three happened for
+  all of them.
+
+  cosign signs the digests this run's image records carry, never a value from
+  an input, so what is signed is exactly what was built. The key and its
+  passphrase are named by vault and key, because workflow inputs are recorded
+  in cleartext in the run history. With `tlog` false, the default, signatures
+  go to the registry only; with `tlog` true they are recorded in Rekor.
+  Registry credentials come from the container config of the user running
+  swamp. Built on `@dataverket/ko` and `@dataverket/cosign`, both
+  dependencies.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models: []
+workflows:
+  - workflow-c0ab6bef-ac1a-4169-9a0f-426cecde87be.yaml
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - ko
+  - cosign
+  - sigstore
+  - signing
+  - supply-chain
+  - go
+  - container
+  - image
+  - oci
+dependencies:
+  - "@dataverket/ko"
+  - "@dataverket/cosign"
