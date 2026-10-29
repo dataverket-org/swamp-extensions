@@ -1,0 +1,203 @@
+id: 721d7910-1e2b-45c6-9935-5a6201623258
+name: "@dataverket/verify-release"
+description: >-
+  Verify a signed release before anything moves: the artifact's tag is resolved to its digest with crane, and
+  everything after uses that digest; cosign verifies the artifact's signature and its custom attestation
+  against a public key; release.json is read out of the artifact's layer with crane blob; and every image
+  it lists is verified by repository and digest against the same key. The run fails unless the artifact
+  verified, the attestation verified, the release was read, it lists at least one image, every listed image
+  has a verified verification from this run and none failed. Read-only: nothing is pushed, tagged or copied,
+  so no credential is taken; crane and cosign read with the container config of the user running swamp.
+  Every digest comes from a record of this run, the artifact's from crane's digest record and the images'
+  from the release.json read out of that digest, never from an input. With tlog false, the default, the
+  transparency log is ignored; with tlog true a log entry is required. Its models are created on first use
+  as verify-release-crane and verify-release-cosign; @dataverket/promote-release and
+  @dataverket/mirror-release-images run it as their first step.
+version: 1
+inputs:
+  properties:
+    repository:
+      type: string
+      description: The artifact's repository, <registry>/<path>, as signed-release pushed it
+    tag:
+      type: string
+      default: ""
+      description: The artifact's tag, resolved to its digest first; give tag or digest
+    digest:
+      type: string
+      default: ""
+      description: The artifact's digest, sha256:<64 hex>, instead of a tag
+    publicKey:
+      type: string
+      description: The public key, as a PEM or a file absolute or relative to the repository root
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations the artifact's signature must carry to count, key=value, such as a commit id
+    tlog:
+      type: boolean
+      default: false
+      description: Require a transparency log entry for every signature and attestation
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP or whose certificate does not verify, for crane and cosign
+  required:
+    - repository
+    - publicKey
+jobs:
+  - name: pin
+    steps:
+      - name: tag-or-digest-given
+        description: The artifact is named by tag or by digest; checked before anything runs.
+        task:
+          type: assert
+          expr: >-
+            inputs.tag != "" || inputs.digest != ""
+          message: >-
+            Give tag or digest beside repository ${{ inputs.repository }}; neither names the artifact
+          severity: high
+      - name: digest
+        description: crane digest of the artifact; the digest record pins it for every step after. Read-only.
+        dependsOn:
+          - step: tag-or-digest-given
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: verify-release-crane
+          methodName: digest
+          globalArgs:
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs:
+              - >-
+                  ${{ inputs.digest != "" ? inputs.repository + "@" + inputs.digest : inputs.repository + ":" + inputs.tag }}
+  - name: artifact
+    dependsOn:
+      - job: pin
+        condition:
+          type: succeeded
+    steps:
+      - name: verification
+        description: cosign verify of the artifact by the digest this run resolved, against the public key.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verify-release-cosign
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("verify-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest) }}
+            annotations: ${{ inputs.annotations }}
+      - name: attestation-verification
+        description: cosign verify-attestation of the custom attestation on the artifact against the public key.
+        dependsOn:
+          - step: verification
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verify-release-cosign
+          methodName: verifyAttestation
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("verify-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest) }}
+            type: custom
+      - name: artifact-verified
+        description: >-
+          The artifact's signature and attestation verified, checked before release.json is read out of it,
+          so an artifact nobody signed fails here by its signature and not by what it holds.
+        dependsOn:
+          - step: attestation-verification
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verify-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.tags.?step.orValue("") == "verification" && v.attributes.verified == true).size() == 1
+            && data.findBySpec("verify-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == 1
+          message: >-
+            The artifact at ${{ inputs.repository }} is not signed as a release: ${{ data.findBySpec("verify-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }},
+            attestation ${{ data.findBySpec("verify-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }}
+          severity: high
+      - name: release
+        description: crane blob reads release.json out of the artifact's layer, by the same digest; the blob record holds it as JSON. Read-only.
+        dependsOn:
+          - step: artifact-verified
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: verify-release-crane
+          methodName: blob
+          globalArgs:
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            ref: ${{ data.findBySpec("verify-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest)[0] }}
+            path: release.json
+  - name: images
+    dependsOn:
+      - job: artifact
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: One cosign verify per image release.json lists, by repository and digest, against the same public key; one verification record each, verified or not.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verify-release-cosign
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.images.map(i, i.repository + "@" + i.digest))[0] }}
+      - name: release-verified
+        description: >-
+          This run resolved exactly one artifact digest, recorded one verified verification and one verified
+          attestation verification of it, read one release.json out of it listing at least one image, and
+          recorded a verified verification for every image listed, with none failed.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verify-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("verify-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.tags.?step.orValue("") == "verification" && v.attributes.verified == true).size() == 1
+            && data.findBySpec("verify-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == 1
+            && data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.images.size())[0] >= 1
+            && data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.images.size())[0] == data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.imageCount)[0]
+            && data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.images.all(i, data.findBySpec("verify-release-cosign", "verification").exists(v, v.tags.?workflowRunId.orValue("") == run.id && v.tags.?step.orValue("") == "verifications" && v.attributes.verified == true && v.attributes.ref == i.repository + "@" + i.digest)))[0]
+            && data.findBySpec("verify-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).size() == 0
+          message: >-
+            The release at ${{ inputs.repository }} is not verified: artifact ${{ data.findBySpec("verify-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.digest) }},
+            not verified ${{ data.findBySpec("verify-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }},
+            attestation not verified ${{ data.findBySpec("verify-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }},
+            release.json lists ${{ data.findBySpec("verify-release-crane", "blob").filter(b, b.tags.?workflowRunId.orValue("") == run.id).map(b, b.attributes.json.images.map(i, i.repository + "@" + i.digest)) }}
+          severity: high
