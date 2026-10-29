@@ -3,11 +3,12 @@ name: cosign
 description: >
   Sign and verify container images with cosign through the @dataverket/cosign
   extension: key-based signatures by digest, with or without a transparency
-  log, attestations with a predicate file, files signed with a Sigstore
-  bundle, and a key pair kept in a swamp vault. Use when asked to "sign
-  images", "cosign sign", "verify a signature before deploy", "attach an SBOM
-  or provenance attestation", "sign a release file", "sign-blob", "generate a
-  cosign key", or to gate a rollout on signed images.
+  log, keyless verification against a certificate identity and OIDC issuer,
+  attestations with a predicate file, files signed with a Sigstore bundle,
+  and a key pair kept in a swamp vault. Use when asked to "sign images",
+  "cosign sign", "verify a signature before deploy", "verify an upstream image
+  keyless", "attach an SBOM or provenance attestation", "sign a release file",
+  "sign-blob", "generate a cosign key", or to gate a rollout on signed images.
 ---
 
 # cosign
@@ -65,17 +66,35 @@ live in the registry only, and verifies with the log ignored. For a public
 image, `tlog: true`. For a private Rekor or TSA, give `signingConfig` and
 `trustedRoot` files.
 
+## Keyless verification
+
+An image signed by a CI job with a Sigstore certificate has no public key: give
+the signer `certificateIdentity` (exact) or `certificateIdentityRegexp`, plus
+`oidcIssuer`, and set `tlog: true`. `verify`, `verifyAttestation` and
+`verifyBlob` then pass the identity and issuer to cosign instead of a key, and
+the log entry is required. `publicKey` beside an identity, an identity without
+an issuer, and `tlog: false` with an identity are refused before cosign runs.
+Signing here is always with a key; a pipeline that verifies upstream keyless and
+signs its own images without a log uses two signers.
+
+```sh
+swamp model create @dataverket/cosign/signer upstream \
+  --global-arg 'certificateIdentityRegexp=^https://github.com/<org>/<repo>/' \
+  --global-arg oidcIssuer=https://token.actions.githubusercontent.com \
+  --global-arg tlog=true
+```
+
 ## What gets recorded
 
-| Record                                            | Holds                                                                               |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `signer`                                          | cosign version, how the key was given, the public key in effect and its fingerprint |
-| `signature-<repository>-<digest>`                 | One image signed: ref, repository, digest, annotations                              |
-| `verification-<repository>-<digest>`              | `verified`, the signatures' payloads, cosign's `error` when none counted            |
-| `attestation-<repository>-<digest>`               | One attestation: type, predicate path and its sha256                                |
-| `attestationVerification-<repository>-<digest>`   | `verified`, the predicate types found                                               |
-| `blobSignature-<file>`, `blobVerification-<file>` | A file's sha256, its bundle, and whether it verifies                                |
-| `keypair`                                         | A generated pair; `privateKey` is sensitive                                         |
+| Record                                            | Holds                                                                                                                        |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `signer`                                          | cosign version, how the key was given, the public key in effect and its fingerprint, `verifyMode` (`key`, `keyless`, `none`) |
+| `signature-<repository>-<digest>`                 | One image signed: ref, repository, digest, annotations                                                                       |
+| `verification-<repository>-<digest>`              | `verified`, the signatures' payloads, cosign's `error` when none counted                                                     |
+| `attestation-<repository>-<digest>`               | One attestation: type, predicate path and its sha256                                                                         |
+| `attestationVerification-<repository>-<digest>`   | `verified`, the predicate types found                                                                                        |
+| `blobSignature-<file>`, `blobVerification-<file>` | A file's sha256, its bundle, and whether it verifies                                                                         |
+| `keypair`                                         | A generated pair; `privateKey` is sensitive                                                                                  |
 
 An image that does not verify is a record with `verified: false`, not a failed
 method; the workflows assert on it. Read the latest verdicts with:
@@ -87,6 +106,8 @@ swamp data query 'modelName == "cosign-verify" && specName == "verification"' --
 ## Do not
 
 - Sign a tag, or pass a key or passphrase as an input.
+- Verify keyless with `tlog: false`: the signature is in Rekor, and the model
+  refuses the combination.
 - Expect `.sig` tags: cosign 3 stores signatures as OCI referrers, so the
   registry must support the referrers API or its tag fallback (most do).
 - Run `cosign-sign` for several key pairs at once; the workflow's model is

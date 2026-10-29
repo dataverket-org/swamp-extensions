@@ -16,6 +16,7 @@ import {
   type Context,
   fingerprint,
   GlobalArgsSchema,
+  identityProblem,
   keyKind,
   masked,
   model,
@@ -27,6 +28,7 @@ import {
   VerifyArgsSchema,
   VerifyAttestationArgsSchema,
   VerifyBlobArgsSchema,
+  verifyMode,
 } from "./signer.ts";
 
 /** This extension's directory doubles as the repository root in tests. */
@@ -974,5 +976,291 @@ Deno.test({
     } finally {
       await Deno.remove(dir, { recursive: true });
     }
+  },
+});
+
+// Keyless: a certificate identity and its issuer instead of a public key.
+const IDENTITY_REGEXP =
+  "^https://github.com/example/release/.github/workflows/";
+const IDENTITY =
+  "https://github.com/example/release/.github/workflows/release.yaml@refs/heads/main";
+const ISSUER = "https://token.actions.githubusercontent.com";
+const KEYLESS = {
+  key: "",
+  password: "",
+  certificateIdentityRegexp: IDENTITY_REGEXP,
+  oidcIssuer: ISSUER,
+  tlog: true,
+};
+
+Deno.test("verifyMode tells keyless, key and nothing apart, and an identity wins over a key", () => {
+  assertEquals(verifyMode({}), "none");
+  assertEquals(verifyMode({ key: PRIVATE }), "key");
+  assertEquals(verifyMode({ publicKey: PUBLIC }), "key");
+  assertEquals(verifyMode({ certificateIdentity: IDENTITY }), "keyless");
+  assertEquals(verifyMode({ certificateIdentityRegexp: ".*" }), "keyless");
+  assertEquals(
+    verifyMode({ key: PRIVATE, certificateIdentity: IDENTITY }),
+    "keyless",
+  );
+});
+
+Deno.test("the arguments check accepts a keyless set and refuses the combinations that cannot work", () => {
+  assertEquals(argumentProblem(KEYLESS), null);
+  assertEquals(
+    argumentProblem({
+      certificateIdentity: IDENTITY,
+      oidcIssuer: ISSUER,
+      tlog: true,
+    }),
+    null,
+  );
+  // A signer that signs with its key and verifies another party keyless.
+  assertEquals(argumentProblem({ ...KEYLESS, key: PRIVATE }), null);
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, publicKey: PUBLIC })!,
+    "publicKey and a certificate identity are both set",
+  );
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, oidcIssuer: "" })!,
+    "without oidcIssuer",
+  );
+  assertStringIncludes(
+    argumentProblem({ oidcIssuer: ISSUER })!,
+    "oidcIssuer is set without a certificate identity",
+  );
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, certificateIdentity: IDENTITY })!,
+    "both set",
+  );
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, tlog: false })!,
+    "tlog is false with a certificate identity",
+  );
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, tlog: undefined })!,
+    "tlog is false",
+  );
+  assertStringIncludes(
+    argumentProblem({ ...KEYLESS, oidcIssuer: "a\nb" })!,
+    "oidcIssuer holds a newline",
+  );
+  assertStringIncludes(
+    argumentProblem({
+      ...KEYLESS,
+      certificateIdentityRegexp: "${{ inputs.identity }}",
+    })!,
+    "unevaluated expression",
+  );
+  assertEquals(identityProblem({}), null);
+});
+
+Deno.test("verify keyless passes the identity and issuer instead of a key, with the log required", async () => {
+  const f = fake({ signed: [DIGEST] });
+  try {
+    const { ctx, written } = context(KEYLESS);
+    await verify({ refs: [REF, REF2], annotations: ["build=abc"] }, ctx);
+    assertEquals(f.calls.some((c) => c.args[0] === "public-key"), false);
+    const v = f.calls.filter((c) => c.args[0] === "verify");
+    assertEquals(v[0].args, [
+      "verify",
+      "--certificate-identity-regexp",
+      IDENTITY_REGEXP,
+      "--certificate-oidc-issuer",
+      ISSUER,
+      "--output",
+      "json",
+      "-a",
+      "build=abc",
+      REF,
+    ]);
+    assertEquals("COSIGN_KEY" in v[0].env, false);
+    assertEquals(written[0].data.verified, true);
+    assertEquals(written[0].data.tlog, true);
+    assertEquals(written[1].data.verified, false);
+    assertEquals(written[1].data.error, "no signatures found");
+  } finally {
+    f.restore();
+  }
+  const g = fake({ signed: [DIGEST] });
+  try {
+    const { ctx } = context({
+      ...KEYLESS,
+      certificateIdentityRegexp: "",
+      certificateIdentity: IDENTITY,
+      trustedRoot: "sigstore/root.json",
+      httpRegistry: true,
+    });
+    await verify({ refs: [REF] }, ctx);
+    const v = g.calls.find((c) => c.args[0] === "verify")!;
+    assertEquals(v.args.slice(0, 9), [
+      "verify",
+      "--certificate-identity",
+      IDENTITY,
+      "--certificate-oidc-issuer",
+      ISSUER,
+      "--trusted-root",
+      `${REPO}/sigstore/root.json`,
+      "--allow-http-registry",
+      "--output",
+    ]);
+    assertEquals(v.args.includes("--insecure-ignore-tlog"), false);
+  } finally {
+    g.restore();
+  }
+});
+
+Deno.test("verifyAttestation and verifyBlob keyless carry the identity flags and no key file", async () => {
+  const f = fake({ attested: { [DIGEST]: ["https://spdx.dev/Document"] } });
+  const dir = await Deno.makeTempDir({ prefix: "cosign-keyless-" });
+  try {
+    await Deno.writeTextFile(`${dir}/release.json`, "{}\n");
+    const { ctx, written } = context(KEYLESS);
+    await verifyAttestation(
+      { refs: [REF], type: "https://spdx.dev/Document" },
+      ctx,
+    );
+    const va = f.calls.find((c) => c.args[0] === "verify-attestation")!;
+    assertEquals(va.args, [
+      "verify-attestation",
+      "--certificate-identity-regexp",
+      IDENTITY_REGEXP,
+      "--certificate-oidc-issuer",
+      ISSUER,
+      "--type",
+      "https://spdx.dev/Document",
+      "--output",
+      "json",
+      REF,
+    ]);
+    assertEquals(written[0].data.verified, true);
+    assertEquals(written[0].data.predicateTypes, ["https://spdx.dev/Document"]);
+
+    await verifyBlob({ path: `${dir}/release.json` }, ctx);
+    const vb = f.calls.find((c) => c.args[0] === "verify-blob")!;
+    assertEquals(vb.args, [
+      "verify-blob",
+      "--certificate-identity-regexp",
+      IDENTITY_REGEXP,
+      "--certificate-oidc-issuer",
+      ISSUER,
+      "--bundle",
+      `${dir}/release.json.sigstore.json`,
+      `${dir}/release.json`,
+    ]);
+    assertEquals(written[1].data.verified, true);
+    assertEquals(written[1].data.tlog, true);
+    assertEquals(f.calls.some((c) => c.args.includes("--key")), false);
+  } finally {
+    f.restore();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("verify with an identity but no log, no issuer, or a public key too is refused before cosign runs", async () => {
+  const f = fake({ signed: [DIGEST] });
+  try {
+    for (
+      const [over, phrase] of [
+        [{ tlog: false }, "tlog is false"],
+        [{ oidcIssuer: "" }, "without oidcIssuer"],
+        [{ publicKey: PUBLIC }, "both set"],
+      ] as [Record<string, unknown>, string][]
+    ) {
+      const { ctx, written } = context({ ...KEYLESS, ...over });
+      const err = await assertRejects(() => verify({ refs: [REF] }, ctx));
+      assertStringIncludes(String(err), phrase);
+      assertEquals(written.length, 0);
+    }
+    assertEquals(f.calls.length, 0);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("describe records how the signer verifies: keyless with its identity and issuer, by key, or not at all", async () => {
+  const f = fake({});
+  try {
+    const keyless = context(KEYLESS);
+    await model.methods.describe.execute({}, keyless.ctx);
+    assertEquals(keyless.written[0].data.verifyMode, "keyless");
+    assertEquals(keyless.written[0].data.certificateIdentity, "");
+    assertEquals(
+      keyless.written[0].data.certificateIdentityRegexp,
+      IDENTITY_REGEXP,
+    );
+    assertEquals(keyless.written[0].data.oidcIssuer, ISSUER);
+    assertEquals(keyless.written[0].data.publicKeySource, "none");
+    assertEquals(keyless.written[0].data.keyKind, "none");
+    const key = context();
+    await model.methods.describe.execute({}, key.ctx);
+    assertEquals(key.written[0].data.verifyMode, "key");
+    assertEquals(key.written[0].data.oidcIssuer, "");
+    const none = context({ key: "", password: "" });
+    await model.methods.describe.execute({}, none.ctx);
+    assertEquals(none.written[0].data.verifyMode, "none");
+  } finally {
+    f.restore();
+  }
+});
+
+// The real cosign against a public image signed keyless from a GitHub
+// workflow, through the public Sigstore instance: needs the network.
+// COSIGN_KEYLESS_E2E=1 enables it; COSIGN_KEYLESS_E2E_REF names the image by
+// digest, COSIGN_KEYLESS_E2E_IDENTITY_REGEXP and COSIGN_KEYLESS_E2E_ISSUER
+// default to Chainguard's release workflow and GitHub Actions.
+const keylessE2e = Deno.env.get("COSIGN_KEYLESS_E2E") === "1";
+
+Deno.test({
+  name:
+    "keyless e2e: verify a public image and its SPDX attestation, and fail with another identity",
+  ignore: !keylessE2e,
+  fn: async () => {
+    const ref = Deno.env.get("COSIGN_KEYLESS_E2E_REF")!;
+    const over = {
+      cosignBinary: Deno.env.get("COSIGN_BINARY") ?? "cosign",
+      key: "",
+      password: "",
+      certificateIdentityRegexp:
+        Deno.env.get("COSIGN_KEYLESS_E2E_IDENTITY_REGEXP") ??
+          "^https://github.com/chainguard-images/images/",
+      oidcIssuer: Deno.env.get("COSIGN_KEYLESS_E2E_ISSUER") ??
+        "https://token.actions.githubusercontent.com",
+      tlog: true,
+    };
+    const d = context(over);
+    await model.methods.describe.execute({}, d.ctx);
+    assertEquals(d.written[0].data.verifyMode, "keyless");
+
+    const v = context(over);
+    await verify({ refs: [ref] }, v.ctx);
+    assertEquals(
+      v.written[0].data.verified,
+      true,
+      String(v.written[0].data.error),
+    );
+    assert((v.written[0].data.signatures as number) >= 1);
+
+    const va = context(over);
+    await verifyAttestation(
+      { refs: [ref], type: "https://spdx.dev/Document" },
+      va.ctx,
+    );
+    assertEquals(
+      va.written[0].data.verified,
+      true,
+      String(va.written[0].data.error),
+    );
+
+    const wrong = context({
+      ...over,
+      certificateIdentityRegexp: "^https://github.com/example/nobody/",
+    });
+    await verify({ refs: [ref] }, wrong.ctx);
+    assertEquals(wrong.written[0].data.verified, false);
+    assertStringIncludes(
+      String(wrong.written[0].data.error),
+      "none of the expected identities matched",
+    );
   },
 });

@@ -1,8 +1,9 @@
 /**
  * `@dataverket/cosign/signer` — one signing identity for container images,
  * driven through [cosign](https://github.com/sigstore/cosign): sign images by
- * digest, verify them, attach attestations and verify those, sign and verify
- * files with a Sigstore bundle beside each, and generate a key pair.
+ * digest, verify them against a public key or, keyless, against the identity
+ * in a Sigstore certificate, attach attestations and verify those, sign and
+ * verify files with a Sigstore bundle beside each, and generate a key pair.
  *
  * The private key never touches a file or an argument here: a PEM from a
  * vault expression reaches cosign through its environment (`--key env://`),
@@ -25,8 +26,17 @@ export const GlobalArgsSchema = z.object({
   publicKey: z.string().default("").describe(
     "The public key verify checks against: a PEM, or a file absolute or relative to the repository root; derived from key when empty",
   ),
+  certificateIdentity: z.string().default("").describe(
+    "For keyless verification: the exact identity the signing certificate must name, such as a GitHub workflow URL; verify, verifyAttestation and verifyBlob then check the certificate and its log entry instead of a public key. Needs oidcIssuer and tlog true",
+  ),
+  certificateIdentityRegexp: z.string().default("").describe(
+    "For keyless verification: a regular expression the certificate's identity must match, instead of certificateIdentity",
+  ),
+  oidcIssuer: z.string().default("").describe(
+    "For keyless verification: the OIDC issuer that vouched for the identity, such as https://token.actions.githubusercontent.com; required with an identity",
+  ),
   tlog: z.boolean().default(false).describe(
-    "Record every signature in a transparency log and require a log entry when verifying; false signs through a signing config with no log service and verifies ignoring the log",
+    "Record every signature in a transparency log and require a log entry when verifying; false signs through a signing config with no log service and verifies ignoring the log. Keyless verification requires true",
   ),
   signingConfig: z.string().default("").describe(
     "A Sigstore signing config file for sign and attest, relative to the repository root, such as one naming a private Rekor or TSA; replaces what tlog chooses",
@@ -124,12 +134,19 @@ type VerifyBlobArgs = z.infer<typeof VerifyBlobArgsSchema>;
 /** How a key was given. */
 export const KEY_KINDS = ["none", "pem", "reference", "file"] as const;
 
+/** How a signer verifies: against a public key, against a certificate identity, or not at all. */
+export const VERIFY_MODES = ["key", "keyless", "none"] as const;
+
 const SignerSchema = z.object({
   version: z.string(),
   keyKind: z.enum(KEY_KINDS),
   publicKey: z.string(),
   publicKeySource: z.enum(["argument", "derived", "none"]),
   fingerprint: z.string(),
+  verifyMode: z.enum(VERIFY_MODES),
+  certificateIdentity: z.string(),
+  certificateIdentityRegexp: z.string(),
+  oidcIssuer: z.string(),
   tlog: z.boolean(),
   signingConfig: z.string(),
   trustedRoot: z.string(),
@@ -313,16 +330,75 @@ export function keyKind(key: string): (typeof KEY_KINDS)[number] {
   return "file";
 }
 
+/** The arguments `verifyMode` reads. */
+type VerifyChoice = {
+  key?: string;
+  publicKey?: string;
+  certificateIdentity?: string;
+  certificateIdentityRegexp?: string;
+};
+
+/**
+ * How `g` verifies: keyless when a certificate identity is set, by key when
+ * a public key is given or can be derived from the private key, else not at
+ * all. An identity wins over a key, so a signer can sign with its key and
+ * verify another party's keyless signatures.
+ */
+export function verifyMode(g: VerifyChoice): (typeof VERIFY_MODES)[number] {
+  if (
+    (g.certificateIdentity ?? "") !== "" ||
+    (g.certificateIdentityRegexp ?? "") !== ""
+  ) {
+    return "keyless";
+  }
+  if ((g.publicKey ?? "") !== "" || keyKind(g.key ?? "") !== "none") {
+    return "key";
+  }
+  return "none";
+}
+
+/** What is wrong with the keyless arguments as a set, or null. */
+export function identityProblem(
+  g: z.input<typeof GlobalArgsSchema>,
+): string | null {
+  const identity = g.certificateIdentity ?? "";
+  const regexp = g.certificateIdentityRegexp ?? "";
+  const issuer = g.oidcIssuer ?? "";
+  if (identity === "" && regexp === "") {
+    if (issuer !== "") {
+      return "oidcIssuer is set without a certificate identity: name what the certificate must say in certificateIdentity or certificateIdentityRegexp";
+    }
+    return null;
+  }
+  if (identity !== "" && regexp !== "") {
+    return "certificateIdentity and certificateIdentityRegexp are both set: one names the identity exactly, the other matches it, choose one";
+  }
+  if (issuer === "") {
+    return "a certificate identity without oidcIssuer: a keyless signature is checked against the identity and the issuer that vouched for it";
+  }
+  if ((g.publicKey ?? "") !== "") {
+    return "publicKey and a certificate identity are both set: a signer verifies against a key or against an identity, not both";
+  }
+  if (!(g.tlog ?? false)) {
+    return "tlog is false with a certificate identity: a keyless signature lives in the transparency log, so set tlog to true";
+  }
+  return null;
+}
+
 /** What is wrong with the arguments as written, or null. */
 export function argumentProblem(
   g: z.input<typeof GlobalArgsSchema>,
 ): string | null {
   const key = g.key ?? "";
   for (
-    const [name, value] of [["key", key], ["password", g.password ?? ""], [
-      "publicKey",
-      g.publicKey ?? "",
-    ]]
+    const [name, value] of [
+      ["key", key],
+      ["password", g.password ?? ""],
+      ["publicKey", g.publicKey ?? ""],
+      ["certificateIdentity", g.certificateIdentity ?? ""],
+      ["certificateIdentityRegexp", g.certificateIdentityRegexp ?? ""],
+      ["oidcIssuer", g.oidcIssuer ?? ""],
+    ]
   ) {
     if (value.includes("${{")) {
       return `${name} holds an unevaluated expression; a check on an auto-definition sees the text a workflow wrote, run the workflow instead`;
@@ -342,14 +418,17 @@ export function argumentProblem(
     return "publicKey is not a PEM and holds a newline, so it is not a path either";
   }
   for (
-    const [name, value] of [["signingConfig", g.signingConfig], [
-      "trustedRoot",
-      g.trustedRoot,
-    ]]
+    const [name, value] of [
+      ["signingConfig", g.signingConfig],
+      ["trustedRoot", g.trustedRoot],
+      ["certificateIdentity", g.certificateIdentity],
+      ["certificateIdentityRegexp", g.certificateIdentityRegexp],
+      ["oidcIssuer", g.oidcIssuer],
+    ]
   ) {
     if (/[\n\r]/.test(value ?? "")) return `${name} holds a newline`;
   }
-  return null;
+  return identityProblem(g);
 }
 
 /** Splits `<repository>@sha256:<hex>`, or says why it is not one. */
@@ -461,7 +540,7 @@ export function parseAttestationOutput(stdout: string): string[] {
 
 /** cosign's way of saying the signature or attestation is not there or does not check out. */
 const NOT_VERIFIED =
-  /no matching (attestations|signatures)|no signatures found|no attestations found|failed to verify signature|invalid signature/i;
+  /no matching (attestations|signatures)|no signatures found|no attestations found|failed to verify signature|invalid signature|none of the expected (identities|issuers) matched/i;
 
 function env(ctx: Context): Record<string, string> {
   const g = ctx.globalArgs;
@@ -597,15 +676,33 @@ async function publicKeyPem(
   return { pem: pem.trim() + "\n", source: "derived" };
 }
 
-/** Flags that say how a signature is checked: the public key file, the log, trusted root. */
+/**
+ * Flags that say how a signature is checked: the certificate identity and
+ * its issuer for a keyless signature, else the public key file and the log
+ * choice; then the trusted root.
+ */
 async function verifyFlags(ctx: Context, scratch: Scratch): Promise<string[]> {
   const g = ctx.globalArgs;
-  const { pem, source } = await publicKeyPem(ctx);
-  if (source === "none") {
-    throw new Error("publicKey and key are both empty: nothing to verify with");
+  const flags: string[] = [];
+  if (verifyMode(g) === "keyless") {
+    const problem = identityProblem(g);
+    if (problem) throw new Error(problem);
+    if (g.certificateIdentity !== "") {
+      flags.push("--certificate-identity", g.certificateIdentity);
+    } else {
+      flags.push("--certificate-identity-regexp", g.certificateIdentityRegexp);
+    }
+    flags.push("--certificate-oidc-issuer", g.oidcIssuer);
+  } else {
+    const { pem, source } = await publicKeyPem(ctx);
+    if (source === "none") {
+      throw new Error(
+        "publicKey and key are both empty and no certificate identity is set: nothing to verify with",
+      );
+    }
+    flags.push("--key", await scratch.file("cosign-public-key-", pem));
+    if (!g.tlog) flags.push("--insecure-ignore-tlog");
   }
-  const flags = ["--key", await scratch.file("cosign-public-key-", pem)];
-  if (!g.tlog) flags.push("--insecure-ignore-tlog");
   if (g.trustedRoot !== "") {
     flags.push("--trusted-root", absolute(ctx.repoDir, g.trustedRoot));
   }
@@ -633,7 +730,7 @@ function checkContext(context: {
 export const checks = {
   "arguments": {
     description:
-      "key is a PEM, a KMS or HSM reference, a file or empty; publicKey a PEM, a file or empty; the config paths hold no newline",
+      "key is a PEM, a KMS or HSM reference, a file or empty; publicKey a PEM, a file or empty; a certificate identity comes with oidcIssuer and tlog true and without publicKey; the config paths hold no newline",
     labels: ["policy"],
     execute: (
       context: { globalArgs: z.input<typeof GlobalArgsSchema> },
@@ -800,7 +897,7 @@ export const model = {
   resources: {
     signer: {
       description:
-        "The signer as cosign sees it: version, how the key was given, the public key, log and config choices",
+        "The signer as cosign sees it: version, how the key was given, the public key, how it verifies, log and config choices",
       schema: SignerSchema,
       lifetime: "infinite" as const,
       garbageCollection: 10,
@@ -880,18 +977,23 @@ export const model = {
           publicKey: pub.pem,
           publicKeySource: pub.source,
           fingerprint: await fingerprint(pub.pem),
+          verifyMode: verifyMode(g),
+          certificateIdentity: g.certificateIdentity,
+          certificateIdentityRegexp: g.certificateIdentityRegexp,
+          oidcIssuer: g.oidcIssuer,
           tlog: g.tlog,
           signingConfig: absolute(ctx.repoDir, g.signingConfig),
           trustedRoot: absolute(ctx.repoDir, g.trustedRoot),
           checkedAt: new Date().toISOString(),
         };
         ctx.logger.info(
-          "cosign {version}, key {kind}, public key {source} {fingerprint}",
+          "cosign {version}, key {kind}, public key {source} {fingerprint}, verifies {mode}",
           {
             version,
             kind: record.keyKind,
             source: pub.source,
             fingerprint: record.fingerprint,
+            mode: record.verifyMode,
           },
         );
         const handle = await ctx.writeResource("signer", "signer", record);
@@ -982,7 +1084,7 @@ export const model = {
     },
     verify: {
       description:
-        "Verify every image named by digest against the public key, and record what was found; an image that does not verify is recorded, not a failure",
+        "Verify every image named by digest against the public key, or keyless against the certificate identity, and record what was found; an image that does not verify is recorded, not a failure",
       arguments: VerifyArgsSchema,
       execute: async (args: VerifyArgs, ctx: Context) => {
         const g = ctx.globalArgs;
@@ -1107,7 +1209,7 @@ export const model = {
     },
     verifyAttestation: {
       description:
-        "Verify the attestations of the given type on every image named by digest against the public key, and record what was found",
+        "Verify the attestations of the given type on every image named by digest against the public key, or keyless against the certificate identity, and record what was found",
       arguments: VerifyAttestationArgsSchema,
       execute: async (args: VerifyAttestationArgs, ctx: Context) => {
         const g = ctx.globalArgs;
@@ -1223,7 +1325,7 @@ export const model = {
     },
     verifyBlob: {
       description:
-        "Verify one file against its Sigstore bundle with the public key, and record the outcome; a file that does not verify is recorded, not a failure",
+        "Verify one file against its Sigstore bundle with the public key, or keyless against the certificate identity, and record the outcome; a file that does not verify is recorded, not a failure",
       arguments: VerifyBlobArgsSchema,
       execute: async (args: VerifyBlobArgs, ctx: Context) => {
         const g = ctx.globalArgs;

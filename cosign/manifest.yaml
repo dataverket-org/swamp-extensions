@@ -3,12 +3,14 @@ name: "@dataverket/cosign"
 version: "2026.10.28.1"
 description: >
   Container images signed and verified with cosign, https://github.com/sigstore/cosign,
-  key-based, with or without a transparency log.
+  signed with a key, with or without a transparency log, verified against
+  that key or keyless against the identity in a Sigstore certificate.
 
   One model type, `@dataverket/cosign/signer`, one signing identity. `sign`
   signs images named by digest with annotations, `verify` checks them against
-  the public key and records what it found, verified or not, so a workflow
-  can assert; `attest` attaches a predicate file as an attestation of a type
+  the public key, or keyless against a certificate identity and its OIDC
+  issuer, and records what it found, verified or not, so a workflow can
+  assert; `attest` attaches a predicate file as an attestation of a type
   and `verifyAttestation` checks those; `signBlob` and `verifyBlob` do the
   same for a file, with a Sigstore bundle beside it; `describe` records
   cosign's version and the public key in effect with its fingerprint;

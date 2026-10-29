@@ -1,14 +1,16 @@
 # @dataverket/cosign
 
 Container images signed and verified with
-[cosign](https://github.com/sigstore/cosign), as swamp data: key-based, with or
-without a transparency log, attestations and signed files included. One model
-type, `@dataverket/cosign/signer`, one signing identity; two workflows that
-bring their own model; and a skill, `cosign`, that says which to run for what.
+[cosign](https://github.com/sigstore/cosign), as swamp data: signed with a key,
+with or without a transparency log; verified against that key or keyless,
+against the identity in a Sigstore certificate; attestations and signed files
+included. One model type, `@dataverket/cosign/signer`, one signing identity; two
+workflows that bring their own model; and a skill, `cosign`, that says which to
+run for what.
 
 | Method              | Runs                                  | Records                                                                                                                                                     |
 | ------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `describe`          | `cosign version`, `cosign public-key` | `signer`: version, how the key was given, the public key in effect and its fingerprint, log and config choices                                              |
+| `describe`          | `cosign version`, `cosign public-key` | `signer`: version, how the key was given, the public key in effect and its fingerprint, how it verifies (`verifyMode`), log and config choices              |
 | `generateKeyPair`   | `cosign generate-key-pair`            | `keypair`: both halves; the private one is a sensitive field, which swamp keeps in the vault, an encrypted PEM whose passphrase is `password`, empty or not |
 | `sign`              | `cosign sign` per image               | One `signature-<repository>-<digest>` per image: reference, digest, annotations                                                                             |
 | `verify`            | `cosign verify` per image             | One `verification-<repository>-<digest>` per image: verified or not, the payloads found, cosign's reason                                                    |
@@ -60,17 +62,20 @@ in the `keypair` record as a sensitive field, which swamp stores in the vault
 and shows as a reference, so a signer can name it as
 `${{ data.latest("release", "keypair").attributes.privateKey }}`.
 
-| Argument           | Default  |                                                                                                                        |
-| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `key`              |          | The private key: a PEM, a KMS or HSM reference, or a file. Empty for a signer that only verifies                       |
-| `password`         |          | The key's passphrase; empty for an unencrypted key                                                                     |
-| `publicKey`        |          | A PEM or a file, for `verify`; derived from `key` when empty                                                           |
-| `tlog`             | `false`  | Record signatures in a transparency log and require a log entry when verifying                                         |
-| `signingConfig`    |          | A Sigstore signing config file, relative to the repository root, for `sign` and `attest`; replaces what `tlog` chooses |
-| `trustedRoot`      |          | A Sigstore trusted root file, relative to the repository root, for private infrastructure                              |
-| `insecureRegistry` | `false`  | Allow a registry whose certificate does not verify                                                                     |
-| `httpRegistry`     | `false`  | Allow a registry served over plain HTTP                                                                                |
-| `cosignBinary`     | `cosign` |                                                                                                                        |
+| Argument                    | Default  |                                                                                                                                                           |
+| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`                       |          | The private key: a PEM, a KMS or HSM reference, or a file. Empty for a signer that only verifies                                                          |
+| `password`                  |          | The key's passphrase; empty for an unencrypted key                                                                                                        |
+| `publicKey`                 |          | A PEM or a file, for `verify`; derived from `key` when empty                                                                                              |
+| `certificateIdentity`       |          | Keyless: the exact identity the signing certificate must name; `verify`, `verifyAttestation` and `verifyBlob` then check the certificate instead of a key |
+| `certificateIdentityRegexp` |          | Keyless: a regular expression the identity must match, instead of `certificateIdentity`                                                                   |
+| `oidcIssuer`                |          | Keyless: the OIDC issuer that vouched for the identity, such as `https://token.actions.githubusercontent.com`; required with an identity                  |
+| `tlog`                      | `false`  | Record signatures in a transparency log and require a log entry when verifying                                                                            |
+| `signingConfig`             |          | A Sigstore signing config file, relative to the repository root, for `sign` and `attest`; replaces what `tlog` chooses                                    |
+| `trustedRoot`               |          | A Sigstore trusted root file, relative to the repository root, for private infrastructure                                                                 |
+| `insecureRegistry`          | `false`  | Allow a registry whose certificate does not verify                                                                                                        |
+| `httpRegistry`              | `false`  | Allow a registry served over plain HTTP                                                                                                                   |
+| `cosignBinary`              | `cosign` |                                                                                                                                                           |
 
 Every reference is a digest, `<repository>@sha256:<64 hex>`. A tag is refused
 before cosign runs: a tag can move, and what a signature vouches for is the
@@ -106,6 +111,41 @@ cosign 3 stores signatures and attestations as OCI referrers of the image, with
 a `sha256-<hex>` tag as the fallback for registries without the referrers API;
 `cosign tree <ref>` shows them. Against the registry the live test uses, that
 tag was the only one written, so do not look for the older `.sig` tag.
+
+## Keyless verification
+
+An image signed keyless, by a CI job with a short-lived certificate from
+Sigstore's Fulcio, has no public key to check against: what vouches for it is
+the identity in the certificate, the issuer that gave it, and the entry in
+Rekor. A signer with `certificateIdentity` or `certificateIdentityRegexp` plus
+`oidcIssuer` verifies that way: `verify`, `verifyAttestation` and `verifyBlob`
+pass `--certificate-identity` or `--certificate-identity-regexp` and
+`--certificate-oidc-issuer` instead of `--key`, and cosign checks the
+certificate chain, the identity and the log entry against the public Sigstore
+trusted root, or `trustedRoot` when given.
+
+```sh
+swamp model create @dataverket/cosign/signer upstream \
+  --global-arg 'certificateIdentityRegexp=^https://github.com/chainguard-images/images/' \
+  --global-arg oidcIssuer=https://token.actions.githubusercontent.com \
+  --global-arg tlog=true
+swamp model method run upstream verify \
+  --input 'refs:json=["cgr.dev/chainguard/static@sha256:<digest>"]'
+swamp model method run upstream verifyAttestation \
+  --input 'refs:json=["cgr.dev/chainguard/static@sha256:<digest>"]' \
+  --input type=https://spdx.dev/Document
+```
+
+The `arguments` check refuses, before cosign runs, an identity without
+`oidcIssuer`, an issuer without an identity, both identity forms at once, a
+`publicKey` beside an identity (a signer verifies one way), and `tlog: false`
+with an identity: a keyless signature lives in the log, so the log cannot be
+ignored. The signer record says which way a signer verifies in `verifyMode`:
+`key`, `keyless` or `none`. `key` may stay set beside an identity, and such a
+signer signs with its key and verifies keyless, but `tlog` is one choice for
+both sides; a pipeline that verifies upstream images keyless and signs its own
+without a log uses two signers. Signing is always with a key here: keyless
+signing needs an OIDC token this model does not obtain.
 
 ## Verification is a record, not a failure
 
@@ -164,12 +204,14 @@ root, with arguments as argv arrays, never through a shell, with stdin closed so
 cosign can never prompt, and with `COSIGN_PASSWORD` and, for a PEM, `COSIGN_KEY`
 in their environment. A public key given as a PEM, or derived, is written to a
 temporary file for the length of one method and removed, as is a generated
-signing config and a generated key pair's files. Registry credentials are
-cosign's own: the container config of the user running swamp.
+signing config and a generated key pair's files; a keyless verification writes
+no key file and passes the identity and issuer as arguments. Registry
+credentials are cosign's own: the container config of the user running swamp.
 
 Three pre-flight checks come with the type: `arguments` (the key is a PEM, a
-reference, a file or empty; the public key a PEM, a file or empty; the config
-paths hold no newline), `cosign-installed` (`cosignBinary` runs) and
+reference, a file or empty; the public key a PEM, a file or empty; a certificate
+identity comes with an issuer and `tlog: true` and without a public key; the
+config paths hold no newline), `cosign-installed` (`cosignBinary` runs) and
 `key-usable` (the private key loads and `password` decrypts it, before `sign`,
 `attest` and `signBlob`). They run before every method but `describe`, and by
 hand with `swamp model validate <name>`.
@@ -179,8 +221,9 @@ hand with `swamp model validate <name>`.
 A cosign failure names the command, its arguments with the key's value replaced,
 its exit code and what it printed, with the PEM masked wherever it would appear,
 and nothing is recorded. A tag, an annotation without `=`, an empty key for
-`sign`, an empty key and public key for `verify`, a predicate or a file that
-cannot be read are refused before cosign runs. Record names carry the image's
+`sign`, an empty key and public key for `verify`, an identity without an issuer
+or with `tlog: false` or beside a public key, a predicate or a file that cannot
+be read are refused before cosign runs. Record names carry the image's
 repository before the digest, and a file's name with a hash of its path, so the
 same digest in two repositories, or two files of one name, give two records.
 
@@ -189,6 +232,9 @@ same digest in two repositories, or two files of one name, give two records.
 ```sh
 deno test --allow-env --allow-read --allow-write
 COSIGN_E2E=1 COSIGN_E2E_REF=127.0.0.1:5000/alpine@sha256:<digest> \
+  deno test --allow-env --allow-read --allow-write --allow-run
+COSIGN_KEYLESS_E2E=1 \
+  COSIGN_KEYLESS_E2E_REF=cgr.dev/chainguard/static@sha256:<digest> \
   deno test --allow-env --allow-read --allow-write --allow-run
 ```
 
@@ -203,6 +249,14 @@ throwaway registry does:
 podman run -d --name registry -p 127.0.0.1:5000:5000 docker.io/library/registry:2
 podman push --tls-verify=false docker.io/library/alpine:3.22 localhost:5000/alpine:3.22
 ```
+
+With `COSIGN_KEYLESS_E2E=1` another test verifies, through the public Sigstore
+instance, an image Chainguard's release workflow signed keyless, verifies its
+SPDX attestation, and sees another identity fail; it needs the network, for the
+registry, Rekor and the Sigstore TUF root, and ran from this machine against
+cosign 3.1.4 on 2026-10-29. `crane digest cgr.dev/chainguard/static:latest`
+gives a current digest; `COSIGN_KEYLESS_E2E_IDENTITY_REGEXP` and
+`COSIGN_KEYLESS_E2E_ISSUER` point it at another image's workflow.
 
 ## License
 
