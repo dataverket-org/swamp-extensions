@@ -1,0 +1,144 @@
+id: f890223b-2998-4e64-a00e-99666c471a5d
+name: "@dataverket/promote-release"
+description: >-
+  Promote a verified release by retag: @dataverket/verify-release runs first as a nested workflow, with the
+  artifact's tag resolved to its digest, the artifact's signature and attestation verified against a public
+  key, release.json read out of it and every image it lists verified; then crane tag points the channel tag,
+  such as current, at the digest that was verified, and crane digest reads the channel back; the run fails
+  unless the channel now holds exactly that digest. Nothing is rebuilt, copied or re-signed: a promotion is a
+  tag moved in the artifact's own repository, and the digest the channel held before is in this run's tagging
+  record, the value a rollback points it back at. The digest the channel is pointed at is the nested run's
+  digest record, read as the output of the step that ran it, never an input. The registry credential is named
+  by vault and key, since workflow
+  inputs are recorded in cleartext in the run history; it reaches crane on stdin into a docker config that
+  exists for this run only. Its own model is created on first use as promote-release-crane; the nested
+  workflow's as verify-release-crane and verify-release-cosign.
+version: 1
+inputs:
+  properties:
+    repository:
+      type: string
+      description: The artifact's repository, <registry>/<path>, as signed-release pushed it; the channel tag is moved in it
+    tag:
+      type: string
+      default: ""
+      description: The artifact's tag, resolved to its digest first; give tag or digest
+    digest:
+      type: string
+      default: ""
+      description: The artifact's digest, sha256:<64 hex>, instead of a tag
+    channel:
+      type: string
+      description: The tag to point at the verified digest, such as current or stable
+    publicKey:
+      type: string
+      description: The public key, as a PEM or a file absolute or relative to the repository root
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations the artifact's signature must carry to count, key=value, such as a commit id
+    tlog:
+      type: boolean
+      default: false
+      description: Require a transparency log entry for every signature and attestation
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP or whose certificate does not verify, for crane and cosign
+    vault:
+      type: string
+      description: Vault holding the registry credential crane tags with
+    usernameKey:
+      type: string
+      description: Key of the credential's user in that vault
+    passwordKey:
+      type: string
+      description: Key of the credential's password or token in that vault
+  required:
+    - repository
+    - channel
+    - publicKey
+    - vault
+    - usernameKey
+    - passwordKey
+jobs:
+  - name: verify
+    steps:
+      - name: release
+        description: "@dataverket/verify-release over the artifact: digest pinned, signature, attestation and every listed image verified, in a nested run."
+        task:
+          type: workflow
+          workflowIdOrName: "@dataverket/verify-release"
+          inputs:
+            repository: ${{ inputs.repository }}
+            tag: ${{ inputs.tag }}
+            digest: ${{ inputs.digest }}
+            publicKey: ${{ inputs.publicKey }}
+            annotations: ${{ inputs.annotations }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+  - name: promote
+    dependsOn:
+      - job: verify
+        condition:
+          type: succeeded
+    steps:
+      - name: channel
+        description: crane tag points the channel at the digest the nested run verified; the tagging record keeps the digest the channel held before.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: promote-release-crane
+          methodName: tag
+          globalArgs:
+            registry: ${{ inputs.repository.split("/")[0] }}
+            namespace: ""
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            name: ${{ inputs.repository.substring(inputs.repository.indexOf("/") + 1) }}
+            digest: ${{ steps.release.outputs.digest.digest }}
+            tag: ${{ inputs.channel }}
+      - name: channel-digest
+        description: crane digest reads the channel tag back after the retag; one digest record of what it holds now. Read-only.
+        dependsOn:
+          - step: channel
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: promote-release-crane
+          methodName: digest
+          globalArgs:
+            registry: ${{ inputs.repository.split("/")[0] }}
+            namespace: ""
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs:
+              - ${{ inputs.repository }}:${{ inputs.channel }}
+      - name: channel-at-verified-digest
+        description: >-
+          The nested run verified the artifact in this repository and pinned its digest, this run recorded one tagging of the channel at
+          that digest, and the channel read back after the retag holds it.
+        dependsOn:
+          - step: channel-digest
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            steps.release.outputs.digest.repository == inputs.repository
+            && steps.release.outputs.digest.digest.matches("^sha256:[0-9a-f]{64}$")
+            && data.findBySpec("promote-release-crane", "tagging").filter(t, t.tags.?workflowRunId.orValue("") == run.id && t.attributes.tag == inputs.channel && t.attributes.digest == steps.release.outputs.digest.digest).size() == 1
+            && data.findBySpec("promote-release-crane", "digest").filter(c, c.tags.?workflowRunId.orValue("") == run.id && c.attributes.tag == inputs.channel && c.attributes.digest == steps.release.outputs.digest.digest).size() == 1
+          message: >-
+            ${{ inputs.repository }}:${{ inputs.channel }} is not at the verified digest: verified ${{ steps.release.outputs.digest.digest }},
+            tagged ${{ data.findBySpec("promote-release-crane", "tagging").filter(t, t.tags.?workflowRunId.orValue("") == run.id).map(t, t.attributes.digest) }},
+            channel holds ${{ data.findBySpec("promote-release-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.digest) }}
+          severity: high
