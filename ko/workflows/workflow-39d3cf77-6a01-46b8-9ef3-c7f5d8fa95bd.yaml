@@ -4,8 +4,9 @@ description: >-
   Render Kubernetes manifests with ko: every ko://<import path> image reference in files is built from the Go
   module in dir, pushed to repo, and replaced by its reference pinned by digest. The rendered manifests are
   recorded as the manifests file of the model ko-manifests, for whatever applies them next: kubectl, flux push
-  artifact, kustomize. The run fails unless at least one image was built and, when requirePinned is true (the
-  default), every image in the rendered manifests is pinned by digest, third-party images included. Tags,
+  artifact, kustomize; the resolution record lists every image pinned by digest in them, built here or not.
+  The run fails unless at least one image was built and, when requirePinned is true (the default), every
+  image in the rendered manifests is pinned by digest, third-party images included. Tags,
   platforms, naming, SBOM, base image and cache are inputs as in @dataverket/ko-images. No input carries a
   secret. Its model is created on first use as ko-manifests; runs for different modules share it, so run one
   module at a time.
@@ -81,7 +82,7 @@ jobs:
   - name: resolve
     steps:
       - name: manifests
-        description: ko resolve over the files; the rendered manifests become the manifests file, the images the resolution record.
+        description: ko resolve over the files; the rendered manifests become the manifests file, every pinned image in them the resolution record.
         task:
           type: model_method
           modelType: "@dataverket/ko/module"
@@ -114,7 +115,7 @@ jobs:
           type: assert
           expr: >-
             data.latest("ko-manifests", "resolution").tags.?workflowRunId.orValue("") == run.id
-            && data.latest("ko-manifests", "resolution").attributes.imageCount >= 1
+            && data.latest("ko-manifests", "resolution").attributes.builtCount >= 1
           message: >-
             ko resolve built no image from ${{ inputs.files }}: no ko:// reference in them, or the run that wrote
             the resolution record is not this one

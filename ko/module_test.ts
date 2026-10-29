@@ -15,8 +15,10 @@ import {
   type CommandResult,
   type Context,
   GlobalArgsSchema,
+  imageValues,
   model,
   parseRef,
+  pinnedImages,
   ResolveArgsSchema,
   unpinnedImages,
 } from "./module.ts";
@@ -74,6 +76,8 @@ function fake(opts: {
   refFor?: (command: string, args: string[]) => string;
   resolveOut?: string;
   resolveRefs?: string[];
+  /** Leave the image-refs file unwritten, as ko does when it publishes nothing. */
+  noRefsFile?: boolean;
   fail?: string;
 }) {
   const calls: Call[] = [];
@@ -123,10 +127,14 @@ function fake(opts: {
       }
       if (bin === "ko" && args[0] === "resolve") {
         const refsFile = args[args.indexOf("--image-refs") + 1];
-        await Deno.writeTextFile(
-          refsFile,
-          (opts.resolveRefs ?? []).join("\n") + "\n",
-        );
+        if (opts.noRefsFile) {
+          await Deno.remove(refsFile).catch(() => {});
+        } else {
+          await Deno.writeTextFile(
+            refsFile,
+            (opts.resolveRefs ?? []).join("\n") + "\n",
+          );
+        }
         return ok(opts.resolveOut ?? "");
       }
       return { code: 99, stdout: "", stderr: `unexpected ${bin} ${line}` };
@@ -203,7 +211,7 @@ Deno.test("parseRef splits registry, tarball and daemon references", () => {
   });
 });
 
-Deno.test("unpinnedImages lists every image: value without a digest, once", () => {
+Deno.test("imageValues, unpinnedImages and pinnedImages list every image: value once, by digest or not", () => {
   const yaml = `
 containers:
   - name: a
@@ -211,14 +219,27 @@ containers:
   - name: b
     image: "docker.io/library/busybox:1.37"
   - image: docker.io/library/busybox:1.37 # again
+  - image: "registry.example.org/team/hello@${DIGEST_A}"
 initContainers:
   - image: 'registry.example.org/team/init:v1'
+  - image: docker.io/library/postgres:17@${DIGEST_B}
 `;
+  assertEquals(imageValues(yaml), [
+    `registry.example.org/team/hello@${DIGEST_A}`,
+    "docker.io/library/busybox:1.37",
+    "registry.example.org/team/init:v1",
+    `docker.io/library/postgres:17@${DIGEST_B}`,
+  ]);
   assertEquals(unpinnedImages(yaml), [
     "docker.io/library/busybox:1.37",
     "registry.example.org/team/init:v1",
   ]);
+  assertEquals(pinnedImages(yaml), [
+    `registry.example.org/team/hello@${DIGEST_A}`,
+    `docker.io/library/postgres:17@${DIGEST_B}`,
+  ]);
   assertEquals(unpinnedImages("image: a@" + DIGEST_A), []);
+  assertEquals(pinnedImages("image: a:latest"), []);
 });
 
 Deno.test("absolute and commandName", () => {
@@ -351,7 +372,7 @@ Deno.test("build expands patterns to main packages, runs ko once per command and
       }`,
   });
   try {
-    const { ctx, written } = context({
+    const { ctx, written, files } = context({
       platforms: ["linux/amd64", "linux/arm64"],
       cache: ".cache/ko",
     });
@@ -420,6 +441,11 @@ Deno.test("build expands patterns to main packages, runs ko once per command and
     assertEquals(buildRecord.digests, [DIGEST_A, DIGEST_B]);
     assertEquals(buildRecord.id, hello.buildId);
     assertEquals(written[0].tags, { build: buildRecord.id as string });
+    // The build record is also a file, the same fields, for an attestation.
+    assertEquals(files.length, 1);
+    assertEquals(files[0].spec, "buildRecord");
+    assertEquals(files[0].name, "buildRecord");
+    assertEquals(JSON.parse(files[0].text), buildRecord);
   } finally {
     f.restore();
   }
@@ -667,7 +693,7 @@ Deno.test("a failing ko reports its argv, directory and stderr, and nothing is w
   }
 });
 
-Deno.test("resolve records the rendered manifests, the images and what is not pinned", async () => {
+Deno.test("resolve records the rendered manifests, every pinned image, built here or not, and what is not pinned", async () => {
   const out = `apiVersion: apps/v1
 kind: Deployment
 spec:
@@ -678,6 +704,8 @@ spec:
           image: registry.example.org/team/hello:abc123@${DIGEST_A}
         - name: sidecar
           image: docker.io/library/busybox:1.37
+        - name: db
+          image: docker.io/library/postgres:17@${DIGEST_B}
 `;
   const f = fake({
     resolveOut: out,
@@ -713,12 +741,73 @@ spec:
       repository: "registry.example.org/team/hello",
       tag: "abc123",
       digest: DIGEST_A,
+      builtHere: true,
+    }, {
+      ref: `docker.io/library/postgres:17@${DIGEST_B}`,
+      repository: "docker.io/library/postgres",
+      tag: "17",
+      digest: DIGEST_B,
+      builtHere: false,
     }]);
-    assertEquals(r.data.imageCount, 1);
+    assertEquals(r.data.imageCount, 2);
+    assertEquals(r.data.builtCount, 1);
     assertEquals(r.data.unpinned, ["docker.io/library/busybox:1.37"]);
     assertEquals(r.data.allPinned, false);
     assertEquals(r.data.manifest, "manifests");
     assertEquals(r.data.pushed, true);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("resolve matches what ko built by digest, so the index of a multi-platform build counts and its children do not", async () => {
+  const out = `containers:
+  - image: registry.example.org/team/hello:abc123@${DIGEST_A}
+`;
+  const f = fake({
+    resolveOut: out,
+    resolveRefs: [
+      `registry.example.org/team/hello@${DIGEST_B}`,
+      `registry.example.org/team/hello@${DIGEST_C}`,
+      `index.docker.io/team/hello:abc123@${DIGEST_A}`,
+    ],
+  });
+  try {
+    const { ctx, written } = context({
+      platforms: ["linux/amd64", "linux/arm64"],
+    });
+    await resolve({ files: ["fixtures/hello/deploy"] }, ctx);
+    const r = written[0].data;
+    assertEquals(r.imageCount, 1);
+    assertEquals(r.builtCount, 1);
+    assertEquals(
+      (r.images as { builtHere: boolean }[]).map((i) => i.builtHere),
+      [true],
+    );
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("resolve of manifests already rendered builds nothing and lists every pinned image as not built here", async () => {
+  const out = `containers:
+  - image: registry.example.org/team/hello:abc123@${DIGEST_A}
+  - image: docker.io/library/postgres:17@${DIGEST_B}
+`;
+  const f = fake({ resolveOut: out, noRefsFile: true });
+  try {
+    const { ctx, written, files } = context({ repo: "" });
+    await resolve({ files: ["fixtures/hello/deploy"], push: false }, ctx);
+    const r = written[0].data;
+    assertEquals(r.imageCount, 2);
+    assertEquals(r.builtCount, 0);
+    assertEquals(
+      (r.images as { builtHere: boolean }[]).map((i) => i.builtHere),
+      [false, false],
+    );
+    assertEquals(r.allPinned, true);
+    assertEquals(r.pushed, false);
+    assertEquals(files[0].text, out);
   } finally {
     f.restore();
   }
@@ -781,6 +870,9 @@ Deno.test({
           String(w.data.ref),
         );
       }
+      assertEquals(b.files.length, 1);
+      assertEquals(b.files[0].spec, "buildRecord");
+      assertEquals(JSON.parse(b.files[0].text), b.written[2].data);
       const index = JSON.parse(
         await Deno.readTextFile(`${lay}/layout/index.json`),
       );
@@ -806,11 +898,31 @@ Deno.test({
         r.ctx,
       );
       assertEquals(r.written[0].data.imageCount, 1);
+      assertEquals(r.written[0].data.builtCount, 1);
+      assertEquals(
+        (r.written[0].data.images as { builtHere: boolean }[])[0].builtHere,
+        true,
+      );
       assertEquals(r.written[0].data.unpinned, [
         "docker.io/library/busybox:1.37",
       ]);
       assertStringIncludes(r.files[0].text, "@sha256:");
       assert(!r.files[0].text.includes("ko://"));
+
+      // The rendered manifests resolved again: nothing to build, every
+      // pinned image listed as not built here, the file passed through.
+      await Deno.writeTextFile(`${tmp}/rendered.yaml`, r.files[0].text);
+      const again = context(over);
+      await resolve(
+        { files: [`${tmp}/rendered.yaml`], push: false },
+        again.ctx,
+      );
+      assertEquals(again.written[0].data.imageCount, 1);
+      assertEquals(again.written[0].data.builtCount, 0);
+      assertEquals(
+        (again.written[0].data.images as { digest: string }[])[0].digest,
+        (r.written[0].data.images as { digest: string }[])[0].digest,
+      );
     } finally {
       await Deno.remove(tmp, { recursive: true });
     }

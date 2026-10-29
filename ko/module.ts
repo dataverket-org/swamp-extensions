@@ -4,9 +4,11 @@
  * `main` package, pushed to a registry or kept local.
  *
  * `describe` records what ko would work with. `build` builds the module's
- * commands and records every image with its digest. `resolve` does the same
+ * commands and records every image with its digest, and the build record
+ * as a JSON file too, for an attestation to carry. `resolve` does the same
  * for the `ko://` references in a set of manifests and records the rendered
- * manifests, every image pinned by digest, for whatever applies them.
+ * manifests, for whatever applies them, with every image pinned by digest in
+ * them, ko-built or not, listed.
  *
  * ko and go are the interfaces being driven; both run as subprocesses in the
  * module's directory with arguments as argv arrays, never through a shell.
@@ -163,6 +165,7 @@ const ResolvedImageSchema = z.object({
   repository: z.string(),
   tag: z.string(),
   digest: z.string(),
+  builtHere: z.boolean(),
 });
 
 const ResolutionSchema = z.object({
@@ -172,6 +175,7 @@ const ResolutionSchema = z.object({
   files: z.array(z.string()),
   images: z.array(ResolvedImageSchema),
   imageCount: z.number().int(),
+  builtCount: z.number().int(),
   unpinned: z.array(z.string()),
   allPinned: z.boolean(),
   manifest: z.string(),
@@ -323,16 +327,25 @@ export function parseRef(
   return { repository, tag, digest };
 }
 
-/** Every `image:` value in a manifest that is not pinned by digest. */
-export function unpinnedImages(yaml: string): string[] {
+const PINNED = /@sha256:[0-9a-f]{64}$/;
+
+/** Every distinct `image:` value in a manifest, in order of first appearance. */
+export function imageValues(yaml: string): string[] {
   const found: string[] = [];
   for (const m of yaml.matchAll(/^\s*-?\s*image:\s*["']?([^\s"'#]+)/gm)) {
-    const value = m[1];
-    if (!/@sha256:[0-9a-f]{64}$/.test(value) && !found.includes(value)) {
-      found.push(value);
-    }
+    if (!found.includes(m[1])) found.push(m[1]);
   }
   return found;
+}
+
+/** Every `image:` value in a manifest that is not pinned by digest. */
+export function unpinnedImages(yaml: string): string[] {
+  return imageValues(yaml).filter((v) => !PINNED.test(v));
+}
+
+/** Every `image:` value in a manifest that is pinned by digest. */
+export function pinnedImages(yaml: string): string[] {
+  return imageValues(yaml).filter((v) => PINNED.test(v));
 }
 
 function moduleDir(ctx: Context): string {
@@ -522,7 +535,9 @@ async function koWithRefs(
       refsFile,
       ...positional,
     ], ctx);
-    const text = await Deno.readTextFile(refsFile);
+    // ko opens the file only when it publishes something: a resolve that
+    // finds no ko:// reference leaves it as created, empty.
+    const text = await Deno.readTextFile(refsFile).catch(() => "");
     const refs = text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
     return { refs, stdout };
   } finally {
@@ -676,7 +691,7 @@ async function buildOne(
 /** Model definition for one Go module built by ko. */
 export const model = {
   type: "@dataverket/ko/module",
-  version: "2026.10.28.1",
+  version: "2026.10.29.1",
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {
@@ -701,13 +716,20 @@ export const model = {
     },
     resolution: {
       description:
-        "One resolve: the images it built and whether every image in the rendered manifests is pinned",
+        "One resolve: every image pinned by digest in the rendered manifests, built here or not, and whether every image in them is pinned",
       schema: ResolutionSchema,
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
   },
   files: {
+    buildRecord: {
+      description:
+        "The build record as JSON, the same fields as the build resource, for an attestation to carry as its predicate",
+      contentType: "application/json",
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
     manifests: {
       description:
         "The manifests resolve rendered, every ko:// reference replaced by an image pinned by digest",
@@ -770,13 +792,16 @@ export const model = {
     },
     build: {
       description:
-        "Build every main package importPaths name into an image, push or keep it as asked, and record each image with its digest",
+        "Build every main package importPaths name into an image, push or keep it as asked, and record each image with its digest, plus the build record, also as a JSON file",
       arguments: BuildArgsSchema,
       execute: async (args: BuildArgs, ctx: Context) => {
         const g = ctx.globalArgs;
         const dir = moduleDir(ctx);
         const problem = (await moduleProblem(dir)) ?? publishProblem(ctx, args);
         if (problem) throw new Error(problem);
+        if (!ctx.createFileWriter) {
+          throw new Error("build needs createFileWriter in its context");
+        }
         const path = await modulePath(ctx);
         const importPaths = await mainPackages(ctx, args.importPaths);
         if (g.naming === "bare" && importPaths.length > 1) {
@@ -867,12 +892,18 @@ export const model = {
             tags: { build: id },
           }),
         );
+        // The same record as a file, for cosign attest to take as a predicate.
+        handles.push(
+          await ctx.createFileWriter("buildRecord", "buildRecord").writeText(
+            JSON.stringify(build, null, 2) + "\n",
+          ),
+        );
         return { dataHandles: handles };
       },
     },
     resolve: {
       description:
-        "Build and publish the ko:// references in files, record the rendered manifests with every image pinned by digest, and whether any image in them is not",
+        "Build and publish the ko:// references in files, record the rendered manifests, every image pinned by digest in them, built here or not, and whether any image in them is not pinned",
       arguments: ResolveArgsSchema,
       execute: async (args: ResolveArgs, ctx: Context) => {
         const g = ctx.globalArgs;
@@ -899,17 +930,24 @@ export const model = {
         if (args.selector !== "") koArgs.push("-l", args.selector);
         koArgs.push(...publishFlags(ctx, args));
         const { refs, stdout } = await koWithRefs(ctx, koArgs, []);
-        const images: ResolvedImage[] = refs.map((ref) => ({
-          ref,
-          ...parseRef(ref),
-        }));
-        for (const image of images) {
-          if (!DIGEST.test(image.digest)) {
+        // What ko recorded is what it built here, matched by digest: the
+        // recorder normalizes names, and for a multi-platform build it also
+        // records the per-platform images, which no manifest names.
+        const built = new Set<string>();
+        for (const ref of refs) {
+          const digest = parseRef(ref).digest;
+          if (!DIGEST.test(digest)) {
             throw new Error(
-              `ko resolve recorded a reference without a digest: ${image.ref}`,
+              `ko resolve recorded a reference without a digest: ${ref}`,
             );
           }
+          built.add(digest);
         }
+        const images: ResolvedImage[] = pinnedImages(stdout).map((ref) => {
+          const parsed = parseRef(ref);
+          return { ref, ...parsed, builtHere: built.has(parsed.digest) };
+        });
+        const builtCount = images.filter((i) => i.builtHere).length;
         const unpinned = unpinnedImages(stdout);
         const id = crypto.randomUUID();
         const manifest = await ctx.createFileWriter("manifests", "manifests")
@@ -921,6 +959,7 @@ export const model = {
           files,
           images,
           imageCount: images.length,
+          builtCount,
           unpinned,
           allPinned: unpinned.length === 0,
           manifest: manifest.name,
@@ -929,8 +968,12 @@ export const model = {
           resolvedAt: new Date().toISOString(),
         };
         ctx.logger.info(
-          "Resolved {images} images; {unpinned} images in the manifests are not pinned by digest",
-          { images: images.length, unpinned: unpinned.length },
+          "Resolved {images} images pinned by digest, {built} of them built here; {unpinned} images in the manifests are not pinned",
+          {
+            images: images.length,
+            built: builtCount,
+            unpinned: unpinned.length,
+          },
         );
         const handle = await ctx.writeResource(
           "resolution",
