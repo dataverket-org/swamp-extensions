@@ -1,0 +1,208 @@
+id: 00999cd6-0187-4b5a-a1cd-646160f1c6c1
+name: "@dataverket/mirror-release-images"
+description: >-
+  Mirror every image a verified release lists into another registry, with its signatures:
+  @dataverket/verify-release runs first as a nested workflow, with the artifact's tag resolved to its digest,
+  its signature and attestation verified against a public key, release.json read out of it and every image it
+  lists verified; then crane copy copies each image by its digest from release.json to
+  <registry>/<namespace>/<name>:<tag>, the name the last path element of the source repository and the tag
+  the release's revision unless imageTag is given; and cosign verifies each copied image at its new location
+  against the same key. Signatures travel only when the registry they are read from keeps them under
+  cosign's fallback tag, sha256-<hex of the image digest>, as a registry without the OCI referrers API does:
+  with signatureTags true, the default, that tag of every image is resolved and copied beside the image, the
+  same way, and the verification at the target proves they arrived; on a registry that serves the referrers
+  API the tag does not exist, so set signatureTags false and carry the referrers another way, such as
+  oras copy -r, before the run. The run fails unless every listed image was copied or found unchanged by its
+  digest, every signature tag too when asked, and every copied image verified at its new location. Every
+  digest comes from the nested run's release.json, read as the output of the step that ran it, never from an
+  input. The credential is named by vault and key, since workflow inputs are recorded in cleartext in the run
+  history; it reaches crane on stdin into a docker config that exists for this run only, so the source
+  registry is read anonymously. Its own model is created on first use as mirror-release-images-crane and
+  mirror-release-images-cosign; the nested workflow's as verify-release-crane and verify-release-cosign.
+version: 1
+inputs:
+  properties:
+    repository:
+      type: string
+      description: The artifact's repository, <registry>/<path>, as signed-release pushed it
+    tag:
+      type: string
+      default: ""
+      description: The artifact's tag, resolved to its digest first; give tag or digest
+    digest:
+      type: string
+      default: ""
+      description: The artifact's digest, sha256:<64 hex>, instead of a tag
+    publicKey:
+      type: string
+      description: The public key, as a PEM or a file absolute or relative to the repository root
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations the artifact's signature must carry to count, key=value, such as a commit id
+    tlog:
+      type: boolean
+      default: false
+      description: Require a transparency log entry for every signature and attestation
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow registries served over plain HTTP or whose certificate does not verify, for crane and cosign
+    registry:
+      type: string
+      description: The registry to mirror into, host[:port]
+    namespace:
+      type: string
+      default: ""
+      description: The path under the registry the images land in, <registry>/<namespace>/<name>; empty for the registry's root
+    imageTag:
+      type: string
+      default: ""
+      description: The tag every mirrored image gets; the release's revision when empty, which must then be an image tag
+    signatureTags:
+      type: boolean
+      default: true
+      description: Also copy each image's sha256-<hex> signature tag, where a registry without the referrers API keeps cosign's signatures
+    vault:
+      type: string
+      description: Vault holding the credential for the registry mirrored into
+    usernameKey:
+      type: string
+      description: Key of the credential's user in that vault
+    passwordKey:
+      type: string
+      description: Key of the credential's password or token in that vault
+  required:
+    - repository
+    - publicKey
+    - registry
+    - vault
+    - usernameKey
+    - passwordKey
+jobs:
+  - name: verify
+    steps:
+      - name: release
+        description: "@dataverket/verify-release over the artifact: digest pinned, signature, attestation and every listed image verified, in a nested run."
+        task:
+          type: workflow
+          workflowIdOrName: "@dataverket/verify-release"
+          inputs:
+            repository: ${{ inputs.repository }}
+            tag: ${{ inputs.tag }}
+            digest: ${{ inputs.digest }}
+            publicKey: ${{ inputs.publicKey }}
+            annotations: ${{ inputs.annotations }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+  - name: copy
+    dependsOn:
+      - job: verify
+        condition:
+          type: succeeded
+    steps:
+      - name: images
+        description: crane copy of every image release.json lists, by its digest, to <registry>/<namespace>/<name>:<tag>; one mirror record each, copied or unchanged.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: mirror-release-images-crane
+          methodName: copy
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            sources: >-
+              ${{ steps.release.outputs.release.json.images.map(i, i.repository + ":" + (inputs.imageTag == "" ? steps.release.outputs.release.json.revision : inputs.imageTag) + "@" + i.digest) }}
+      - name: signature-digests
+        description: crane digest of each image's sha256-<hex> signature tag at its source; one digest record each, pinning the index of signatures to copy. Skipped with signatureTags false.
+        guard: ${{ !inputs.signatureTags }}
+        dependsOn:
+          - step: images
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: mirror-release-images-crane
+          methodName: digest
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ steps.release.outputs.release.json.images.map(i, i.repository + ":sha256-" + i.digest.substring(7)) }}
+      - name: signatures
+        description: crane copy of every signature tag this run pinned, beside its image under the same name and tag; one mirror record each. Skipped with signatureTags false.
+        guard: ${{ !inputs.signatureTags }}
+        dependsOn:
+          - step: signature-digests
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: mirror-release-images-crane
+          methodName: copy
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            sources: ${{ data.findBySpec("mirror-release-images-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id && d.tags.?step.orValue("") == "signature-digests").map(d, d.attributes.pinned) }}
+  - name: verify-mirror
+    dependsOn:
+      - job: copy
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: One cosign verify per image this run mirrored, at its new location by repository and digest from the mirror record, against the same public key; one verification record each, verified or not.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: mirror-release-images-cosign
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("mirror-release-images-crane", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "images").map(m, m.attributes.repository + "@" + m.attributes.digest) }}
+      - name: every-image-mirrored-and-verified
+        description: >-
+          The release lists at least one image; this run recorded one mirror per listed image, each by the
+          listed digest, one mirror per signature tag when asked, and one verified verification per mirrored
+          image at its new location, with none failed.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            steps.release.outputs.release.json.images.size() >= 1
+            && data.findBySpec("mirror-release-images-crane", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "images").size() == steps.release.outputs.release.json.images.size()
+            && steps.release.outputs.release.json.images.all(i, data.findBySpec("mirror-release-images-crane", "mirror").exists(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "images" && m.attributes.sourceRepository == i.repository && m.attributes.digest == i.digest))
+            && (!inputs.signatureTags || data.findBySpec("mirror-release-images-crane", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "signatures").size() == steps.release.outputs.release.json.images.size())
+            && data.findBySpec("mirror-release-images-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == steps.release.outputs.release.json.images.size()
+            && data.findBySpec("mirror-release-images-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).size() == 0
+          message: >-
+            Not every image of the release at ${{ inputs.repository }} is mirrored into ${{ inputs.registry }}/${{ inputs.namespace }} and verified there:
+            ${{ steps.release.outputs.release.json.images.size() }} listed,
+            ${{ data.findBySpec("mirror-release-images-crane", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "images").size() }} mirrored,
+            ${{ data.findBySpec("mirror-release-images-crane", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.tags.?step.orValue("") == "signatures").size() }} signature tags mirrored,
+            not verified ${{ data.findBySpec("mirror-release-images-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }}
+          severity: high
