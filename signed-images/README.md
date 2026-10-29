@@ -1,24 +1,27 @@
 # @dataverket/signed-images
 
-Three [swamp](https://github.com/swamp-club/swamp) workflows that compose
-[`@dataverket/ko`](../ko) and [`@dataverket/cosign`](../cosign): Go images built
-by [ko](https://ko.build), signed by digest with
-[cosign](https://github.com/sigstore/cosign) using a key held in a vault, and
-verified, each in one run that fails unless all of it happened for all of them.
+Four [swamp](https://github.com/swamp-club/swamp) workflows that compose
+[`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign) and
+[`@dataverket/flux`](../flux): Go images built by [ko](https://ko.build), signed
+by digest with [cosign](https://github.com/sigstore/cosign) using a key held in
+a vault, verified, and released as one OCI artifact pushed by
+[flux](https://fluxcd.io), each in one run that fails unless all of it happened
+for all of them.
 
-| Workflow                          | Does                                                                                                                                                                        | Models                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `@dataverket/ko-signed-images`    | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                               | `ko-signed-images-ko`, `ko-signed-images-cosign`       |
-| `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign` |
-| `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                 | `verified-manifests-ko`, `verified-manifests-cosign`   |
+| Workflow                          | Does                                                                                                                                                                                                                              | Models                                                              |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `@dataverket/ko-signed-images`    | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                                                                                     | `ko-signed-images-ko`, `ko-signed-images-cosign`                    |
+| `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                       | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`              |
+| `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                       | `verified-manifests-ko`, `verified-manifests-cosign`                |
+| `@dataverket/signed-release`      | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign` |
 
 What makes them signed builds rather than steps in a row:
 
 - **What is signed is what was built.** The signing steps take their references
   from this run's records, by run id, never from an input: the image records of
-  the build, or the `builtHere` images of the resolution. The assertion at the
-  end requires one signature and one verified verification per image the record
-  counts.
+  the build, the `builtHere` images of the resolution, or the artifact flux
+  pushed. The assertion at the end requires one signature and one verified
+  verification per image the record counts.
 - **The key never travels as a value.** It is named by vault and key, read into
   the signer's arguments by `vault.get` at step time, and handed to cosign
   through its environment. Workflow inputs are recorded in cleartext in the run
@@ -130,6 +133,96 @@ inputs:
     - ${{ data.latest("ko-signed-manifests-ko", "manifests").path }}
 ```
 
+## `signed-release`: one artifact per environment
+
+| Job       | Does                                                                                                                                                                                                                                                 |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolve` | `resolve` on `@dataverket/ko/module` over the directory, pushing nothing: every image pinned by digest in it becomes the resolution record; then an assertion, before anything is pushed: every image pinned, at least one, none built here          |
+| `push`    | `push_artifact` on `@dataverket/flux/source`: the directory pushed as `oci://<repository>:<tag>`, reproducibly, with `release.json` built from the resolution record written into the pushed copy; the artifact record holds the digest flux printed |
+| `sign`    | `sign` of the artifact by `repository@digest` from that record, then `attest` of the rendered manifests this run's resolve wrote onto it, as a `custom` predicate                                                                                    |
+| `verify`  | `verify` and `verifyAttestation` of the artifact, then one assertion over the counts: one artifact, one signature, one attestation, both verified                                                                                                    |
+
+Inputs: `path` (the rendered directory, relative to the repository root),
+`environment`, `repository` (`<registry>/<path>`, one per environment), `source`
+and `revision` (what Flux shows on the OCIRepository; `revision` is the tag
+unless `tag` is given), the key's `keyVault`, `keyKey` and `passphraseKey`, all
+required; `dir` (a Go module for ko to run in, default `.`), `tag`,
+`passphraseVault`, `annotations` (on the artifact and on its signature), `tlog`,
+`insecureRegistry`.
+
+```sh
+swamp workflow run @dataverket/signed-release \
+  --input path=rendered/prod --input environment=prod \
+  --input repository=registry.example.org/team/release/prod \
+  --input source=https://git.example.org/team/config \
+  --input revision=abc123 \
+  --input keyVault=signing --input keyKey=cosign-key \
+  --input passphraseKey=cosign-password \
+  --input 'annotations:json=["commit=abc123"]'
+```
+
+`release.json` is what a later step reads to know what the release contains
+without parsing manifests:
+
+```json
+{
+  "environment": "prod",
+  "revision": "abc123",
+  "source": "https://git.example.org/team/config",
+  "resolution": "cf7d18db-a761-4a8a-98a3-854954dccc58",
+  "imageCount": 2,
+  "images": [
+    {
+      "repository": "registry.example.org/team/hello",
+      "digest": "sha256:d69d…",
+      "builtHere": false
+    },
+    {
+      "repository": "registry.example.org/team/other",
+      "digest": "sha256:90a5…",
+      "builtHere": false
+    }
+  ]
+}
+```
+
+Every value in it comes from this run's resolution record or from the inputs
+that name the release; no digest is an input. `builtHere` is false throughout a
+release, since the directory is already rendered and ko built nothing here: the
+`ko-signed-manifests` run that produced it is the record of what was built. It
+holds no timestamp, but the resolution id is new on every run, so two runs over
+the same directory push two digests, each the record of its own run; the push
+itself is reproducible (`flux push artifact --reproducible`).
+
+The directory is a release only when every image in it is pinned by digest and
+none has to be built: a `ko://` reference still in it would be built here and
+pushed nowhere, so the run fails before the push, naming the unpinned and the
+built. The image lister is `ko resolve`, so `dir` must be a Go module, as for
+`verified-manifests`. A `ko-manifests` or `ko-signed-manifests` run records its
+rendered output as a file, not a directory; copy it into the directory to
+release
+(`swamp data query 'modelName == "ko-manifests" && name == "manifests"'
+--select content`),
+beside whatever else the OCIRepository should carry.
+
+What the artifact carries in the registry: the signature of its digest and a
+`custom` attestation whose predicate is the rendered manifests as this run's
+resolve wrote them, the same content the artifact holds. `release.json` itself
+is bound by the signature, since the artifact digest covers it, but it is not
+the attestation's predicate: flux writes it into a copy that is removed after
+the push and records only that it did, and no workflow step writes a file of its
+own. A tag can move; the records, the signature and the attestation name the
+digest. `revision` in flux's `<branch>@sha1:<commit>` form is not a valid tag,
+so give `tag` beside it.
+
+Reading it back without swamp:
+
+```sh
+cosign tree registry.example.org/team/release/prod@sha256:…
+cosign verify --key cosign.pub -a commit=abc123 registry.example.org/team/release/prod@sha256:…
+flux pull artifact oci://registry.example.org/team/release/prod:abc123 --output ./pulled
+```
+
 ## The key
 
 The passphrase always comes from a vault; a key without one has an empty
@@ -155,12 +248,13 @@ swamp data query 'modelName == "ko-signed-images-ko" && name == "build"' --selec
 swamp data query 'modelName == "ko-signed-manifests-ko" && name == "resolution"' --select content
 swamp data query 'modelName == "ko-signed-manifests-cosign" && specName == "attestation"' --json
 swamp data query 'modelName == "verified-manifests-cosign" && specName == "verification"' --json
+swamp data query 'modelName == "signed-release-flux" && specName == "artifact"' --json
 ```
 
 The next step of a release reads them through CEL, for instance the build record
 as a predicate, `data.latest("ko-signed-images-ko", "buildRecord").path`, for an
-`attest` of the build onto its images, or the rendered manifests for a
-`flux push artifact`.
+`attest` of the build onto its images, or the artifact record's `ref` for a
+promotion by retag.
 
 ## Development
 
@@ -168,7 +262,12 @@ The workflows were run against `ko/fixtures/hello`, a throwaway `registry:2` in
 podman and a key pair in a temporary vault: `ko-signed-manifests` over a
 manifest naming both commands, `verified-manifests` over the rendered result,
 and `verified-manifests` over the fixture's own deployment, which keeps one
-image unpinned on purpose and fails the assertion by name.
+image unpinned on purpose and fails the assertion by name. `signed-release` was
+run over the rendered result of a `ko-manifests` run copied into a directory,
+pushed to the same registry, and the artifact's signature and attestation were
+read back with `cosign tree`, `cosign verify` and `flux pull artifact`; over the
+fixture's own deployment it fails before the push, naming the unpinned image and
+the one it would have built.
 
 ## License
 
