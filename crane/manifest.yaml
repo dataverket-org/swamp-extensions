@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/crane"
-version: "2026.10.29.1"
+version: "2026.10.29.2"
 description: >
   A container registry driven through crane, the registry client of
   go-containerregistry: tags resolved to digests, images and indexes
@@ -13,6 +13,7 @@ description: >
   to stay unchanged. `describe` records an image or an index: media type,
   platforms, created time, labels, annotations, layers and size. `copy`
   brings an upstream image pinned by digest under <registry>/<namespace>,
+  at its source registry and whole path, where a registry mirror asks for it,
   leaves one already there with that digest unchanged, and checks the digest
   after. `tag` points a tag at a digest already in a repository and records
   the digest the tag held before, for a promotion that is a retag. `blob`

@@ -2,7 +2,7 @@ id: 8cbf0907-ea6e-4a8f-8da9-5d7292478ffd
 name: "@dataverket/mirror-image"
 description: >-
   Mirror upstream images into a registry of your own, by digest: every reference in refs is resolved to its
-  digest, then copied to <registry>/<namespace>/<name>:<tag> pinned by that digest, so the mirror holds exactly
+  digest, then copied to <registry>/<namespace>/<source registry>/<path>:<tag> pinned by that digest, so the mirror holds exactly
   what was resolved and nothing a tag could move to in between. An image already there with that digest is
   left unchanged, and the digest is checked after every copy. Fails unless one mirror record per reference was
   made in this run. The credential is named by vault and key, never passed as a value, because workflow inputs
@@ -22,7 +22,7 @@ inputs:
     namespace:
       type: string
       default: mirror
-      description: The path under the registry the images land in, <registry>/<namespace>/<name>:<tag>
+      description: The path under the registry the images land in, <registry>/<namespace>/<source registry>/<path>:<tag>
     vault:
       type: string
       description: Vault holding the registry credential

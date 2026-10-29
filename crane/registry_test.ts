@@ -23,6 +23,7 @@ import {
   platformOf,
   refString,
   repositoryUnder,
+  sourcePath,
   tarEntries,
 } from "./registry.ts";
 
@@ -603,14 +604,20 @@ Deno.test("copy copies what is not there, leaves what is, checks the digest afte
     assertEquals(written.length, 1);
     assertEquals(
       written[0].name,
-      "mirror-registry.example.org-mirror-nats-2.10",
+      "mirror-registry.example.org-mirror-docker.io-library-nats-2.10",
     );
     const m = written[0].data;
     assertEquals(m.source, `docker.io/library/nats@${DIGEST_A}`);
     assertEquals(m.sourceRepository, "docker.io/library/nats");
-    assertEquals(m.target, "registry.example.org/mirror/nats:2.10");
-    assertEquals(m.repository, "registry.example.org/mirror/nats");
-    assertEquals(m.name, "nats");
+    assertEquals(
+      m.target,
+      "registry.example.org/mirror/docker.io/library/nats:2.10",
+    );
+    assertEquals(
+      m.repository,
+      "registry.example.org/mirror/docker.io/library/nats",
+    );
+    assertEquals(m.name, "docker.io/library/nats");
     assertEquals(m.tag, "2.10");
     assertEquals(m.digest, DIGEST_A);
     assertEquals(m.action, "copied");
@@ -618,9 +625,12 @@ Deno.test("copy copies what is not there, leaves what is, checks the digest afte
     assertEquals(argv, [
       "copy",
       `docker.io/library/nats@${DIGEST_A}`,
-      "registry.example.org/mirror/nats:2.10",
+      "registry.example.org/mirror/docker.io/library/nats:2.10",
     ]);
-    assertEquals(reg.tags["registry.example.org/mirror/nats:2.10"], DIGEST_A);
+    assertEquals(
+      reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"],
+      DIGEST_A,
+    );
 
     // Already there with that digest: nothing is copied.
     const before = f.calls.length;
@@ -629,7 +639,8 @@ Deno.test("copy copies what is not there, leaves what is, checks the digest afte
     assert(!f.calls.slice(before).some((c) => c.args[0] === "copy"));
 
     // There with another digest: copied over.
-    reg.tags["registry.example.org/mirror/nats:2.10"] = DIGEST_C;
+    reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"] =
+      DIGEST_C;
     await copy([`docker.io/library/nats:2.10@${DIGEST_A}`]);
     assertEquals(written[2].data.action, "copied");
 
@@ -637,11 +648,11 @@ Deno.test("copy copies what is not there, leaves what is, checks the digest afte
     await copy([`docker.io/library/nats@${DIGEST_A}`]);
     assertEquals(
       written[3].data.target,
-      `registry.example.org/mirror/nats@${DIGEST_A}`,
+      `registry.example.org/mirror/docker.io/library/nats@${DIGEST_A}`,
     );
     assertEquals(
       written[3].name,
-      "mirror-registry.example.org-mirror-nats-4b9874bd1e5a",
+      "mirror-registry.example.org-mirror-docker.io-library-nats-4b9874bd1e5a",
     );
 
     const err = await assertRejects(() =>
@@ -654,6 +665,158 @@ Deno.test("copy copies what is not there, leaves what is, checks the digest afte
     );
     assertStringIncludes(String(none), "registry is empty");
     assertEquals(bare.written.length, 0);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("sourcePath gives the repository a registry mirror is asked for, Docker Hub's in full", () => {
+  assertEquals(sourcePath("docker.io/library/nats"), "docker.io/library/nats");
+  assertEquals(sourcePath("nats"), "docker.io/library/nats");
+  assertEquals(sourcePath("bitnami/redis"), "docker.io/bitnami/redis");
+  assertEquals(sourcePath("index.docker.io/nats"), "docker.io/library/nats");
+  assertEquals(
+    sourcePath("registry-1.docker.io/bitnami/redis"),
+    "docker.io/bitnami/redis",
+  );
+  assertEquals(
+    sourcePath("ghcr.io/siderolabs/kubelet"),
+    "ghcr.io/siderolabs/kubelet",
+  );
+  assertEquals(sourcePath("registry.k8s.io/pause"), "registry.k8s.io/pause");
+  assertEquals(sourcePath("Quay.IO/cilium/cilium"), "quay.io/cilium/cilium");
+  assertEquals(
+    sourcePath("localhost:5001/team/hello"),
+    "localhost_5001/team/hello",
+  );
+  assertEquals(sourcePath("localhost/team/hello"), "localhost/team/hello");
+  assertEquals(
+    sourcePath("registry.example.org:5000/team/hello"),
+    "registry.example.org_5000/team/hello",
+  );
+  assertEquals(sourcePath("10.0.0.1:5000/hello"), "10.0.0.1_5000/hello");
+  // A host may hold a dash but never an underscore: no port collides with it.
+  assertEquals(
+    sourcePath("registry.example.org-5000/team/hello"),
+    "registry.example.org-5000/team/hello",
+  );
+  assertEquals(sourcePath("docker.io/nats"), sourcePath("nats"));
+  for (const bad of ["Foo/bar", "[::1]:5000/hello", "ghcr.io/Team/Hello"]) {
+    assertStringIncludes(String(sourcePath(bad)), "cannot be mirrored");
+  }
+});
+
+Deno.test("copy puts every source at its registry and whole path under the namespace", async () => {
+  const reg = registry();
+  const f = fake(reg);
+  try {
+    const { ctx, written } = context();
+    const copy = (sources: string[]) =>
+      model.methods.copy.execute(CopyArgsSchema.parse({ sources }), ctx);
+    await copy([
+      `docker.io/library/nats:2.10@${DIGEST_A}`,
+      `registry.k8s.io/pause:3.10@${DIGEST_B}`,
+    ]);
+    assertEquals(written.length, 2);
+    const [nats, pause] = written.map((w) => w.data);
+    assertEquals(
+      nats.target,
+      "registry.example.org/mirror/docker.io/library/nats:2.10",
+    );
+    assertEquals(nats.name, "docker.io/library/nats");
+    assertEquals(
+      written[0].name,
+      "mirror-registry.example.org-mirror-docker.io-library-nats-2.10",
+    );
+    assertEquals(
+      pause.target,
+      "registry.example.org/mirror/registry.k8s.io/pause:3.10",
+    );
+    assertEquals(
+      reg.tags["registry.example.org/mirror/registry.k8s.io/pause:3.10"],
+      DIGEST_B,
+    );
+
+    // A bare Docker Hub name lands where containerd asks for it.
+    await copy([`nats:2.10@${DIGEST_A}`]);
+    assertEquals(
+      written[2].data.target,
+      "registry.example.org/mirror/docker.io/library/nats:2.10",
+    );
+    assertEquals(written[2].data.action, "unchanged");
+
+    // A registry's port joins its host with an underscore.
+    await copy([`localhost:5001/team/hello:v1@${DIGEST_A}`]);
+    assertEquals(
+      written[3].data.target,
+      "registry.example.org/mirror/localhost_5001/team/hello:v1",
+    );
+
+    const before = written.length;
+    const err = await assertRejects(() =>
+      copy([`ghcr.io/Team/Hello:v1@${DIGEST_A}`])
+    );
+    assertStringIncludes(String(err), "cannot be mirrored");
+    assertEquals(written.length, before);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("copy refuses two sources at one target or one record name, before copying anything", async () => {
+  const reg = registry();
+  const f = fake(reg);
+  try {
+    const { ctx, written } = context();
+    const copy = (sources: string[]) =>
+      model.methods.copy.execute(CopyArgsSchema.parse({ sources }), ctx);
+    const target = await assertRejects(() =>
+      copy([
+        `docker.io/nats:2.10@${DIGEST_A}`,
+        `docker.io/library/nats:2.10@${DIGEST_A}`,
+      ])
+    );
+    assertStringIncludes(
+      String(target),
+      "land at the same target registry.example.org/mirror/docker.io/library/nats:2.10",
+    );
+    // Different targets, one record name: / and - both write as -.
+    const record = await assertRejects(() =>
+      copy([
+        `ghcr.io/foo-bar/baz:v1@${DIGEST_A}`,
+        `ghcr.io/foo/bar-baz:v1@${DIGEST_B}`,
+      ])
+    );
+    assertStringIncludes(
+      String(record),
+      "land at the same record mirror-registry.example.org-mirror-ghcr.io-foo-bar-baz-v1",
+    );
+    assertEquals(written.length, 0);
+    assert(!f.calls.some((c) => c.args[0] === "copy"));
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("tag writes to a repository copy made, its whole path under the namespace", async () => {
+  const reg = registry();
+  reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"] =
+    DIGEST_A;
+  const f = fake(reg);
+  try {
+    const { ctx, written } = context();
+    await model.methods.tag.execute(
+      { name: "docker.io/library/nats", digest: DIGEST_A, tag: "stable" },
+      ctx,
+    );
+    assertEquals(
+      written[0].data.ref,
+      "registry.example.org/mirror/docker.io/library/nats:stable",
+    );
+    assertEquals(
+      reg.tags["registry.example.org/mirror/docker.io/library/nats:stable"],
+      DIGEST_A,
+    );
   } finally {
     f.restore();
   }
@@ -706,7 +869,7 @@ Deno.test("a failing crane reports its argv and stderr, and nothing is written",
     );
     assertStringIncludes(
       String(err),
-      `crane copy docker.io/library/nats@${DIGEST_A} registry.example.org/mirror/nats:2.10 exited 2: copy: boom`,
+      `crane copy docker.io/library/nats@${DIGEST_A} registry.example.org/mirror/docker.io/library/nats:2.10 exited 2: copy: boom`,
     );
     assertEquals(written.length, 0);
   } finally {
@@ -998,6 +1161,7 @@ Deno.test({
     await copy();
     assertEquals(c.written[1].data.action, "unchanged");
     const name = String(c.written[0].data.name);
+    const repository = String(c.written[0].data.repository);
     const tag = String(c.written[0].data.tag);
 
     const t = context(over);
@@ -1009,7 +1173,7 @@ Deno.test({
     assertEquals(t.written[1].data.changed, false);
     const again = context(over);
     await model.methods.digest.execute({
-      refs: [`${name}:${tag}`, `${name}:stable`],
+      refs: [`${repository}:${tag}`, `${repository}:stable`],
     }, again.ctx);
     assertEquals(again.written[0].data.digest, digest);
     assertEquals(again.written[1].data.digest, digest);

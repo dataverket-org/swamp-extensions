@@ -38,8 +38,11 @@ swamp model method run registry blob --input ref=<repository>:<tag> --input path
 A reference is `<repository>:<tag>` or `<repository>@sha256:<digest>` with its
 registry; one without a slash is taken under the model's own registry and
 namespace. `copy` sources carry both tag and digest,
-`<repository>:<tag>@sha256:<digest>`: the digest is copied, the tag names the
-mirror. The `pinned` field of a `digest` record is exactly that.
+`<repository>:<tag>@sha256:<digest>`: the digest is copied and the tag names the
+mirror. The `pinned` field of a `digest` record is a source in exactly that
+form. An image lands at `<registry>/<namespace>/<source registry>/<path>`,
+`mirror/docker.io/library/nats`, where a registry mirror asks for it; read it
+back by that full reference.
 
 ## What gets recorded
 

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/crane",
+  "version": "2026.10.29.2",
+  "reviewedAt": "2026-10-29T20:59:43Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged by this version: the credential path (vault expressions, --password-stdin into a per-run DOCKER_CONFIG removed in finally) is not touched. sourcePath's error message quotes the source reference and the derived path only, never a credential."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "copy still logs the count and, per source, '{target}: {action}', so the new <namespace>/<source registry>/<path> target shows in the log. A refused source throws before the session is opened, with the derived path in the message."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "sourcePath refuses anything that does not become a repository path before crane runs and before any write (an uppercase path, ghcr.io/Team/Hello; an uppercase first component without a dot, Foo/bar, which containerd would take as a host; LocalHost/x; an IPv6 host, [::1]:5000/x, whose colons survive the single replace and fail the regex). Refusal rather than a guess is the right failure. A target registry that only takes two path components (Docker Hub as the target, registry=docker.io namespace=myorg) now fails at crane copy time with crane's error rather than being refused up front; loud, but no earlier check or doc mentions it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "deno task check, lint and test pass (20 passed, e2e ignored; e2e reported run once against localhost:5001). The sourcePath unit test covers docker.io in full, bare nats, bare bitnami/redis, index.docker.io, registry-1.docker.io, an uppercase host, localhost:port and an uppercase path. Not covered: localhost with no port (the first === 'localhost' branch), a non-localhost host with a port, an uppercase first component without a dot (Foo/bar), an IPv6 host, and any collision case (registry.example.org:5000/x vs registry.example.org-5000/x; ghcr.io/foo-bar/baz vs ghcr.io/foo/bar-baz in mirror record names). The tag unit test still uses name nats at registry.example.org/mirror/nats, not a multi-segment name from the new layout (only the e2e test does that). Nothing tests the claim that mirror-release-images puts sha256-<hex> signature tags in the image's own repository; it holds by reading (both copies go through sourcePath of the same source repository), but no signed-images workflow was rerun after the change. deno fmt --check fails on crane/.claude/skills/crane/SKILL.md line 43 and signed-images/README.md (lines ~403 and ~420-424); both files were clean at HEAD."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "copy itself is still idempotent by digest at the new target. But an existing model that ran copy under 2026.10.29.1 keeps its old mirror record (mirror-<registry>-<namespace>-<last segment>-<tag>, lifetime infinite) beside the new one, and nothing removes or supersedes it. @dataverket/ko-signed-images with baseImageFrom and an empty baseImageRecord (workflow-c0ab6bef...yaml:135,158) takes findBySpec(...,'mirror')...[0]: after the upgrade the model has two mirror records, so the build may take the old record's target and digest, a base image that no longer advances, with no error. With baseImageRecord set to the documented old name, it reads the stale record forever. signed-images/README.md:91 ('A model that mirrored one base image has one mirror record') and workflow-c0ab6bef...yaml:69 ('the model's only mirror record') stop being true for every upgraded model. Not reproduced live; read from the expressions."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "The registry API use is unchanged. sourcePath's Docker Hub rules match docker/distribution reference normalisation where it matters: a first component is a host when it has a '.' or ':' or is 'localhost'; library/ is added only for a single-component Docker Hub path; docker.io/nats and docker.io/library/nats are the same repository, by design. Differences, all on the refusing or harmless side: registry-1.docker.io is folded into docker.io, which containerd does not do (a node pulling registry-1.docker.io/x asks a mirror keyed registry-1.docker.io for that host's path, so the Talos endpoint for that key must point at .../docker.io); hosts are lowercased; an uppercase first component without a dot is refused where containerd treats it as a host. The '<host>-<port>' path segment is this extension's convention, not containerd's; a Talos mirror for localhost:5001 needs endpoint .../<namespace>/localhost-5001 written by hand, which the README states."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "No new files, subprocesses or handles. sourcePath runs in the argument mapping before the Scratch is made, so a refused source leaves nothing to clean."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "issue",
+      "note": "No real infrastructure is named; the examples stay on registry.example.org, docker.io/library/nats, cgr.dev/chainguard/static and localhost:5001, and the quality.yaml accept line moved from README line 122 to 127, which is still the first line of the same mirror-image command (the line the rule reports), and swamp extension quality passes. Doc problems: signed-images/README.md:331 and :422 say two upstreams or images 'never collide', which is false. registry.example.org:5000/x and a host literally named registry.example.org-5000 both land at <ns>/registry.example.org-5000/x. ghcr.io/foo-bar/baz and ghcr.io/foo/bar-baz get the same mirror record name. crane/.claude/skills/crane/SKILL.md:41-43 inserts the landing path before 'The pinned field of a digest record is exactly that', so 'that' now reads as the target path instead of the <repository>:<tag>@sha256:<digest> source form, and the line is not wrapped (deno fmt fails). README.md:44-46 still offers 'nats:2.10 is <registry>/<namespace>/nats:2.10' as the example of a slashless read, a path copy can no longer produce. Nothing says that the same string means two places: digest/describe read 'docker.io/library/nats:2.10' from Docker Hub, while tag name=docker.io/library/nats writes the mirror. The globalArguments namespace description (registry.ts:22, README.md:37) still reads '<registry>/<namespace>/<name>'; that is accurate for tag but says nothing of copy's deeper path. A registry that allows only <namespace>/<repo> as a target (Docker Hub) is not mentioned as unsupported. signed-images/manifest.yaml is bumped, but its dependency on @dataverket/crane is unversioned, so signed-images 2026.10.29.2 docs describe a layout that only crane 2026.10.29.2 produces."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "No schema shape changed: MirrorSchema is the same closed z.object. Its name field now holds <source registry>/<path> (docker.io/library/nats), while the digest record's name is still the last segment (nats). Same field name, two meanings across specs; documented for copy only by example."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged: every resource lifetime infinite, digest GC 30, others 10. GC is per instance name, so mirror records written under the old names are never collected (see idempotency-resilience)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "As before: registry contents are evidence, not a managed resource; no delete. Images copied under the old layout stay in the registry at <namespace>/<last segment> and are left to registry policy."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: arguments (policy), crane-installed and registry-reachable (live) run before copy and tag. sourcePath validation is per-source input validation inside execute, before any crane call, which is the right place for it since sources are method inputs."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "mirror-<sanitized target repository>-<tag> now contains the source registry and whole path, so mirror record names change for every existing source (mirror-registry.example.org-mirror-nats-2.10 becomes mirror-registry.example.org-mirror-docker.io-library-nats-2.10) and the old ones linger (see idempotency-resilience). sanitized() maps both '/' and '-' runs to '-', so two different targets can share a name. Example: copy of ghcr.io/foo-bar/baz:v1@d1 and ghcr.io/foo/bar-baz:v1@d2 with registry r.example.org, namespace mirror. Both records are named mirror-r.example.org-mirror-ghcr.io-foo-bar-baz-v1, so the second overwrites the first, and @dataverket/mirror-image's size() == inputs.refs.size() assertion then fails with a spurious 'not every image was mirrored'. Under the old layout those two landed at .../baz and .../bar-baz, whose names did not collide. digest records already had this collision on source repositories. Two sources that are meant to be the same (docker.io/nats:2.10 and docker.io/library/nats:2.10 in one mirror-image run) also write one mirror record, so the same count assertion fails. Low likelihood, but it is a reachable failure."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Unchanged: digest reads its last record through readResource; copy reads nothing back. Workflows read attributes.target and attributes.repository from mirror records and build no paths, so mirror-image, pinned-base-image (sign and verify by repository@digest) and mirror-release-images (verify-mirror by repository@digest) follow the new layout. In mirror-release-images, the images step and the signatures step both derive the target from sourcePath of the same source repository (i.repository vs the digest record's ref.repository, which is i.repository because it has a slash), so a sha256-<hex> signature tag lands in the image's repository and cosign finds it. If release.json ever listed a slashless repository, the signature digest would be read under the target registry and namespace while the image copy reads Docker Hub, and the two would land in different repositories. That inconsistency predates this change, but sourcePath makes the image side explicit."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Version 2026.10.29.1 to 2026.10.29.2 with an upgrades entry whose upgradeAttributes returns globalArguments unchanged. That is honest: GlobalArgsSchema is byte-identical to HEAD (no field, default or validation changed), and the dry run lists the same six globalArguments. The no-op covers definitions only. The behaviour change in record names and target paths is not migratable through upgradeAttributes, and the upgrade entry and docs say nothing about the old mirror records and old registry paths it leaves behind (see idempotency-resilience and instance-names)."
+    }
+  ]
+}

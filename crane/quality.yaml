@@ -2,4 +2,4 @@ version: 1
 accept:
   - rule: secret-unsafe-docs # passwordKey names the vault key, the value is never the password
     file: README.md
-    line: 122
+    line: 135

@@ -19,7 +19,7 @@ export const GlobalArgsSchema = z.object({
     "The registry copy and tag write to and the credential logs in to, host[:port], such as registry.example.org; a reference without a slash is read from <registry>/<namespace>/. Empty for a definition that only reads full references",
   ),
   namespace: z.string().default("").describe(
-    "The path copy and tag work under, <registry>/<namespace>/<name>; empty for the registry's root",
+    "The path copy and tag work under: copy puts an image at <registry>/<namespace>/<source registry>/<path>, tag writes to <registry>/<namespace>/<name>; empty for the registry's root",
   ),
   username: z.string().meta({ sensitive: true }).default("").describe(
     "The credential's user, written as a vault expression; empty to use the container config of the user running swamp",
@@ -53,14 +53,14 @@ export const DescribeArgsSchema = z.object({
 /** `copy`'s arguments. */
 export const CopyArgsSchema = z.object({
   sources: z.array(z.string().min(1)).min(1).describe(
-    "Images pinned by digest, <repository>:<tag>@sha256:<digest>; each lands at <registry>/<namespace>/<last path segment>:<tag>, or at @<digest> alone when no tag is given",
+    "Images pinned by digest, <repository>:<tag>@sha256:<digest>; each lands at <registry>/<namespace>/<source registry>/<path>:<tag>, docker.io/library/nats for nats, or at @<digest> alone when no tag is given",
   ),
 });
 
 /** `tag`'s arguments. */
 export const TagArgsSchema = z.object({
   name: z.string().min(1).describe(
-    "The repository under the namespace, such as nats or config-prod",
+    "The repository under the namespace, such as config-prod, or docker.io/library/nats for an image copy put there",
   ),
   digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).describe(
     "The digest the tag is to point at; it must already be in the repository",
@@ -311,6 +311,45 @@ export function refString(r: Ref): string {
 /** `<registry>/<namespace>/<name>`, with an empty namespace left out. */
 export function repositoryUnder(g: GlobalArgs, name: string): string {
   return [g.registry, g.namespace, name].filter((p) => p !== "").join("/");
+}
+
+/** Docker Hub's other names for itself, as a reference may give them. */
+const DOCKER_HUB = new Set([
+  "docker.io",
+  "index.docker.io",
+  "registry-1.docker.io",
+]);
+
+/**
+ * Where copy puts a source under the namespace: its whole repository with its
+ * registry, `<registry>/<path>`, the path a registry mirror is asked for, so a
+ * Talos or containerd mirror of each upstream is one prefix of the namespace.
+ * A bare name is Docker Hub's, whose official images are under library/, as
+ * containerd asks for them, and index.docker.io and registry-1.docker.io are
+ * docker.io. A registry's port joins its host with an underscore, since a
+ * repository path has no colon and a host name no underscore, so two sources
+ * never share a path. An Error says why there is none.
+ */
+export function sourcePath(repository: string): string | Error {
+  const slash = repository.indexOf("/");
+  const first = slash >= 0 ? repository.slice(0, slash) : "";
+  const hosted = first.includes(".") || first.includes(":") ||
+    first === "localhost";
+  let host = hosted ? first.toLowerCase() : "docker.io";
+  let path = hosted ? repository.slice(slash + 1) : repository;
+  if (DOCKER_HUB.has(host)) {
+    host = "docker.io";
+    if (!path.includes("/")) path = `library/${path}`;
+  }
+  const full = `${host.replace(":", "_")}/${path}`;
+  if (!REPOSITORY_PATH.test(full)) {
+    return new Error(
+      `${JSON.stringify(repository)} cannot be mirrored: ${
+        JSON.stringify(full)
+      } is not a repository path`,
+    );
+  }
+  return full;
 }
 
 /** What is wrong with the arguments as written, or null. */
@@ -855,8 +894,18 @@ export const checks = {
 /** Model definition for one container registry driven through crane. */
 export const model = {
   type: "@dataverket/crane/registry",
-  version: "2026.10.29.1",
+  version: "2026.10.29.2",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.10.29.2",
+      description:
+        "copy puts an image at its source registry and whole path under the namespace; no schema change",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   checks,
   resources: {
     digest: {
@@ -998,7 +1047,7 @@ export const model = {
     },
     copy: {
       description:
-        "Copy every source, pinned by digest, to <registry>/<namespace>/<name>:<tag>; one already there with that digest is left unchanged; the digest is checked after",
+        "Copy every source, pinned by digest, to <registry>/<namespace>/<source registry>/<path>:<tag>, the path a registry mirror is asked for; one already there with that digest is left unchanged; the digest is checked after",
       arguments: CopyArgsSchema,
       execute: async (args: CopyArgs, ctx: Context) => {
         const g = ctx.globalArgs;
@@ -1015,8 +1064,33 @@ export const model = {
               } is not pinned by digest: copy <repository>:<tag>@sha256:<digest>, a tag can move`,
             );
           }
-          return parsed;
+          const name = sourcePath(parsed.repository);
+          if (name instanceof Error) throw name;
+          return { ...parsed, name, given: s };
         });
+        // Two sources at one target, or under one record name, would leave one
+        // record for two images: refused before anything is copied.
+        const seen = new Map<string, string>();
+        for (const source of sources) {
+          const repository = repositoryUnder(g, source.name);
+          const by = source.tag !== "" ? `:${source.tag}` : `@${source.digest}`;
+          for (
+            const key of [
+              `target ${repository}${by}`,
+              `record ${imageInstance("mirror", { ...source, repository })}`,
+            ]
+          ) {
+            const other = seen.get(key);
+            if (other !== undefined) {
+              throw new Error(
+                `${JSON.stringify(other)} and ${
+                  JSON.stringify(source.given)
+                } land at the same ${key}: copy them in two runs, or one of them`,
+              );
+            }
+            seen.set(key, source.given);
+          }
+        }
         const scratch = new Scratch();
         try {
           const session = await open(ctx, scratch);

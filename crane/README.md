@@ -28,32 +28,45 @@ swamp model create @dataverket/crane/registry registry \
 
 swamp model method run registry digest --input 'refs:json=["docker.io/library/nats:2.10"]'
 swamp model method run registry copy --input 'sources:json=["docker.io/library/nats:2.10@sha256:<digest>"]'
-swamp model method run registry tag --input name=nats --input digest=sha256:<digest> --input tag=stable
+swamp model method run registry tag --input name=docker.io/library/nats --input digest=sha256:<digest> --input tag=stable
 ```
 
-| Argument      | Default |                                                                                                                                           |
-| ------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `registry`    |         | The registry `copy` and `tag` write to and the credential logs in to, `host[:port]`. May stay empty for a definition that only reads      |
-| `namespace`   |         | The path `copy` and `tag` work under: `<registry>/<namespace>/<name>`; empty for the registry's root                                      |
-| `username`    |         | The credential's user, a vault expression; empty to use the container config of the user running swamp                                    |
-| `password`    |         | The credential's password or token, a vault expression                                                                                    |
-| `insecure`    | `false` | Allow a registry served over plain HTTP or with a certificate that does not verify; `localhost` is plain HTTP regardless, as crane has it |
-| `craneBinary` | `crane` |                                                                                                                                           |
+| Argument      | Default |                                                                                                                                                                                                 |
+| ------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registry`    |         | The registry `copy` and `tag` write to and the credential logs in to, `host[:port]`. May stay empty for a definition that only reads                                                            |
+| `namespace`   |         | The path `copy` and `tag` work under: `copy` puts an image at `<registry>/<namespace>/<source registry>/<path>`, `tag` writes to `<registry>/<namespace>/<name>`; empty for the registry's root |
+| `username`    |         | The credential's user, a vault expression; empty to use the container config of the user running swamp                                                                                          |
+| `password`    |         | The credential's password or token, a vault expression                                                                                                                                          |
+| `insecure`    | `false` | Allow a registry served over plain HTTP or with a certificate that does not verify; `localhost` is plain HTTP regardless, as crane has it                                                       |
+| `craneBinary` | `crane` |                                                                                                                                                                                                 |
 
 A reference is `<repository>:<tag>` or `<repository>@sha256:<digest>` with its
 registry: `docker.io/library/nats:2.10`, `ghcr.io/org/api@sha256:…`. One without
-a slash is read under the definition's own registry and namespace: `nats:2.10`
-is `<registry>/<namespace>/nats:2.10`.
+a slash is read under the definition's own registry and namespace:
+`config-prod:v1` is `<registry>/<namespace>/config-prod:v1`. Anything `copy` put
+there has a slash in its name, so it is read by its full reference,
+`<registry>/<namespace>/docker.io/library/nats:2.10`, while
+`docker.io/library/nats:2.10` alone is Docker Hub's.
 
 `digest` and `describe` take `refs`, a list, and write one record each. `copy`
 takes `sources`, each `<repository>:<tag>@sha256:<digest>`: the digest is what
-is copied, the tag is what the mirror is tagged, and the last path segment is
-the repository it lands in, `<registry>/<namespace>/nats:2.10`. A source with no
-tag lands at `@<digest>` alone. A source with no digest is refused before crane
-runs: a tag can move, and a mirror holds what was resolved. `tag` takes `name`,
-`digest` and `tag`, and points `<registry>/<namespace>/<name>:<tag>` at a digest
-that is already in that repository. `blob` takes `ref`, `path` and `layer`
-(default `0`).
+is copied, the tag is what the mirror is tagged, and the source's registry and
+whole path are the repository it lands in,
+`<registry>/<namespace>/docker.io/library/nats:2.10`: the path a registry mirror
+is asked for, so a Talos or containerd mirror of each upstream is one prefix of
+the namespace, `<registry>/v2/<namespace>/docker.io` with `overridePath`. A bare
+Docker Hub name is written in full, `nats` as `docker.io/library/nats`;
+`index.docker.io` and `registry-1.docker.io` are `docker.io`; a host is
+lowercased; and a registry's port joins its host with an underscore,
+`localhost:5001` as `localhost_5001`, since a host name has none, so two sources
+never share a repository. Two sources of one run that would land at one target,
+or under one record name, are refused before anything is copied. The target
+registry must allow repository paths that deep: Docker Hub, with two levels,
+cannot be one. A source with no tag lands at `@<digest>` alone. A source with no
+digest is refused before crane runs: a tag can move, and a mirror holds what was
+resolved. `tag` takes `name`, `digest` and `tag`, and points
+`<registry>/<namespace>/<name>:<tag>` at a digest that is already in that
+repository. `blob` takes `ref`, `path` and `layer` (default `0`).
 
 Every record carries `repository`, `digest` and, where there is one, `tag`, so
 the next step pins by digest through CEL without parsing anything:
