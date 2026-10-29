@@ -158,10 +158,11 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
       verify, `mirror` record with the pinned reference
 - [ ] `ko-signed-images`: `baseImage` readable from the latest
       `pinned-base-image` record, documented with the CEL line
-- [ ] `signed-images` workflow `@dataverket/signed-release`: rendered directory
+- [x] `signed-images` workflow `@dataverket/signed-release`: rendered directory
       in, `release.json` from the resolution record, `push_artifact` tagged with
       the commit, artifact digest signed, `release.json` attested onto it,
-      asserted
+      asserted (the attestation's predicate is the rendered manifests, see the
+      Phase 2 notes: flux keeps no file for `release.json`)
 - [ ] `signed-images` workflow `@dataverket/verify-release`: artifact signature
       verified, `release.json` read through `crane.blob`, every image in it
       verified, asserted; read-only
@@ -281,3 +282,32 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 - Lane A: `flux push artifact` into the registry worked and `blob` read its
   `release.json` through swamp; the e2e test builds an equivalent artifact
   with `crane append --oci-empty-base` so it needs crane only.
+  true}'`
+  unblocks it. `swamp model validate` without `--method` runs every check, so a
+  verify-only signer always fails `key-usable` there; with `--method verify` it
+  does not.
+
+- Phase 2: flux's `push_artifact` writes `release.json` into a scratch copy
+  that is removed after the push and records only `releaseJson: true`, no
+  path; and a workflow has no task that writes a file (`model_method`,
+  `behavior`, `workflow`, `manual_approval`, `assert`, `wait_for_signal`). So
+  `signed-release` attests the rendered `manifests` file this run's
+  `ko resolve` wrote, as a `custom` predicate; `release.json` is bound by the
+  signature, since the artifact digest covers it. Defect to fix in flux when
+  it is next touched: keep `release.json` as a file record through
+  `createFileWriter`, so its path can be a predicate.
+- Phase 2: the flux artifact instance is named `<repository>--<tag>`, so a
+  workflow reads it with `data.findBySpec(model, "artifact")` filtered by
+  `workflowRunId == run.id`, never `data.latest`.
+- Phase 2: a revision in flux's `<branch>@sha1:<commit>` form is not an OCI
+  tag; `signed-release` takes `revision` as the tag unless `tag` is given, and
+  flux's `parseTarget` refuses the bad tag by name before flux runs.
+- Phase 2: `ko-manifests` records its rendered output as a file, not a
+  directory, and `swamp data query --select path` returns `""` for it;
+  `--select content` gives the text. The release directory is assembled by the
+  caller. A directory output on `resolve` would spare that copy.
+- Phase 2: the pinned-and-nothing-built check runs right after `resolve`, so
+  a directory with a `ko://` reference or an unpinned image never reaches the
+  registry; seen on the fixture's own deployment.
+- Phase 2: `swamp behavior type search` without `--json` opens an interactive
+  picker on a PTY; in a zmx session it hangs and must be killed by pid.
