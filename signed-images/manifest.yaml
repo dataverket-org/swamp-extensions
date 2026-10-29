@@ -2,8 +2,8 @@ manifestVersion: 1
 name: "@dataverket/signed-images"
 version: "2026.10.29.1"
 description: >
-  Four workflows composing @dataverket/ko, @dataverket/cosign and
-  @dataverket/flux. `@dataverket/ko-signed-images`: a signed build, every
+  Seven workflows composing @dataverket/ko, @dataverket/cosign,
+  @dataverket/flux and @dataverket/crane. `@dataverket/ko-signed-images`: a signed build, every
   command of one Go module built into an image by ko and pushed, every image
   signed by digest with cosign using a key held in a vault, every signature
   verified. `@dataverket/ko-signed-manifests`: signed manifests, ko resolve
@@ -15,8 +15,17 @@ description: >
   of rendered manifests pushed as one OCI artifact with flux push artifact,
   tagged with the commit, with a release.json listing every image by digest
   from this run's resolution record, the artifact signed by digest, the
-  rendered manifests attested onto it, both verified. Each run fails unless
-  all of it happened for all of the images.
+  rendered manifests attested onto it, both verified. `@dataverket/verify-release`:
+  the gate, read-only, the artifact's tag pinned to its digest with crane, its
+  signature and custom attestation verified against a public key, release.json
+  read out of its layer, every image it lists verified by digest.
+  `@dataverket/promote-release`: verify-release as a nested workflow, then the
+  channel tag such as current pointed at the verified digest with crane tag
+  and read back, the digest it held before recorded for a rollback.
+  `@dataverket/mirror-release-images`: verify-release, then every image the
+  release lists copied by digest into another registry with its sha256-<hex>
+  signature tag, and verified there. Each run fails unless all of it happened
+  for all of the images.
 
   cosign signs the digests this run's records carry, the image records of a
   build, the images a resolution built, or the artifact flux pushed, never a
@@ -25,8 +34,10 @@ description: >
   inputs are recorded in cleartext in the run history. With `tlog` false, the
   default, signatures go to the registry only; with `tlog` true they are
   recorded in Rekor. Registry credentials come from the container config of
-  the user running swamp. Built on `@dataverket/ko`, `@dataverket/cosign` and
-  `@dataverket/flux`, all three dependencies.
+  the user running swamp, except where crane writes, a promotion or a mirror,
+  where they are named by vault and key. Built on `@dataverket/ko`,
+  `@dataverket/cosign`, `@dataverket/flux` and `@dataverket/crane`, all four
+  dependencies.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:
@@ -38,6 +49,9 @@ workflows:
   - workflow-97de917b-4596-4ab1-931e-ae60d8536323.yaml
   - workflow-ef303fe3-2ace-42b2-b3f6-7f4d64ae50c4.yaml
   - workflow-pinned-base-image.yaml
+  - workflow-721d7910-1e2b-45c6-9935-5a6201623258.yaml
+  - workflow-f890223b-2998-4e64-a00e-99666c471a5d.yaml
+  - workflow-00999cd6-0187-4b5a-a1cd-646160f1c6c1.yaml
 vaults: []
 datastores: []
 reports: []
@@ -58,6 +72,9 @@ labels:
   - kubernetes
   - flux
   - release
+  - promotion
+  - mirror
+  - crane
 dependencies:
   - "@dataverket/ko"
   - "@dataverket/cosign"

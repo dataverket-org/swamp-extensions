@@ -26,6 +26,25 @@ verified, each in one run that fails unless all of it happened for all of them.
 | `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign` |
 | `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                 | `verified-manifests-ko`, `verified-manifests-cosign`   |
 | `@dataverket/pinned-base-image`   | A base image mirrored by digest after a quarantine: the upstream tag watched, verified keyless, copied into our registry, signed with our key, verified                     | `base-image-watch`, `pinned-base-image`, two signers   |
+Seven [swamp](https://github.com/swamp-club/swamp) workflows that compose
+[`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign),
+[`@dataverket/flux`](../flux) and [`@dataverket/crane`](../crane): Go images
+built by [ko](https://ko.build), signed by digest with
+[cosign](https://github.com/sigstore/cosign) using a key held in a vault,
+verified, released as one OCI artifact pushed by [flux](https://fluxcd.io), and
+that release verified, promoted by retag and mirrored with
+[crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md),
+each in one run that fails unless all of it happened for all of them.
+
+| Workflow                            | Does                                                                                                                                                                                                                              | Models                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `@dataverket/ko-signed-images`      | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                                                                                     | `ko-signed-images-ko`, `ko-signed-images-cosign`                                      |
+| `@dataverket/ko-signed-manifests`   | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                       | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`                                |
+| `@dataverket/verified-manifests`    | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                       | `verified-manifests-ko`, `verified-manifests-cosign`                                  |
+| `@dataverket/signed-release`        | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign`                   |
+| `@dataverket/verify-release`        | The gate: the artifact's tag pinned to its digest, its signature and attestation verified, `release.json` read out of it, every image it lists verified; read-only                                                                | `verify-release-crane`, `verify-release-cosign`                                       |
+| `@dataverket/promote-release`       | `verify-release`, then the channel tag such as `current` pointed at the verified digest and read back; the digest it held before recorded, for a rollback                                                                         | `promote-release-crane`, and `verify-release`'s                                       |
+| `@dataverket/mirror-release-images` | `verify-release`, then every image it lists copied by digest into another registry with its signature tag, and verified there                                                                                                     | `mirror-release-images-crane`, `mirror-release-images-cosign`, and `verify-release`'s |
 
 What makes them signed builds rather than steps in a row:
 
@@ -334,6 +353,115 @@ mirror lands under the upstream's last path segment, `static` for
 `cgr.dev/chainguard/static`, since crane's `copy` names the repository that way;
 two upstreams with the same last segment need two namespaces.
 
+## `verify-release`: the gate
+
+| Job        | Does                                                                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pin`      | `digest` on `@dataverket/crane/registry`: the artifact's tag resolved to its digest; every step after names that digest. Read-only                                                                      |
+| `artifact` | `verify` and `verifyAttestation` (type `custom`) of the artifact against `publicKey`, an assertion that both verified, then `blob` reads `release.json` out of the artifact's layer as a record         |
+| `images`   | `verify` of every image `release.json` lists, `repository@digest`, against the same key, then one assertion: one artifact, verified, attested, read, at least one image, every image verified, none not |
+
+Inputs: `repository` and `publicKey` (required; a PEM or a file, nothing
+secret), `tag` or `digest` (one of the two, checked first), `annotations` (what
+the artifact's signature must carry), `tlog`, `insecureRegistry`. No credential:
+it reads, and crane and cosign read with the container config of the user
+running swamp.
+
+```sh
+swamp workflow run @dataverket/verify-release \
+  --input repository=registry.example.org/team/release/prod --input tag=abc123 \
+  --input publicKey=keys/cosign.pub \
+  --input 'annotations:json=["commit=abc123"]'
+```
+
+A tag is pinned once, by crane, and the digest record is what cosign verifies
+and what `blob` reads, so the artifact that was verified is the artifact whose
+`release.json` is read, even if the tag moves during the run. The images are
+verified by the `repository` and `digest` the release lists, never by tag, and
+without annotations: the release's images may have been signed by several
+builds. An artifact nobody signed fails at the first assertion, by its
+signature, before anything is read out of it; a release with an image whose
+signature is missing or wrong fails at the last, naming the image and cosign's
+reason.
+
+## `promote-release`: a retag
+
+| Job       | Does                                                                                                                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verify`  | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                             |
+| `promote` | `tag` on `@dataverket/crane/registry`: the channel tag pointed at the digest the nested run verified; `digest` reads the channel back; an assertion that it holds exactly the verified digest |
+
+Inputs: `verify-release`'s, plus `channel` (required, the tag to move, such as
+`current`), and the registry credential crane tags with, `vault`, `usernameKey`
+and `passwordKey` (required: swamp resolves every `vault.get` at run start).
+
+```sh
+swamp workflow run @dataverket/promote-release \
+  --input repository=registry.example.org/team/release/prod --input tag=abc123 \
+  --input channel=current \
+  --input publicKey=keys/cosign.pub \
+  --input vault=registry --input usernameKey=username --input passwordKey=password
+```
+
+The digest the channel is pointed at is the nested run's `digest` record, read
+as the output of the step that ran it (`steps.release.outputs.digest.digest`),
+never an input; the channel is read back after the retag and must hold it. The
+`tagging` record of `promote-release-crane` keeps `previousDigest`, the digest
+the channel held before, empty when the channel is new: that is the rollback
+value, and a rollback is a promotion of it, `--input digest=<previousDigest>` in
+place of `tag`. A channel already at the digest is recorded `changed: false` and
+crane is not run. The registry is the first path element of `repository`, the
+repository under it the rest; the credential must be allowed to write there.
+
+```sh
+swamp data query 'modelName == "promote-release-crane" && specName == "tagging"' --select content
+```
+
+## `mirror-release-images`: a mirror with signatures
+
+| Job             | Does                                                                                                                                                                                                                                                     |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verify`        | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                                                                                        |
+| `copy`          | `copy` on `@dataverket/crane/registry`: every image `release.json` lists, by digest, into `<registry>/<namespace>/<name>:<tag>`; then, with `signatureTags`, `digest` of each image's `sha256-<hex>` tag at the source and `copy` of it beside the image |
+| `verify-mirror` | `verify` of every mirrored image at its new location, from this run's mirror records, then one assertion over the counts: every listed image mirrored by its digest, every signature tag too when asked, every mirrored image verified                   |
+
+Inputs: `verify-release`'s, plus the target `registry` (required), `namespace`
+(default empty, the registry's root), `imageTag` (the tag every mirrored image
+gets; the release's `revision` when empty, which must then be an image tag),
+`signatureTags` (default `true`), and `vault`, `usernameKey` and `passwordKey`
+(required) for the registry mirrored into.
+
+```sh
+swamp workflow run @dataverket/mirror-release-images \
+  --input repository=registry.example.org/team/release/prod --input tag=abc123 \
+  --input publicKey=keys/cosign.pub \
+  --input registry=registry.other.org --input namespace=mirror \
+  --input vault=registry --input usernameKey=username --input passwordKey=password
+```
+
+The name an image lands under is the last path element of its source repository,
+`registry.example.org/team/hello` into `registry.other.org/mirror/hello`, as
+crane's `copy` names it; two images with the same last element collide, so give
+them a namespace each. An image already at the target with that digest is
+recorded `unchanged`. The credential logs in to the target only, so the source
+registry is read anonymously, as for `@dataverket/mirror-image`.
+
+Signatures do not travel with `crane copy`: it copies the manifest the digest
+names and nothing that refers to it. cosign 3 stores signatures and attestations
+as OCI referrers, and on a registry without the referrers API, `registry:2`
+among them, under the fallback tag `sha256-<hex of the image digest>`, an index
+of Sigstore bundles. With `signatureTags`, the default, that tag is resolved at
+the source and copied with the same `copy`, the whole index with every bundle,
+so the verification at the target finds them; seen to carry a release's
+signatures and attestations between two `registry:2`. On a registry that serves
+the referrers API cosign writes no such tag, the `digest` step fails because it
+is not there, and the referrers have to be carried another way before the run,
+with `signatureTags: false`: `oras copy -r`, as cosign's own `copy` help
+suggests; `cosign copy` 3.1.4 was tried and copied the image to the fallback tag
+in place of the bundles, so the target did not verify. The run then reports what
+it finds: an image whose signatures did not arrive fails the assertion by name
+with `no signatures found`.
+
 ## The key
 
 The passphrase always comes from a vault; a key without one has an empty
@@ -362,6 +490,9 @@ swamp data query 'modelName == "verified-manifests-cosign" && specName == "verif
 swamp data query 'modelName == "signed-release-flux" && specName == "artifact"' --json
 swamp data query 'modelName == "pinned-base-image" && specName == "mirror"' --json
 swamp data query 'modelName == "base-image-watch" && specName == "digest"' --json
+swamp data query 'modelName == "verify-release-crane" && specName == "blob"' --select content
+swamp data query 'modelName == "promote-release-crane" && specName == "tagging"' --json
+swamp data query 'modelName == "mirror-release-images-crane" && specName == "mirror"' --json
 ```
 
 The next step of a release reads them through CEL, for instance the build record
@@ -388,6 +519,15 @@ passed, with the default the quarantine failed as it should for a digest first
 seen that day; `ko-signed-images` with `baseImageFrom=pinned-base-image` then
 built `fixtures/hello` on the mirror, the mirror's layer being the built image's
 first.
+the one it would have built. `verify-release` was run on that release, by tag
+and by digest, with and without its annotation, and on an artifact pushed
+without a signature, which fails at the first assertion; `promote-release` moved
+`current` to it, then to a second release with the first's digest in
+`previousDigest`, then found it already there; `mirror-release-images` copied
+both images and their signature tags into a second `registry:2` and verified
+them there, found them unchanged on a second run, and with
+`signatureTags: false` into another namespace failed the assertion naming both
+images.
 
 ## License
 

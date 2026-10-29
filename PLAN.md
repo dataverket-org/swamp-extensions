@@ -163,13 +163,15 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
       the commit, artifact digest signed, `release.json` attested onto it,
       asserted (the attestation's predicate is the rendered manifests, see the
       Phase 2 notes: flux keeps no file for `release.json`)
-- [ ] `signed-images` workflow `@dataverket/verify-release`: artifact signature
+- [x] `signed-images` workflow `@dataverket/verify-release`: artifact signature
       verified, `release.json` read through `crane.blob`, every image in it
       verified, asserted; read-only
-- [ ] `signed-images` workflow `@dataverket/promote-release`: `verify-release`
+- [x] `signed-images` workflow `@dataverket/promote-release`: `verify-release`
       then `crane.tag` of the channel tag, old digest recorded
-- [ ] `signed-images` workflow `@dataverket/mirror-release-images`: every image
-      a release lists copied to another registry with its signatures
+- [x] `signed-images` workflow `@dataverket/mirror-release-images`: every image
+      a release lists copied to another registry with its signatures (through
+      cosign's `sha256-<hex>` fallback tag, copied with crane; see the Phase 2
+      notes on `cosign copy`)
 - [ ] `signed-images`: README, skill `signed-images` (which workflow for what),
       dry run; top-level README rows for crane and the new workflows
 
@@ -343,3 +345,32 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   that has the extension sources added (`@dataverket/crane/registry` could not
   be resolved from `signed-images/` itself); the scratch repo passed both with
   zero warnings.
+- Phase 2: a nested workflow's records carry the child's `workflowRunId` and no
+  tag of the parent's, so a parent cannot filter them by `run.id`; but the step
+  that ran the child holds every child step's output under the child step's
+  name, `steps.release.outputs.digest.digest` and
+  `steps.release.outputs.release.json.images`, and that is what
+  `promote-release` and `mirror-release-images` read, a record of this run.
+- Phase 2: `crane copy` of `<repository>@<digest>` carries nothing that refers
+  to the image, and `cosign copy` 3.1.4 against `registry:2` copied the image
+  itself to the `sha256-<hex>` tag in place of the bundle index, so the target
+  did not verify (its help names `oras copy -r` for referrers). The fallback tag
+  at the source is an OCI index of the Sigstore bundles, and a plain
+  `crane copy` of `<repository>:sha256-<hex>` carries the index with every
+  bundle, verified at the target; `mirror-release-images` resolves and copies it
+  with crane's own `digest` and `copy`, behind `signatureTags`.
+- Phase 2: `swamp workflow validate --json` prints `valid: null`; the plain
+  output's `Result: PASSED` is the signal. A `guard` that is true skips the step
+  `(guarded)` and its dependants `(dependency)`, which is what a boolean input
+  that turns two steps off needs. `deno fmt` reformats a `- >-` list item of a
+  block scalar with extra indentation; swamp parses it unchanged.
+- Phase 2: cosign's `verify` at a target counts every bundle under the fallback
+  tag, so an image signed by two builds reports `4 signatures verified`; a
+  release's images are verified without annotations for that reason, several
+  builds may have signed them, while the artifact's signature must carry the
+  release's.
+- Phase 2: the secret-docs analyzer flags `--input passwordKey=password` in the
+  two new README examples, as it did for crane; `signed-images/quality.yaml`
+  accepts them by README line (274, 310, the `swamp workflow run` line of each
+  example). A README edit above them moves the lines: the integrator's dry run
+  on the merged tree says which, and the file is updated then.
