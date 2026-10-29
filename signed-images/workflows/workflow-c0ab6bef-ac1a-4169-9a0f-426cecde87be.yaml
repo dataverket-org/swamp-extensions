@@ -66,7 +66,8 @@ inputs:
       default: ""
       description: >-
         The mirror record to read on baseImageFrom, mirror-<repository>-<tag> with every / and : as -, such as
-        mirror-registry.example.org-mirror-static-latest; empty takes the model's only mirror record
+        mirror-registry.example.org-mirror-cgr.dev-chainguard-static-latest; empty takes the model's mirror record
+        when it has exactly one, and fails the run otherwise
     cache:
       type: string
       default: ""
@@ -116,7 +117,26 @@ inputs:
     - keyKey
     - passphraseKey
 jobs:
+  - name: base
+    steps:
+      - name: base-image-record
+        description: >-
+          With baseImageFrom set, exactly one mirror record of that model matches baseImageRecord, or is the
+          model's only one when baseImageRecord is empty; the build never guesses between records.
+        task:
+          type: assert
+          expr: >-
+            inputs.baseImageFrom == ""
+            || data.findBySpec(inputs.baseImageFrom, "mirror").filter(m, inputs.baseImageRecord == "" || m.name == inputs.baseImageRecord).size() == 1
+          message: >-
+            ${{ inputs.baseImageFrom }} has ${{ data.findBySpec(inputs.baseImageFrom, "mirror").filter(m, inputs.baseImageRecord == "" || m.name == inputs.baseImageRecord).size() }}
+            mirror records matching baseImageRecord "${{ inputs.baseImageRecord }}", not one: name one with baseImageRecord
+          severity: high
   - name: describe
+    dependsOn:
+      - job: base
+        condition:
+          type: succeeded
     steps:
       - name: module
         description: What ko works with, as evidence beside the images. Read-only.

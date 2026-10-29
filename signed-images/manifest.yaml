@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/signed-images"
-version: "2026.10.29.1"
+version: "2026.10.29.2"
 description: >
   Eight workflows composing @dataverket/ko, @dataverket/cosign,
   @dataverket/flux and @dataverket/crane. `@dataverket/ko-signed-images`: a signed build, every

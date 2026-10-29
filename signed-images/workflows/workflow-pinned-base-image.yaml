@@ -7,7 +7,7 @@ description: >-
   workflow share one watch; an assertion refuses a digest first seen less than minimumAgeDays ago and says when
   it may be mirrored; cosign verifies the upstream digest keyless, against the certificate identity and OIDC
   issuer of its release workflow, through the public Sigstore log; crane copies it to
-  <registry>/<namespace>/<name>:<tag>, name being the upstream's last path segment, unchanged when already
+  <registry>/<namespace>/<source registry>/<path>:<tag>, the upstream's path kept whole, unchanged when already
   there; cosign signs the mirror with the key named by keyVault and keyKey, verifies it, and an assertion
   requires all of it. Every digest comes from this run's records, never from an input. A build reads the
   mirror record of the pinned-base-image model, target and digest, as its base image. The registry
@@ -29,7 +29,7 @@ inputs:
       type: string
       default: mirror
       description: >-
-        The path under the registry the mirror lands in, <registry>/<namespace>/<name>:<tag>
+        The path under the registry the mirror lands in, <registry>/<namespace>/<source registry>/<path>:<tag>
     vault:
       type: string
       description: Vault holding the registry credential
@@ -170,7 +170,7 @@ jobs:
     steps:
       - name: mirror
         description: >-
-          crane copy of the verified digest to <registry>/<namespace>/<name>:<tag>, unchanged when already
+          crane copy of the verified digest to <registry>/<namespace>/<source registry>/<path>:<tag>, unchanged when already
           there with that digest; one mirror record with target and digest.
         task:
           type: model_method

@@ -5,7 +5,7 @@ description: >-
   @dataverket/verify-release runs first as a nested workflow, with the artifact's tag resolved to its digest,
   its signature and attestation verified against a public key, release.json read out of it and every image it
   lists verified; then crane copy copies each image by its digest from release.json to
-  <registry>/<namespace>/<name>:<tag>, the name the last path element of the source repository and the tag
+  <registry>/<namespace>/<source registry>/<path>:<tag>, the source repository kept whole and the tag
   the release's revision unless imageTag is given; and cosign verifies each copied image at its new location
   against the same key. Signatures travel only when the registry they are read from keeps them under
   cosign's fallback tag, sha256-<hex of the image digest>, as a registry without the OCI referrers API does:
@@ -56,7 +56,7 @@ inputs:
     namespace:
       type: string
       default: ""
-      description: The path under the registry the images land in, <registry>/<namespace>/<name>; empty for the registry's root
+      description: The path under the registry the images land in, <registry>/<namespace>/<source registry>/<path>; empty for the registry's root
     imageTag:
       type: string
       default: ""
@@ -104,7 +104,7 @@ jobs:
           type: succeeded
     steps:
       - name: images
-        description: crane copy of every image release.json lists, by its digest, to <registry>/<namespace>/<name>:<tag>; one mirror record each, copied or unchanged.
+        description: crane copy of every image release.json lists, by its digest, to <registry>/<namespace>/<source registry>/<path>:<tag>; one mirror record each, copied or unchanged.
         task:
           type: model_method
           modelType: "@dataverket/crane/registry"

@@ -89,10 +89,12 @@ baseImage: >-
 ```
 
 A model that mirrored one base image has one mirror record, and `baseImageFrom`
-alone names it. One that mirrored several needs `baseImageRecord`, the record's
-name, `mirror-<repository>-<tag>` with every `/` and `:` written as `-`:
-`mirror-registry.example.org-mirror-static-latest`. A model or record that does
-not exist fails the run before anything is built.
+alone names it. One that holds several, records an older crane left under other
+names among them, needs `baseImageRecord`, the record's name,
+`mirror-<repository>-<tag>` with every `/` and `:` written as `-`:
+`mirror-registry.example.org-mirror-cgr.dev-chainguard-static-latest`. The run
+never guesses: unless exactly one record matches, it fails before anything is
+built.
 
 ```sh
 swamp workflow run @dataverket/ko-signed-images \
@@ -273,7 +275,7 @@ flux pull artifact oci://registry.example.org/team/release/prod:abc123 --output 
 | `resolve`         | `digest` on `@dataverket/crane/registry`, model `base-image-watch`: the upstream tag's digest, with `firstSeenAt` carried forward while the digest is unchanged. Read-only                          |
 | `quarantine`      | An assertion: the digest has been the tag's for at least `minimumAgeDays`, from `firstSeenAt` to this run's start; it fails naming when the digest was first seen and when it may be mirrored       |
 | `verify-upstream` | `verify` on `@dataverket/cosign/signer`, model `pinned-base-image-upstream`: keyless, the certificate identity and OIDC issuer of the upstream's release workflow, through the public log; asserted |
-| `copy`            | `copy`, model `pinned-base-image`: the digest into `<registry>/<namespace>/<name>:<tag>`, `name` the upstream's last path segment; unchanged when already there                                     |
+| `copy`            | `copy`, model `pinned-base-image`: the digest into `<registry>/<namespace>/<source registry>/<path>:<tag>`; unchanged when already there                                                            |
 | `sign`            | `sign`, model `pinned-base-image-cosign`: the mirror, by `repository@digest` from this run's mirror record, with our key                                                                            |
 | `verify`          | `verify` of the mirror against our key's public half, then one assertion over the five records                                                                                                      |
 
@@ -322,13 +324,13 @@ What a build reads is the `mirror` record of the model `pinned-base-image`,
 named `mirror-<repository>-<tag>` with `/` and `:` as `-`:
 
 ```yaml
-baseImage: ${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-static-latest").attributes.target }}@${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-static-latest").attributes.digest }}
+baseImage: ${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-cgr.dev-chainguard-static-latest").attributes.target }}@${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-cgr.dev-chainguard-static-latest").attributes.digest }}
 ```
 
 `ko-signed-images` does that for you with `baseImageFrom=pinned-base-image`. The
-mirror lands under the upstream's last path segment, `static` for
-`cgr.dev/chainguard/static`, since crane's `copy` names the repository that way;
-two upstreams with the same last segment need two namespaces.
+mirror lands at the upstream's registry and whole path under the namespace,
+`mirror/cgr.dev/chainguard/static` for `cgr.dev/chainguard/static`, as crane's
+`copy` puts it, so two upstreams never share a repository.
 
 ## `verify-release`: the gate
 
@@ -396,11 +398,11 @@ swamp data query 'modelName == "promote-release-crane" && specName == "tagging"'
 
 ## `mirror-release-images`: a mirror with signatures
 
-| Job             | Does                                                                                                                                                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verify`        | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                                                                                        |
-| `copy`          | `copy` on `@dataverket/crane/registry`: every image `release.json` lists, by digest, into `<registry>/<namespace>/<name>:<tag>`; then, with `signatureTags`, `digest` of each image's `sha256-<hex>` tag at the source and `copy` of it beside the image |
-| `verify-mirror` | `verify` of every mirrored image at its new location, from this run's mirror records, then one assertion over the counts: every listed image mirrored by its digest, every signature tag too when asked, every mirrored image verified                   |
+| Job             | Does                                                                                                                                                                                                                                                                       |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verify`        | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                                                                                                          |
+| `copy`          | `copy` on `@dataverket/crane/registry`: every image `release.json` lists, by digest, into `<registry>/<namespace>/<source registry>/<path>:<tag>`; then, with `signatureTags`, `digest` of each image's `sha256-<hex>` tag at the source and `copy` of it beside the image |
+| `verify-mirror` | `verify` of every mirrored image at its new location, from this run's mirror records, then one assertion over the counts: every listed image mirrored by its digest, every signature tag too when asked, every mirrored image verified                                     |
 
 Inputs: `verify-release`'s, plus the target `registry` (required), `namespace`
 (default empty, the registry's root), `imageTag` (the tag every mirrored image
@@ -416,12 +418,13 @@ swamp workflow run @dataverket/mirror-release-images \
   --input vault=registry --input usernameKey=username --input passwordKey=password
 ```
 
-The name an image lands under is the last path element of its source repository,
-`registry.example.org/team/hello` into `registry.other.org/mirror/hello`, as
-crane's `copy` names it; two images with the same last element collide, so give
-them a namespace each. An image already at the target with that digest is
-recorded `unchanged`. The credential logs in to the target only, so the source
-registry is read anonymously, as for `@dataverket/mirror-image`.
+An image lands at its source registry and whole path under the namespace,
+`registry.example.org/team/hello` into
+`registry.other.org/mirror/registry.example.org/team/hello`, as crane's `copy`
+puts it, so two images never share a repository. An image already at the target
+with that digest is recorded `unchanged`. The credential logs in to the target
+only, so the source registry is read anonymously, as for
+`@dataverket/mirror-image`.
 
 Signatures do not travel with `crane copy`: it copies the manifest the digest
 names and nothing that refers to it. cosign 3 stores signatures and attestations
