@@ -1,21 +1,27 @@
 manifestVersion: 1
 name: "@dataverket/signed-images"
-version: "2026.10.28.1"
+version: "2026.10.29.1"
 description: >
-  One workflow, `@dataverket/ko-signed-images`: a signed build. Every command
-  of one Go module is built into an image by ko and pushed, every image is
-  signed by digest with cosign using a key held in a vault, and every
-  signature is verified, in one run that fails unless all three happened for
-  all of them.
+  Three workflows composing @dataverket/ko and @dataverket/cosign.
+  `@dataverket/ko-signed-images`: a signed build, every command of one Go
+  module built into an image by ko and pushed, every image signed by digest
+  with cosign using a key held in a vault, every signature verified.
+  `@dataverket/ko-signed-manifests`: signed manifests, ko resolve renders
+  them with every ko:// image built, pushed and pinned by digest, each image
+  is signed, the rendered manifests are attested onto it as a custom
+  predicate, and both are verified. `@dataverket/verified-manifests`: every
+  image a rendered manifest file names verified against a public key,
+  read-only, a gate before a deploy. Each run fails unless all of it happened
+  for all of the images.
 
-  cosign signs the digests this run's image records carry, never a value from
-  an input, so what is signed is exactly what was built. The key and its
-  passphrase are named by vault and key, because workflow inputs are recorded
-  in cleartext in the run history. With `tlog` false, the default, signatures
-  go to the registry only; with `tlog` true they are recorded in Rekor.
-  Registry credentials come from the container config of the user running
-  swamp. Built on `@dataverket/ko` and `@dataverket/cosign`, both
-  dependencies.
+  cosign signs the digests this run's records carry, the image records of a
+  build or the images a resolution built, never a value from an input, so
+  what is signed is exactly what was built. The key and its passphrase are
+  named by vault and key, because workflow inputs are recorded in cleartext
+  in the run history. With `tlog` false, the default, signatures go to the
+  registry only; with `tlog` true they are recorded in Rekor. Registry
+  credentials come from the container config of the user running swamp.
+  Built on `@dataverket/ko` and `@dataverket/cosign`, both dependencies.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:
@@ -23,6 +29,8 @@ paths:
 models: []
 workflows:
   - workflow-c0ab6bef-ac1a-4169-9a0f-426cecde87be.yaml
+  - workflow-67950888-67dc-4aa8-8bd3-e88389aeecce.yaml
+  - workflow-97de917b-4596-4ab1-931e-ae60d8536323.yaml
 vaults: []
 datastores: []
 reports: []
@@ -34,11 +42,13 @@ labels:
   - cosign
   - sigstore
   - signing
+  - attestation
   - supply-chain
   - go
   - container
   - image
   - oci
+  - kubernetes
 dependencies:
   - "@dataverket/ko"
   - "@dataverket/cosign"

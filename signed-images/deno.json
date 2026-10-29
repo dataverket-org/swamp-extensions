@@ -1,0 +1,12 @@
+{
+  "tasks": {
+    "fmt": "deno fmt",
+    "fmt:check": "deno fmt --check"
+  },
+  "fmt": {
+    "lineWidth": 80,
+    "exclude": [
+      "LICENSE.md"
+    ]
+  }
+}

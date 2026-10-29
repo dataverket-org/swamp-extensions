@@ -138,12 +138,12 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 - [x] ko `build`: the build record also written as a file, `buildRecord` (JSON),
       so `attest` can take it as a predicate
 - [x] ko: tests, README, review re-keyed, dry run
-- [ ] `signed-images` workflow `@dataverket/ko-signed-manifests`: `resolve`,
+- [x] `signed-images` workflow `@dataverket/ko-signed-manifests`: `resolve`,
       `cosign-sign` of the images, `attest` of the rendered manifests onto each
       image, asserted
-- [ ] `signed-images` workflow `@dataverket/verified-manifests`: every image in
+- [x] `signed-images` workflow `@dataverket/verified-manifests`: every image in
       a rendered manifest file verified with cosign, read-only, asserted
-- [ ] `signed-images`: README, dry run
+- [x] `signed-images`: README, dry run
 
 ## Phase 2, after Lane A and Lane B
 
@@ -187,3 +187,15 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   nothing (manifests already rendered), so `resolve` reads a missing file as
   empty. `resolution.imageCount` now counts every pinned image, so
   `ko-manifests` asserts on the new `builtCount` instead.
+- Lane C: `verified-manifests` lists images through `ko resolve` with
+  `push: false`, so `dir` must be a Go module even for a rendered file, and a
+  `ko://` reference still in the file is rebuilt here; it gained a `repo` input
+  so that rebuild is named where the signed image lives (with no repo ko names
+  it bare, `hello@sha256:...`, and cosign cannot even fetch it). The rebuilt
+  digest matched the pushed one in the live run: ko's builds are reproducible
+  when the base image and tree are unchanged. A generic "images in a file"
+  method would remove the Go-module requirement.
+- Lane C: cosign's `--type custom` embeds a non-JSON predicate (the rendered
+  YAML) verbatim as the `Data` string of a `cosign.sigstore.dev/attestation/v1`
+  predicate, so the manifests file attests as it is. A workflow-only extension
+  needs no `.review/` report: the signed-images dry run has no warning.
