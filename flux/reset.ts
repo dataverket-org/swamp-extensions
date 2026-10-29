@@ -98,6 +98,8 @@ export type Spawn = (
 ) => Promise<SpawnResult>;
 
 const defaultSpawn: Spawn = async (bin, args, signal) => {
+  // flux and kubectl are the interfaces being driven; see README "Prerequisites".
+  // swamp-quality-ignore deno-command
   const out = await new Deno.Command(bin, {
     args,
     stdout: "piped",

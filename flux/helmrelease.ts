@@ -20,7 +20,6 @@ import {
   extractReadyCondition,
   FluxContext,
   FluxGlobalArgsSchema,
-  FORK_VERSION,
   forkUpgrades,
   listArgs,
   narrowConditions,
@@ -145,7 +144,7 @@ const OneArgs = z.object({
 /** Swamp model for FluxCD HelmRelease objects. */
 export const model = {
   type: "@dataverket/flux/helmrelease",
-  version: FORK_VERSION,
+  version: "2026.10.05.1",
   globalArguments: FluxGlobalArgsSchema,
   upgrades: forkUpgrades,
   resources: {

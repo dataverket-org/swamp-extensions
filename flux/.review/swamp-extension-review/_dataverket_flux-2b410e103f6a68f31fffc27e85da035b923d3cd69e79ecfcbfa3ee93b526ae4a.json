@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/flux",
+  "version": "2026.10.29.1",
+  "reviewedAt": "2026-10-29T08:34:38Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No credential is read or stored. kubeconfig is a path and context a name; kubectl and flux resolve access themselves, and push_artifact leaves registry credentials to flux's own container config. Nothing sensitive reaches a record or a log line; metadata is release content, written as release.json into the pushed artifact by design."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs at info on entry and completion with structured placeholders; a skipped source kind is logged by name; push_artifact logs the copy with release.json, the push target and the digest reference it recorded."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A failing flux or kubectl command throws with the command and its stderr before anything is written; kubectl output that is not JSON is an error naming the command (upstream threw a bare SyntaxError); a single-object method without a namespace refuses by name before spawning. The source list rethrows anything that is not a missing CRD. push_artifact refuses a target that is not oci://<repository>:<tag>, a digest in the target, target beside repository and tag, an annotation without =, and a path that is missing or not a directory, all before flux runs; flux output that is not JSON or carries no sha256 digest is a named error and nothing is recorded."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "35 unit tests over a strict scripted spawn: argument building, JSON parsing, the three parsers with defaults and chartRef, list and reconcile flows, refusal without namespace, failing commands writing nothing, missing CRD skip and rethrow, the CLI checks, upgrades ending at the version; push_artifact's target parsing, argv, output parsing, the copy with release.json and the untouched source directory, the plain push, every refusal and a failing push that writes nothing and removes the copy. The FLUX_E2E test ran flux 2.10.0 against a throwaway registry:2 on 127.0.0.1:5002: push with release.json, push again to the same digest, flux pull artifact back and compare. push_artifact also ran through swamp in a scratch repository with a metadata object and annotations, and swamp model validate ran the scoped flux check. The cluster-bound methods are upstream's, in use in fabrikk-infra since 2026-09-18, and not run live in this round."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "list is a read. reconcile, suspend, resume and reset re-run safely and record what the object says afterwards. push_artifact is reproducible by flag and by test: the same directory and metadata give the same digest, so a re-run re-pushes the same artifact; the temporary copy is removed in finally on every path."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "External calls are to the flux and kubectl CLIs, not HTTP. kubectl JSON is read defensively (missing spec, status, conditions, items). flux flags used: reconcile/suspend/resume with -n, --with-source and --reset, all in flux v2.1 and later; push artifact with --path, --source, --revision, --reproducible, --output json, --annotations and --insecure-registry, checked against flux 2.10.0's help and its JSON output (url, repository, tag, digest). Resources are named by their full group so no other CRD can be matched."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Subprocess stdout and stderr are piped and fully read; no connections held. push_artifact's only temporary directory, the copy holding release.json, is removed in finally whether flux succeeds or fails, as a test proves."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and tests use example names, registry.example.org and git.example.com; the throwaway registry is 127.0.0.1:5002 and localhost:5002; no real hosts, addresses or identifiers."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "All z.object without passthrough; ref is a record of strings; conditions narrowed to the schema's fields before writing. artifact's annotations are a record of strings and its digest is checked against sha256:<64 hex> before it is written; metadata is an open object by intent, since release.json holds whatever the release lists, and it is written to the artifact, not to a record."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every spec has lifetime infinite and garbageCollection 10, resetResult 20; artifact 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Deliberate scope: these types read and drive objects whose lifecycle lives in the git repository Flux reconciles from. No create, update or delete, as upstream."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Live checks that flux and kubectl run: on helmrelease through reset.ts, on kustomization directly, on source the kubectl check scoped to list (which never runs checks, so it serves swamp model validate) and the flux check scoped to push_artifact through push_artifact.ts, so a push needs no kubectl. Verified with swamp model validate --method push_artifact in a scratch repo. Nothing policy-labelled: no method mutates a definition."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "helmrelease and kustomization specs use namespace--name, source uses kind--namespace--name, resetResult uses namespace--name on its own spec, artifact uses <repository, sanitized>--<tag> on its own spec. Mechanical check: every schema field is written by every writer of the spec, no written field is outside the schema, no placeholder values; artifact's reproducible is true because the flag is always passed, and the schema keeps it so a reader need not know."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "No stored state is read back; every method reads the cluster or the registry, which are the sources of truth here."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Each type carries one no-op upgrade to 2026.10.05.1, the fork version, now written as a string literal in each model so the registry catalog lists the types, with the shared constant still ending the upgrade chain and a test pinning the two equal; globalArguments are unchanged, push_artifact adds a method and a spec only, so the type versions stay and no new upgrade entry is needed. The manifest moves to 2026.10.29.1 for the new method."
+    }
+  ]
+}

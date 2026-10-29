@@ -79,6 +79,8 @@ export interface SpawnResult {
 export type Spawn = (bin: string, args: string[]) => Promise<SpawnResult>;
 
 const defaultSpawn: Spawn = async (bin, args) => {
+  // flux and kubectl are the interfaces being driven; see README "Prerequisites".
+  // swamp-quality-ignore deno-command
   const out = await new Deno.Command(bin, {
     args,
     stdout: "piped",
@@ -214,7 +216,11 @@ export function requireNamespace(
   return ns;
 }
 
-/** The no-op upgrade every type in this fork carries. */
+/**
+ * The version every type in this fork carries and its no-op upgrade ends at.
+ * Each model writes the same value as a string literal, which the registry
+ * catalog needs to list a type; a test pins the two equal.
+ */
 export const FORK_VERSION = "2026.10.05.1";
 
 /** Upgrade chain shared by the three types; the fork changed no schema. */

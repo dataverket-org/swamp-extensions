@@ -1,9 +1,10 @@
 manifestVersion: 1
 name: "@dataverket/flux"
-version: "2026.10.27.1"
+version: "2026.10.29.1"
 description: >
   Flux for swamp: HelmReleases, Kustomizations and sources as three model
-  types, read with kubectl and driven with the flux CLI.
+  types, read with kubectl and driven with the flux CLI; and a directory
+  pushed as an OCI artifact for an OCIRepository to pull.
 
   A fork of `@ginger_pappa/flux` 2026.06.09.1 (MIT, copyright ginger_pappa)
   merged with the `reset` method this package used to add to it, so one
@@ -23,6 +24,14 @@ description: >
   and `kubectl` can be run before anything starts, so a missing binary is a
   named refusal instead of a spawn error part-way through.
 
+  `push_artifact` on the source type is the producer side of an
+  OCIRepository: a directory pushed with `flux push artifact`, reproducibly,
+  with the source and revision Flux shows on the object that pulls it, OCI
+  annotations, and an optional `metadata` object written as `release.json`
+  into a copy of the directory first, so the directory itself is untouched.
+  The record holds the reference by digest and the digest flux printed, so
+  what is signed, promoted or verified afterwards is the artifact as pushed.
+
   Changes from upstream: kubectl output that is not JSON is a named error; a
   HelmRelease declared through `chartRef` reports that as its source; the
   spec is read defensively; every kubectl resource is named by its full
@@ -37,6 +46,7 @@ models:
   - kustomization.ts
   - source.ts
   - reset.ts
+  - push_artifact.ts
 workflows: []
 vaults: []
 datastores: []
@@ -52,6 +62,8 @@ labels:
   - kustomization
   - gitrepository
   - ocirepository
+  - oci
+  - artifact
   - kubernetes
   - gitops
 dependencies: []

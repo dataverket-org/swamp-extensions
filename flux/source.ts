@@ -17,7 +17,6 @@ import {
   extractReadyCondition,
   FluxContext,
   FluxGlobalArgsSchema,
-  FORK_VERSION,
   forkUpgrades,
   kubectlCliCheck,
   listArgs,
@@ -131,11 +130,13 @@ type Ctx = FluxContext<SourceData>;
 /** Swamp model for FluxCD source objects (GitRepository, HelmRepository, OCIRepository). */
 export const model = {
   type: "@dataverket/flux/source",
-  version: FORK_VERSION,
+  version: "2026.10.05.1",
   globalArguments: FluxGlobalArgsSchema,
   upgrades: forkUpgrades,
   checks: {
-    "kubectl-cli-available": kubectlCliCheck,
+    // list never runs checks; this one is for `swamp model validate`, and it
+    // stays off push_artifact, which pushes to a registry and needs no kubectl.
+    "kubectl-cli-available": { ...kubectlCliCheck, appliesTo: ["list"] },
   },
   resources: {
     source: {

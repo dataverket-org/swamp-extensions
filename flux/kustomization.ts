@@ -18,7 +18,6 @@ import {
   fluxCliCheck,
   FluxContext,
   FluxGlobalArgsSchema,
-  FORK_VERSION,
   forkUpgrades,
   kubectlCliCheck,
   listArgs,
@@ -132,7 +131,7 @@ const OneArgs = z.object({
 /** Swamp model for FluxCD Kustomization objects. */
 export const model = {
   type: "@dataverket/flux/kustomization",
-  version: FORK_VERSION,
+  version: "2026.10.05.1",
   globalArguments: FluxGlobalArgsSchema,
   upgrades: forkUpgrades,
   checks: {
