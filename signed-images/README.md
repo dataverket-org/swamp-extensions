@@ -57,7 +57,9 @@ Inputs: ko's, as in `@dataverket/ko-images`: `dir`, `repo` (required), `tags`,
 `importPaths`, `naming`, `platforms`, `sbom`, `baseImage`, `cache`,
 `insecureRegistry`. cosign's, as in `@dataverket/cosign-sign`: `keyVault`,
 `keyKey` and `passphraseKey` (required), `passphraseVault` (the key's vault when
-empty), `annotations`, `recursive`, `tlog`, `signingConfig`, `trustedRoot`.
+empty), `annotations`, `recursive`, `tlog`, `signingConfig`, `trustedRoot`. And
+two of its own, `baseImageFrom` and `baseImageRecord`, which read the base image
+from a `pinned-base-image` mirror record instead of `baseImage`; see below.
 
 ```sh
 swamp extension pull @dataverket/signed-images
@@ -74,6 +76,39 @@ swamp workflow run @dataverket/ko-signed-images \
 
 A multi-platform build pushes an index per command; the index digest is what is
 signed, and `recursive: true` signs every image in it too.
+
+### The base image from a mirror record
+
+With `baseImageFrom` set to the name of a crane model, `pinned-base-image` for
+the one `@dataverket/pinned-base-image` creates, the ko steps take their
+`baseImage` argument from that model's latest `mirror` record, `target` and
+`digest` composed into `<target>@<digest>`, so every command is built on the
+base that workflow quarantined, verified keyless, mirrored and signed, and never
+on a tag ko would resolve on its own. `baseImage` is then ignored. The
+expression both ko steps evaluate, at run start, is
+
+```yaml
+baseImage: >-
+  ${{ inputs.baseImageFrom == "" ? inputs.baseImage : data.findBySpec(inputs.baseImageFrom, "mirror").filter(m, inputs.baseImageRecord == "" || m.name == inputs.baseImageRecord).map(m, m.attributes.target + "@" + m.attributes.digest)[0] }}
+```
+
+A model that mirrored one base image has one mirror record, and `baseImageFrom`
+alone names it. One that mirrored several needs `baseImageRecord`, the record's
+name, `mirror-<repository>-<tag>` with every `/` and `:` written as `-`:
+`mirror-registry.example.org-mirror-static-latest`. A model or record that does
+not exist fails the run before anything is built.
+
+```sh
+swamp workflow run @dataverket/ko-signed-images \
+  --input dir=services/api \
+  --input repo=registry.example.org/team \
+  --input baseImageFrom=pinned-base-image \
+  --input keyVault=signing --input keyKey=cosign-key \
+  --input passphraseKey=cosign-password
+```
+
+The `module` record of `ko-signed-images-ko` says which base was in effect:
+`baseImage` holds the pinned reference and `baseImageSource` is `argument`.
 
 ## `ko-signed-manifests`: signed manifests
 

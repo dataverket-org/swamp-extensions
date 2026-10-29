@@ -156,7 +156,7 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
       resolved, quarantine by `minimumAgeDays` against `base-image-watch`
       records, keyless verification of the upstream, copy, sign with our key,
       verify, `mirror` record with the pinned reference
-- [ ] `ko-signed-images`: `baseImage` readable from the latest
+- [x] `ko-signed-images`: `baseImage` readable from the latest
       `pinned-base-image` record, documented with the CEL line
 - [x] `signed-images` workflow `@dataverket/signed-release`: rendered directory
       in, `release.json` from the resolution record, `push_artifact` tagged with

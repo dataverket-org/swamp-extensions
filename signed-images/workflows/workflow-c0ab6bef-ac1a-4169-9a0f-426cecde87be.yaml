@@ -7,9 +7,11 @@ description: >-
   one build per command, each recorded with its digest. cosign's part takes those digests from this run's
   image records, never from an input, so what is signed is exactly what was built. The key and its passphrase
   are named by vault and key; with tlog false, the default, signatures go to the registry only. Registry
-  credentials come from the container config of the user running swamp. Its models are created on first use
-  as ko-signed-images-ko and ko-signed-images-cosign; runs for different modules share them, so run one
-  module at a time.
+  credentials come from the container config of the user running swamp. With baseImageFrom set, the base
+  image is read from the latest mirror record of that crane model, as @dataverket/pinned-base-image leaves it,
+  target and digest, so every build starts from the mirrored, verified and signed base. Its models are created
+  on first use as ko-signed-images-ko and ko-signed-images-cosign; runs for different modules share them, so
+  run one module at a time.
 version: 1
 inputs:
   properties:
@@ -51,7 +53,20 @@ inputs:
     baseImage:
       type: string
       default: ""
-      description: Base image for every command, overriding .ko.yaml; pin it by digest
+      description: Base image for every command, overriding .ko.yaml; pin it by digest. Ignored when baseImageFrom is set
+    baseImageFrom:
+      type: string
+      default: ""
+      description: >-
+        The crane model whose latest mirror record names the base image, such as pinned-base-image, the model
+        @dataverket/pinned-base-image creates; the record's target and digest become <target>@<digest>, so the
+        base is what that workflow verified and signed, never a tag
+    baseImageRecord:
+      type: string
+      default: ""
+      description: >-
+        The mirror record to read on baseImageFrom, mirror-<repository>-<tag> with every / and : as -, such as
+        mirror-registry.example.org-mirror-static-latest; empty takes the model's only mirror record
     cache:
       type: string
       default: ""
@@ -116,7 +131,8 @@ jobs:
             naming: ${{ inputs.naming }}
             platforms: ${{ inputs.platforms }}
             sbom: ${{ inputs.sbom }}
-            baseImage: ${{ inputs.baseImage }}
+            baseImage: >-
+              ${{ inputs.baseImageFrom == "" ? inputs.baseImage : data.findBySpec(inputs.baseImageFrom, "mirror").filter(m, inputs.baseImageRecord == "" || m.name == inputs.baseImageRecord).map(m, m.attributes.target + "@" + m.attributes.digest)[0] }}
             cache: ${{ inputs.cache }}
             insecureRegistry: ${{ inputs.insecureRegistry }}
   - name: build
@@ -138,7 +154,8 @@ jobs:
             naming: ${{ inputs.naming }}
             platforms: ${{ inputs.platforms }}
             sbom: ${{ inputs.sbom }}
-            baseImage: ${{ inputs.baseImage }}
+            baseImage: >-
+              ${{ inputs.baseImageFrom == "" ? inputs.baseImage : data.findBySpec(inputs.baseImageFrom, "mirror").filter(m, inputs.baseImageRecord == "" || m.name == inputs.baseImageRecord).map(m, m.attributes.target + "@" + m.attributes.digest)[0] }}
             cache: ${{ inputs.cache }}
             insecureRegistry: ${{ inputs.insecureRegistry }}
           inputs:
