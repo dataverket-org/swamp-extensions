@@ -1,0 +1,110 @@
+id: 97de917b-4596-4ab1-931e-ae60d8536323
+name: "@dataverket/verified-manifests"
+description: >-
+  Verify every image a rendered manifest file names: ko resolve over files, pushing nothing, lists every image
+  pinned by digest in them, and cosign verify checks each one against a public key, with the required
+  annotations when any are given; the run fails unless every image is pinned and every one verifies.
+  Read-only: nothing is pushed anywhere. Made to gate a deploy: run it on the manifests a signed build rendered
+  before anything applies them. ko resolve is the image lister, so dir must be a Go module; manifests already
+  rendered hold no ko:// reference and pass through unchanged, while a file that still holds one has it built
+  here, not pushed, named under repo, and the resulting digest is what gets verified, which only holds when the
+  build is reproducible. With tlog false, the default, the transparency log is ignored; with tlog true a log
+  entry is required. Its models are created on first use as verified-manifests-ko and
+  verified-manifests-cosign.
+version: 1
+inputs:
+  properties:
+    files:
+      type: array
+      items:
+        type: string
+      description: Rendered manifests, files or directories, relative to the repository root
+    dir:
+      type: string
+      default: .
+      description: A Go module's directory for ko to run in, absolute or relative to the repository root
+    repo:
+      type: string
+      default: ""
+      description: Registry path a ko:// reference still in the files is named under when re-resolved, not pushed; the repo of the signed build
+    publicKey:
+      type: string
+      description: The public key, as a PEM or a file absolute or relative to the repository root
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations a signature must carry to count, key=value
+    tlog:
+      type: boolean
+      default: false
+      description: Require a transparency log entry for every signature
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP, for ko, or whose certificate does not verify, for cosign
+  required:
+    - files
+    - publicKey
+jobs:
+  - name: resolve
+    steps:
+      - name: images
+        description: ko resolve over the files, pushing nothing; every image pinned by digest in them becomes the resolution record.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: verified-manifests-ko
+          methodName: resolve
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ${{ inputs.repo }}
+            sbom: none
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            files: ${{ inputs.files }}
+            push: false
+  - name: verify
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: One cosign verify per image pinned in the manifests, built here or not; one verification record each, verified or not.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verified-manifests-cosign
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            publicKey: ${{ inputs.publicKey }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.latest("verified-manifests-ko", "resolution").attributes.images.map(i, i.repository + "@" + i.digest) }}
+            annotations: ${{ inputs.annotations }}
+      - name: every-image-pinned-and-verified
+        description: >-
+          This run wrote the resolution record, every image in the manifests is pinned by digest, there is at
+          least one, and this run recorded one verification per image, every one verified.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.latest("verified-manifests-ko", "resolution").tags.?workflowRunId.orValue("") == run.id
+            && data.latest("verified-manifests-ko", "resolution").attributes.allPinned == true
+            && data.latest("verified-manifests-ko", "resolution").attributes.imageCount >= 1
+            && data.findBySpec("verified-manifests-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("verified-manifests-ko", "resolution").attributes.imageCount
+            && data.findBySpec("verified-manifests-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).size() == 0
+          message: >-
+            Not every image in ${{ inputs.files }} is pinned and verified: not pinned ${{ data.latest("verified-manifests-ko", "resolution").attributes.unpinned }},
+            not verified ${{ data.findBySpec("verified-manifests-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified != true).map(v, v.attributes.ref + " (" + v.attributes.error + ")") }}
+          severity: high
