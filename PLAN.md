@@ -152,7 +152,7 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 
 ## Phase 2, after Lane A and Lane B
 
-- [ ] `signed-images` workflow `@dataverket/pinned-base-image`: upstream tag
+- [x] `signed-images` workflow `@dataverket/pinned-base-image`: upstream tag
       resolved, quarantine by `minimumAgeDays` against `base-image-watch`
       records, keyless verification of the upstream, copy, sign with our key,
       verify, `mirror` record with the pinned reference
@@ -311,3 +311,35 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   registry; seen on the fixture's own deployment.
 - Phase 2: `swamp behavior type search` without `--json` opens an interactive
   picker on a PTY; in a zmx session it hangs and must be killed by pid.
+  `release.json` through swamp; the e2e test builds an equivalent artifact with
+  `crane append --oci-empty-base` so it needs crane only.
+
+- Phase 2: an auto-definition stores the evaluated global arguments, not the
+  expression text, and is rewritten by every step that names it, so
+  `pinned-base-image`'s `digest` step records on the `base-image-watch` model
+  (`insecure: false`, the watch reads public images) and one `firstSeenAt`
+  serves the daily watch and the quarantine; in the live run the watch's
+  `firstSeenAt` carried into the mirror run, and the watch ran unchanged after.
+- Phase 2: crane's `copy` names the target repository after the source's last
+  path segment, with no override, so `pinned-base-image` takes no `name` input;
+  the mirror record is `mirror-<registry>-<namespace>-<name>-<tag>` with `/` and
+  `:` as `-`, `mirror-127.0.0.1-5005-mirror-static-latest` in the live run.
+- Phase 2: a CEL ternary over `data.findBySpec(inputs.baseImageFrom, "mirror")`
+  in a ko step's `globalArgs` validates with no warning and runs; with
+  `baseImageFrom` empty the data branch is not evaluated (a run without it built
+  on `.ko.yaml` as before), so no guarded second pair of ko steps was needed.
+  Records from `findBySpec` carry `name`, which picks `baseImageRecord`.
+- Phase 2: `duration(string(inputs.minimumAgeDays * 24) + "h")` evaluates, so
+  the quarantine takes days as an integer input instead of a fixed `168h`; a
+  timestamp plus a duration interpolates in the assertion message as RFC 3339.
+- Phase 2: `swamp vault list` without `--json` opens an interactive picker in a
+  zmx session and hangs until Escape; every listing command takes `--json`.
+- Phase 2: `swamp workflow create` now writes `workflows/workflow-<name>.yaml`;
+  the three earlier signed-images workflows are UUID-named, both are listed in
+  the manifest. `@dataverket/crane` was added to the manifest's dependencies,
+  since `pinned-base-image` needs its type; the description still says three
+  workflows, for the integrator to reword with the other Phase 2 workflows.
+- Phase 2: a workflow file in `signed-images/` validates fully only from a repo
+  that has the extension sources added (`@dataverket/crane/registry` could not
+  be resolved from `signed-images/` itself); the scratch repo passed both with
+  zero warnings.

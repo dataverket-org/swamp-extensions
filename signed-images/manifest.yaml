@@ -37,6 +37,7 @@ workflows:
   - workflow-67950888-67dc-4aa8-8bd3-e88389aeecce.yaml
   - workflow-97de917b-4596-4ab1-931e-ae60d8536323.yaml
   - workflow-ef303fe3-2ace-42b2-b3f6-7f4d64ae50c4.yaml
+  - workflow-pinned-base-image.yaml
 vaults: []
 datastores: []
 reports: []
@@ -61,3 +62,4 @@ dependencies:
   - "@dataverket/ko"
   - "@dataverket/cosign"
   - "@dataverket/flux"
+  - "@dataverket/crane"

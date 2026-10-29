@@ -14,6 +14,18 @@ for all of them.
 | `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                       | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`              |
 | `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                       | `verified-manifests-ko`, `verified-manifests-cosign`                |
 | `@dataverket/signed-release`      | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign` |
+Three [swamp](https://github.com/swamp-club/swamp) workflows that compose
+[`@dataverket/ko`](../ko) and [`@dataverket/cosign`](../cosign): Go images built
+by [ko](https://ko.build), signed by digest with
+[cosign](https://github.com/sigstore/cosign) using a key held in a vault, and
+verified, each in one run that fails unless all of it happened for all of them.
+
+| Workflow                          | Does                                                                                                                                                                        | Models                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `@dataverket/ko-signed-images`    | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                               | `ko-signed-images-ko`, `ko-signed-images-cosign`       |
+| `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign` |
+| `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                 | `verified-manifests-ko`, `verified-manifests-cosign`   |
+| `@dataverket/pinned-base-image`   | A base image mirrored by digest after a quarantine: the upstream tag watched, verified keyless, copied into our registry, signed with our key, verified                     | `base-image-watch`, `pinned-base-image`, two signers   |
 
 What makes them signed builds rather than steps in a row:
 
@@ -223,6 +235,70 @@ cosign verify --key cosign.pub -a commit=abc123 registry.example.org/team/releas
 flux pull artifact oci://registry.example.org/team/release/prod:abc123 --output ./pulled
 ```
 
+## `pinned-base-image`: a quarantined, verified and signed base image
+
+| Job               | Does                                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolve`         | `digest` on `@dataverket/crane/registry`, model `base-image-watch`: the upstream tag's digest, with `firstSeenAt` carried forward while the digest is unchanged. Read-only                          |
+| `quarantine`      | An assertion: the digest has been the tag's for at least `minimumAgeDays`, from `firstSeenAt` to this run's start; it fails naming when the digest was first seen and when it may be mirrored       |
+| `verify-upstream` | `verify` on `@dataverket/cosign/signer`, model `pinned-base-image-upstream`: keyless, the certificate identity and OIDC issuer of the upstream's release workflow, through the public log; asserted |
+| `copy`            | `copy`, model `pinned-base-image`: the digest into `<registry>/<namespace>/<name>:<tag>`, `name` the upstream's last path segment; unchanged when already there                                     |
+| `sign`            | `sign`, model `pinned-base-image-cosign`: the mirror, by `repository@digest` from this run's mirror record, with our key                                                                            |
+| `verify`          | `verify` of the mirror against our key's public half, then one assertion over the five records                                                                                                      |
+
+Inputs: `ref` (required), the upstream tag with its registry; `registry`
+(required) and `namespace` (default `mirror`); the registry credential as in
+`@dataverket/mirror-image`, `vault`, `usernameKey` and `passwordKey` (required);
+`certificateIdentityRegexp` and `oidcIssuer` for the keyless check (defaults:
+Chainguard's release workflow, `^https://github.com/chainguard-images/images/`,
+and GitHub's issuer); our key as in `ko-signed-images`, `keyVault`, `keyKey` and
+`passphraseKey` (required), `passphraseVault`; `minimumAgeDays` (default `7`,
+`0` mirrors whatever the tag resolves to now); `tlog` for our signature (default
+`false`; the upstream is always verified through the log); `insecureRegistry`
+for the mirror registry.
+
+```sh
+swamp workflow run @dataverket/pinned-base-image \
+  --input ref=cgr.dev/chainguard/static:latest \
+  --input registry=registry.example.org \
+  --input vault=registry --input usernameKey=username --input passwordKey=password \
+  --input keyVault=signing --input keyKey=cosign-key \
+  --input passphraseKey=cosign-password
+```
+
+The watch is shared. The `resolve` step records on the model
+`@dataverket/base-image-watch` creates, `base-image-watch`, so a tag watched
+daily has its `firstSeenAt` ready when the mirror is asked for, and a tag never
+watched starts its quarantine at the first mirror attempt: the run fails with
+`<ref> is <digest>, first seen <time>, which is less than 7 days before this run
+started; it may be mirrored from <time>`,
+and passes once that time has come. The quarantine is the CEL line
+
+```yaml
+expr: >-
+  inputs.minimumAgeDays == 0
+  || timestamp(run.startedAt) - timestamp(data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.firstSeenAt) >= duration(string(inputs.minimumAgeDays * 24) + "h")
+```
+
+Every digest comes from this run's records: the keyless verification, the copy
+and our signature all read the digest record, never an input, and the final
+assertion requires the mirror, the signature and our verification to carry
+exactly that digest. The upstream is verified with one signer and the mirror
+signed with another, since a signer's `tlog` is one choice for both sides and
+the upstream signature lives in the log while ours, by default, does not.
+
+What a build reads is the `mirror` record of the model `pinned-base-image`,
+named `mirror-<repository>-<tag>` with `/` and `:` as `-`:
+
+```yaml
+baseImage: ${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-static-latest").attributes.target }}@${{ data.latest("pinned-base-image", "mirror-registry.example.org-mirror-static-latest").attributes.digest }}
+```
+
+`ko-signed-images` does that for you with `baseImageFrom=pinned-base-image`. The
+mirror lands under the upstream's last path segment, `static` for
+`cgr.dev/chainguard/static`, since crane's `copy` names the repository that way;
+two upstreams with the same last segment need two namespaces.
+
 ## The key
 
 The passphrase always comes from a vault; a key without one has an empty
@@ -249,6 +325,8 @@ swamp data query 'modelName == "ko-signed-manifests-ko" && name == "resolution"'
 swamp data query 'modelName == "ko-signed-manifests-cosign" && specName == "attestation"' --json
 swamp data query 'modelName == "verified-manifests-cosign" && specName == "verification"' --json
 swamp data query 'modelName == "signed-release-flux" && specName == "artifact"' --json
+swamp data query 'modelName == "pinned-base-image" && specName == "mirror"' --json
+swamp data query 'modelName == "base-image-watch" && specName == "digest"' --json
 ```
 
 The next step of a release reads them through CEL, for instance the build record
@@ -268,6 +346,13 @@ pushed to the same registry, and the artifact's signature and attestation were
 read back with `cosign tree`, `cosign verify` and `flux pull artifact`; over the
 fixture's own deployment it fails before the push, naming the unpinned image and
 the one it would have built.
+image unpinned on purpose and fails the assertion by name. `pinned-base-image`
+ran against the real `cgr.dev/chainguard/static:latest`, which Chainguard signs
+keyless, into the throwaway registry: with `minimumAgeDays: 0` the whole chain
+passed, with the default the quarantine failed as it should for a digest first
+seen that day; `ko-signed-images` with `baseImageFrom=pinned-base-image` then
+built `fixtures/hello` on the mirror, the mirror's layer being the built image's
+first.
 
 ## License
 

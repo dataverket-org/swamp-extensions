@@ -1,0 +1,251 @@
+id: 13a8ffbe-d0c2-451f-ad52-13aa2b39d0dc
+name: "@dataverket/pinned-base-image"
+description: >-
+  A base image mirrored by digest after a quarantine, verified keyless upstream and signed with our key: the
+  upstream tag in ref is resolved to its digest on the base-image-watch model, whose digest record carries
+  firstSeenAt forward while the digest stays the same, so the daily @dataverket/base-image-watch and this
+  workflow share one watch; an assertion refuses a digest first seen less than minimumAgeDays ago and says when
+  it may be mirrored; cosign verifies the upstream digest keyless, against the certificate identity and OIDC
+  issuer of its release workflow, through the public Sigstore log; crane copies it to
+  <registry>/<namespace>/<name>:<tag>, name being the upstream's last path segment, unchanged when already
+  there; cosign signs the mirror with the key named by keyVault and keyKey, verifies it, and an assertion
+  requires all of it. Every digest comes from this run's records, never from an input. A build reads the
+  mirror record of the pinned-base-image model, target and digest, as its base image. The registry
+  credential, the key and its passphrase are named by vault and key, never passed as values, since workflow
+  inputs are recorded in cleartext in the run history. Its models are created on first use as
+  base-image-watch (crane, no credential, the watch), pinned-base-image (crane, the mirror),
+  pinned-base-image-upstream (cosign, keyless) and pinned-base-image-cosign (cosign, our key).
+version: 1
+inputs:
+  properties:
+    ref:
+      type: string
+      description: >-
+        The upstream tag to mirror, <repository>:<tag> with its registry, such as cgr.dev/chainguard/static:latest
+    registry:
+      type: string
+      description: The registry to mirror into, host[:port]
+    namespace:
+      type: string
+      default: mirror
+      description: >-
+        The path under the registry the mirror lands in, <registry>/<namespace>/<name>:<tag>
+    vault:
+      type: string
+      description: Vault holding the registry credential
+    usernameKey:
+      type: string
+      description: Key of the credential's user in that vault
+    passwordKey:
+      type: string
+      description: Key of the credential's password or token in that vault
+    certificateIdentityRegexp:
+      type: string
+      default: "^https://github.com/chainguard-images/images/"
+      description: >-
+        Keyless: a regular expression the identity in the upstream signature's certificate must match; the
+        default is Chainguard's release workflow
+    oidcIssuer:
+      type: string
+      default: "https://token.actions.githubusercontent.com"
+      description: >-
+        Keyless: the OIDC issuer that vouched for that identity; the default is GitHub Actions
+    keyVault:
+      type: string
+      description: Vault holding our signing key as a PEM
+    keyKey:
+      type: string
+      description: Key of the signing key in keyVault
+    passphraseVault:
+      type: string
+      default: ""
+      description: Vault holding the key's passphrase; keyVault when empty
+    passphraseKey:
+      type: string
+      description: Key of the passphrase in that vault; store an empty passphrase there for a key that has none
+    minimumAgeDays:
+      type: integer
+      default: 7
+      description: >-
+        The quarantine: how many days the upstream tag must have held this digest before it is mirrored; 0
+        mirrors whatever it resolves to now
+    tlog:
+      type: boolean
+      default: false
+      description: >-
+        Record our signature of the mirror in a transparency log and require a log entry when verifying it;
+        the upstream is always verified through the log
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a mirror registry served over plain HTTP, for crane, or whose certificate does not verify, for cosign
+  required:
+    - ref
+    - registry
+    - vault
+    - usernameKey
+    - passwordKey
+    - keyVault
+    - keyKey
+    - passphraseKey
+jobs:
+  - name: resolve
+    steps:
+      - name: digest
+        description: >-
+          The upstream tag resolved to its digest on the watch model; the record carries firstSeenAt forward
+          from the last time the tag held this digest. Read-only, no credential, as @dataverket/base-image-watch.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: base-image-watch
+          methodName: digest
+          globalArgs:
+            insecure: false
+          inputs:
+            refs:
+              - ${{ inputs.ref }}
+  - name: quarantine
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: seen-unchanged-long-enough
+        description: >-
+          The digest this run resolved has been the tag's digest for at least minimumAgeDays, measured from
+          the record's firstSeenAt to this run's start; minimumAgeDays 0 passes anything.
+        task:
+          type: assert
+          expr: >-
+            inputs.minimumAgeDays == 0
+            || timestamp(run.startedAt) - timestamp(data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.firstSeenAt) >= duration(string(inputs.minimumAgeDays * 24) + "h")
+          message: >-
+            ${{ inputs.ref }} is ${{ data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest }},
+            first seen ${{ data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.firstSeenAt }},
+            which is less than ${{ inputs.minimumAgeDays }} days before this run started, ${{ run.startedAt }};
+            it may be mirrored from ${{ timestamp(data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.firstSeenAt) + duration(string(inputs.minimumAgeDays * 24) + "h") }}
+          severity: high
+  - name: verify-upstream
+    dependsOn:
+      - job: quarantine
+        condition:
+          type: succeeded
+    steps:
+      - name: keyless
+        description: >-
+          cosign verify of the upstream digest, keyless: the signing certificate's identity must match
+          certificateIdentityRegexp and come from oidcIssuer, and the signature must be in the public log.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: pinned-base-image-upstream
+          methodName: verify
+          globalArgs:
+            certificateIdentityRegexp: ${{ inputs.certificateIdentityRegexp }}
+            oidcIssuer: ${{ inputs.oidcIssuer }}
+            tlog: true
+          inputs:
+            refs: ${{ data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest) }}
+      - name: upstream-verified
+        description: This run recorded one verification of the upstream digest, and it verified.
+        dependsOn:
+          - step: keyless
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("pinned-base-image-upstream", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true && v.attributes.digest == data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest).size() == 1
+          message: >-
+            ${{ inputs.ref }} at ${{ data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest }}
+            did not verify keyless against ${{ inputs.certificateIdentityRegexp }} from ${{ inputs.oidcIssuer }};
+            see the verification records of pinned-base-image-upstream
+          severity: high
+  - name: copy
+    dependsOn:
+      - job: verify-upstream
+        condition:
+          type: succeeded
+    steps:
+      - name: mirror
+        description: >-
+          crane copy of the verified digest to <registry>/<namespace>/<name>:<tag>, unchanged when already
+          there with that digest; one mirror record with target and digest.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: pinned-base-image
+          methodName: copy
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecureRegistry }}
+          inputs:
+            sources: ${{ data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.pinned) }}
+  - name: sign
+    dependsOn:
+      - job: copy
+        condition:
+          type: succeeded
+    steps:
+      - name: signature
+        description: cosign sign of the mirror, by repository and digest from this run's mirror record, with our key.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: pinned-base-image-cosign
+          methodName: sign
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("pinned-base-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id).map(m, m.attributes.repository + "@" + m.attributes.digest) }}
+  - name: verify
+    dependsOn:
+      - job: sign
+        condition:
+          type: succeeded
+    steps:
+      - name: verification
+        description: cosign verify of the mirror against our key's public half.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: pinned-base-image-cosign
+          methodName: verify
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("pinned-base-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id).map(m, m.attributes.repository + "@" + m.attributes.digest) }}
+      - name: resolved-verified-mirrored-signed-verified
+        description: >-
+          This run resolved one digest, verified it keyless, mirrored exactly that digest, signed the mirror
+          and verified the signature.
+        dependsOn:
+          - step: verification
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("pinned-base-image-upstream", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == 1
+            && data.findBySpec("pinned-base-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && m.attributes.digest == data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest).size() == 1
+            && data.findBySpec("pinned-base-image-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id && s.attributes.digest == data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest).size() == 1
+            && data.findBySpec("pinned-base-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true && v.attributes.digest == data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest).size() == 1
+          message: >-
+            The mirror of ${{ inputs.ref }} into ${{ inputs.registry }}/${{ inputs.namespace }} is incomplete:
+            ${{ data.findBySpec("pinned-base-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id).size() }} mirrored,
+            ${{ data.findBySpec("pinned-base-image-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() }} signed,
+            ${{ data.findBySpec("pinned-base-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} verified
+          severity: high
