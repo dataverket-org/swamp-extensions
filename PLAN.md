@@ -172,7 +172,7 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
       a release lists copied to another registry with its signatures (through
       cosign's `sha256-<hex>` fallback tag, copied with crane; see the Phase 2
       notes on `cosign copy`)
-- [ ] `signed-images`: README, skill `signed-images` (which workflow for what),
+- [x] `signed-images`: README, skill `signed-images` (which workflow for what),
       dry run; top-level README rows for crane and the new workflows
 
 ## Phase 3, outside this repository, for the user
@@ -374,3 +374,8 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   accepts them by README line (274, 310, the `swamp workflow run` line of each
   example). A README edit above them moves the lines: the integrator's dry run
   on the merged tree says which, and the file is updated then.
+- Integrator: the three merges of Phase 2 branches conflicted only in `PLAN.md`,
+  `signed-images/README.md` and `signed-images/manifest.yaml`, resolved as
+  unions; the README intro was then rewritten as one table of eight workflows.
+  The `secret-unsafe-docs` acceptances name the line numbers the analyzer
+  reports, which were three lower than `grep -n` for the same README.

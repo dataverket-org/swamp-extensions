@@ -2,7 +2,7 @@ manifestVersion: 1
 name: "@dataverket/signed-images"
 version: "2026.10.29.1"
 description: >
-  Seven workflows composing @dataverket/ko, @dataverket/cosign,
+  Eight workflows composing @dataverket/ko, @dataverket/cosign,
   @dataverket/flux and @dataverket/crane. `@dataverket/ko-signed-images`: a signed build, every
   command of one Go module built into an image by ko and pushed, every image
   signed by digest with cosign using a key held in a vault, every signature
@@ -19,6 +19,11 @@ description: >
   the gate, read-only, the artifact's tag pinned to its digest with crane, its
   signature and custom attestation verified against a public key, release.json
   read out of its layer, every image it lists verified by digest.
+  `@dataverket/pinned-base-image`: an upstream base image resolved to its
+  digest with crane, held in quarantine until that digest has been the tag's
+  for minimumAgeDays, verified keyless against the publisher's identity,
+  copied into our registry by digest, signed with our key and verified, the
+  mirror record then feeding ko-signed-images through baseImageFrom.
   `@dataverket/promote-release`: verify-release as a nested workflow, then the
   channel tag such as current pointed at the verified digest with crane tag
   and read back, the digest it held before recorded for a rollback.
@@ -52,6 +57,8 @@ workflows:
   - workflow-721d7910-1e2b-45c6-9935-5a6201623258.yaml
   - workflow-f890223b-2998-4e64-a00e-99666c471a5d.yaml
   - workflow-00999cd6-0187-4b5a-a1cd-646160f1c6c1.yaml
+skills:
+  - signed-images
 vaults: []
 datastores: []
 reports: []
