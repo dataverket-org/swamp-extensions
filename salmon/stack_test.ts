@@ -52,6 +52,17 @@ Deno.test("one container: Salmon on in-memory SQLite, seeded, its port alone pub
   ]);
 });
 
+Deno.test("the image is pulled as pullPolicy says, only when missing by default", async () => {
+  assertEquals((await project()).p.services.salmon.pull_policy, "missing");
+  assertEquals(
+    (await project({ pullPolicy: "always" })).p.services.salmon.pull_policy,
+    "always",
+  );
+  assert(
+    !GlobalArgsSchema.safeParse({ ...fixture, pullPolicy: "daily" }).success,
+  );
+});
+
 Deno.test("the generated project is the same between runs and changes with the seed", async () => {
   const a = await project();
   assertEquals(

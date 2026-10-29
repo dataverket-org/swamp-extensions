@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/salmon"
-version: "2026.10.29.1"
+version: "2026.10.29.2"
 description: >
   A throwaway Salmon for end-to-end tests of anything that takes Salmon's
   tokens: database validators, message brokers, services.

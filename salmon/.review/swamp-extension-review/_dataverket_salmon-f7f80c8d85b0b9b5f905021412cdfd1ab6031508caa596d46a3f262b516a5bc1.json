@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/salmon",
+  "version": "2026.10.29.2",
+  "reviewedAt": "2026-10-29T20:57:25Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No credential is an argument and none is stored; the issued access token is never written. The userdb people's password (password) and the key-encryption key are fixed throwaway values: the key is derived from the project so the generated project stays the same between runs, and it seals signing keys in a database that lives only in Salmon's memory. Only Salmon's port is published. The credentials-sensitive-field warnings on tokenDuration (a lifetime) and tokenSubject (a sub claim) are the name heuristic, not secrets."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs at info on entry and completion with structured placeholders; nothing secret is logged. Errors carry Salmon's last 20 log lines, which name why a seed was refused and never contain the seed, a token or a key."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "docker compose up failing (Salmon exiting on a refused seed) throws with compose's stderr and Salmon's log; discovery not answering throws as soon as the container is gone, or at the timeout, with Salmon's log; revoke of an app the fixture grants nothing at throws before touching the stack. Records are written after the work succeeded. Smoke-tested: an unmanaged role failed ensure in 12s with 'seed grant: the role's provider names no group that manages it'."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "Unit tests cover the one-container project (sqlite, --seed, configs, only Salmon's port), the seed's stable ids and grants, revoked apps left out, the seed digest label changing with the seed, salmon.yaml's userdb people and managers, and the schema refinements. The docker execute paths are not unit-tested with a mocked command; they were exercised live with a locally built image of Salmon main (4bf4427): ensure, a real RFC 8693 exchange returning roles [users/Registry-Push], revoke followed by invalid_target at that app while the other app still exchanges, ensure restoring the grant, a repeated ensure leaving the same container, a refused seed, and stop leaving no containers. 2026.10.29.2: a test asserts pull_policy follows pullPolicy (missing by default) and an unknown policy is refused; docker compose config keeps pull_policy: always from the generated project and up --dry-run plans a pull of a cached latest; a live ensure with pullPolicy always succeeded and stop left nothing."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "ensure is docker compose up -d: the seed's digest is a label on the service, so an unchanged fixture leaves the running container alone (verified: same container id) and a changed one recreates it. Ids are derived from project, name and keys, identical on every run. revoke recreates Salmon without the grants at one app; the next ensure restores them. stop is down and succeeds when the project is gone. With pullPolicy always each ensure pulls the tag first, so a moved latest replaces a stale cached image; an unchanged image leaves the running container alone. missing stays the default so a locally built image that is not in any registry still runs."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Discovery is accepted only on a 2xx. The seed and salmon.yaml are written in the field names of Salmon's seed file (strictly decoded, unknown fields refused) and its userdb provider; the live run confirmed Salmon accepts both."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Nothing is written to disk: the compose project, salmon.yaml and the seed go on stdin as compose configs. Subprocess output is read to the end and fetch bodies are cancelled. stop removes the container and network; there are no volumes left."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README examples use localhost and <cluster> placeholders; salmon.local is the domain of the seeded test people, not infrastructure; the default image is the public registry.dataverket.org/tools/salmon the package exists to run."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "All schemas are z.object without passthrough; groups and roles must be <provider>/<group>, app keys unique, every grant must name an app, grants need a trust. 2026.10.29.2: pullPolicy is an enum of always, missing and never; anything else is refused."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource spec is lifetime infinite with garbageCollection 10 (stack) or 20 (token-exchange result)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Test fixtures, not managed resources: stack has ensure, revoke and stop, token-exchange has test; update and sync have no meaning for a throwaway stack."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "The mutating methods act on a local throwaway compose project the definition names; there is no shared or remote resource to guard."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Each method writes one instance of one spec (stack, result)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads back stored state: revoke derives the seed from the definition, and ensure always seeds the full fixture."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "stack moves to 2026.10.29.1 with a no-op upgrade: its old arguments (project, image, issuerUrl, port, networks, startTimeoutSeconds) remain valid and the fixture arguments are new and optional. The fixture type is removed, a deliberate breaking change agreed with the maintainer: its seed now happens at Salmon's start, so its arguments moved into the stack and its record's apps, trustId and grants into the stack record; consumers (salmon-pg-validator) are updated alongside. Roles move from ldap/ to users/ with the userdb provider. token-exchange is unchanged. 2026.10.29.2 adds the optional pullPolicy (default missing, compose's own default) with a no-op upgrade."
+    }
+  ]
+}

@@ -21,18 +21,19 @@ image must be one with `--seed` (Salmon #60 or later).
 Everything lives in Salmon's memory, signing keys included: a restart starts
 from the seed again with new keys.
 
-| Argument    | Default                                       |                                                                       |
-| ----------- | --------------------------------------------- | --------------------------------------------------------------------- |
-| `project`   | `salmon-e2e`                                  | compose project; one stack per name                                   |
-| `image`     | `registry.dataverket.org/tools/salmon:latest` | pin `sha-<short>` for reproducible runs                               |
-| `issuerUrl` | `http://localhost:8080/issuer/`               | the issuer as Salmon's clients reach it; must end `/issuer/`          |
-| `port`      | `8080`                                        | host port Salmon is published on                                      |
-| `networks`  | `[]`                                          | existing docker networks Salmon also joins, e.g. `kind`               |
-| `name`      | `e2e`                                         | fixture name; ids are derived from the project, it and each app's key |
-| `owners`    | `[users/Salmon-Registry-Administrator]`       | groups that own the seeded apps and trust                             |
-| `apps`      | `[]`                                          | `{key, name}`; grants refer to an app by `key`                        |
-| `trust`     | none                                          | `{issuer, subject, audience?, insecure?}` of the workload's token     |
-| `grants`    | `[]`                                          | `{app, role}`, role `users/Registry-Push` by default                  |
+| Argument     | Default                                       |                                                                                                      |
+| ------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `project`    | `salmon-e2e`                                  | compose project; one stack per name                                                                  |
+| `image`      | `registry.dataverket.org/tools/salmon:latest` | pin `sha-<short>` for reproducible runs                                                              |
+| `pullPolicy` | `missing`                                     | when docker pulls the image: `always` (every `ensure`, so `latest` is current), `missing` or `never` |
+| `issuerUrl`  | `http://localhost:8080/issuer/`               | the issuer as Salmon's clients reach it; must end `/issuer/`                                         |
+| `port`       | `8080`                                        | host port Salmon is published on                                                                     |
+| `networks`   | `[]`                                          | existing docker networks Salmon also joins, e.g. `kind`                                              |
+| `name`       | `e2e`                                         | fixture name; ids are derived from the project, it and each app's key                                |
+| `owners`     | `[users/Salmon-Registry-Administrator]`       | groups that own the seeded apps and trust                                                            |
+| `apps`       | `[]`                                          | `{key, name}`; grants refer to an app by `key`                                                       |
+| `trust`      | none                                          | `{issuer, subject, audience?, insecure?}` of the workload's token                                    |
+| `grants`     | `[]`                                          | `{app, role}`, role `users/Registry-Push` by default                                                 |
 
 The `stack` record carries `apps` (ids by key), `trustId` and `grants` (with
 `revoked`), for CEL. The ids are the same on every run.

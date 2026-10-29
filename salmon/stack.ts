@@ -85,6 +85,10 @@ export const GlobalArgsSchema = z.object({
   networks: z.array(z.string().min(1)).default([]).describe(
     "Existing docker networks Salmon also joins, e.g. kind, so it can fetch a cluster's ServiceAccount keys",
   ),
+  pullPolicy: z.enum(["always", "missing", "never"]).default("missing")
+    .describe(
+      "When docker pulls the image: always (every ensure, so latest is current), missing (only when not cached) or never",
+    ),
   startTimeoutSeconds: z.number().int().positive().default(120),
   name: z.string().regex(/^[a-z0-9-]+$/).default("e2e").describe(
     "Fixture name; ids are derived from the project, it and each app's key",
@@ -242,6 +246,7 @@ export async function composeProject(
       services: {
         salmon: {
           image: g.image,
+          pull_policy: g.pullPolicy,
           working_dir: "/tmp",
           command: ["--seed", "/tmp/seed.yaml"],
           environment: {
@@ -371,13 +376,19 @@ async function record(
 /** Model definition for the Salmon stack. */
 export const model = {
   type: "@dataverket/salmon/stack",
-  version: "2026.10.29.1",
+  version: "2026.10.29.2",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.10.29.1",
       description:
         "Salmon on in-memory SQLite with userdb and --seed; the fixture's apps, trust and grants are new optional arguments",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.29.2",
+      description:
+        "pullPolicy, optional, missing by default as docker compose does",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
