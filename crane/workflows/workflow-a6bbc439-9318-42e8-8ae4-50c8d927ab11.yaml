@@ -1,0 +1,56 @@
+id: a6bbc439-9318-42e8-8ae4-50c8d927ab11
+name: "@dataverket/base-image-watch"
+description: >-
+  Watch upstream tags: the digest of every reference in refs is recorded, with the digest it held last time and
+  since when it has been the current one, so a later step can mirror a base image only once it has stayed
+  unchanged for as long as a quarantine asks. Read-only, nothing is copied or tagged, and no credential is
+  taken, since the references are public upstream images; crane reads them with the container config of the
+  user running swamp. Made to run daily: a schedule is set, and the references it watches are given once
+  with swamp workflow trigger set, since a scheduled run has no inputs of its own. Fails unless one digest record
+  per reference was made in this run. Its model is created on first use as base-image-watch.
+version: 1
+trigger:
+  schedule: "0 6 * * *"
+inputs:
+  properties:
+    refs:
+      type: array
+      items:
+        type: string
+      description: Upstream tags to watch, each <repository>:<tag> with its registry, such as cgr.dev/chainguard/static:latest
+    insecure:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP or with a certificate that does not verify
+  required:
+    - refs
+jobs:
+  - name: watch
+    steps:
+      - name: digests
+        description: Every tag resolved to its digest; one digest record each, carrying the previous digest and the first time this one was seen. Read-only.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: base-image-watch
+          methodName: digest
+          globalArgs:
+            insecure: ${{ inputs.insecure }}
+          inputs:
+            refs: ${{ inputs.refs }}
+  - name: verify
+    dependsOn:
+      - job: watch
+        condition:
+          type: succeeded
+    steps:
+      - name: every-tag-recorded
+        description: This run recorded one digest per reference, every one a sha256 digest.
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == inputs.refs.size()
+            && data.findBySpec("base-image-watch", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id && !d.attributes.digest.matches("^sha256:[0-9a-f]{64}$")).size() == 0
+          message: >-
+            Not every watched tag was recorded with a digest; see the digest records of base-image-watch
+          severity: high

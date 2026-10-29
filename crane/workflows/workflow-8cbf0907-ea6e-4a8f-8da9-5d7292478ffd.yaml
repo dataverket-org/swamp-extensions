@@ -1,0 +1,99 @@
+id: 8cbf0907-ea6e-4a8f-8da9-5d7292478ffd
+name: "@dataverket/mirror-image"
+description: >-
+  Mirror upstream images into a registry of your own, by digest: every reference in refs is resolved to its
+  digest, then copied to <registry>/<namespace>/<name>:<tag> pinned by that digest, so the mirror holds exactly
+  what was resolved and nothing a tag could move to in between. An image already there with that digest is
+  left unchanged, and the digest is checked after every copy. Fails unless one mirror record per reference was
+  made in this run. The credential is named by vault and key, never passed as a value, because workflow inputs
+  are recorded in cleartext in the run history; it reaches crane on stdin into a docker config that exists for
+  this run only. Its model is created on first use as mirror-image.
+version: 1
+inputs:
+  properties:
+    refs:
+      type: array
+      items:
+        type: string
+      description: Upstream images to mirror, each <repository>:<tag> with its registry, such as docker.io/library/nats:2.10
+    registry:
+      type: string
+      description: The registry to mirror into, host[:port]
+    namespace:
+      type: string
+      default: mirror
+      description: The path under the registry the images land in, <registry>/<namespace>/<name>:<tag>
+    vault:
+      type: string
+      description: Vault holding the registry credential
+    usernameKey:
+      type: string
+      description: Key of the credential's user in that vault
+    passwordKey:
+      type: string
+      description: Key of the credential's password or token in that vault
+    insecure:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP or with a certificate that does not verify
+  required:
+    - refs
+    - registry
+    - vault
+    - usernameKey
+    - passwordKey
+jobs:
+  - name: resolve
+    steps:
+      - name: digests
+        description: Every upstream tag resolved to its digest; one digest record each, with the digest it held last time.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: mirror-image
+          methodName: digest
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecure }}
+          inputs:
+            refs: ${{ inputs.refs }}
+  - name: copy
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: mirrors
+        description: Every image copied under the namespace by the digest this run resolved, or found there already; one mirror record each.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: mirror-image
+          methodName: copy
+          globalArgs:
+            registry: ${{ inputs.registry }}
+            namespace: ${{ inputs.namespace }}
+            username: ${{ vault.get(inputs.vault, inputs.usernameKey) }}
+            password: ${{ vault.get(inputs.vault, inputs.passwordKey) }}
+            insecure: ${{ inputs.insecure }}
+          inputs:
+            sources: ${{ data.findBySpec("mirror-image", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.pinned) }}
+  - name: verify
+    dependsOn:
+      - job: copy
+        condition:
+          type: succeeded
+    steps:
+      - name: every-image-mirrored
+        description: This run recorded one mirror per reference, every one with the digest resolved in this run.
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("mirror-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id).size() == inputs.refs.size()
+            && data.findBySpec("mirror-image", "mirror").filter(m, m.tags.?workflowRunId.orValue("") == run.id && !(m.attributes.digest in data.findBySpec("mirror-image", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.digest))).size() == 0
+          message: >-
+            Not every image was mirrored into ${{ inputs.registry }}/${{ inputs.namespace }} by the digest this run resolved; see the mirror records of mirror-image
+          severity: high
