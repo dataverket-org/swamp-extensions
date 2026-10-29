@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo-github-mirror"
-version: "2026.10.27.1"
+version: "2026.10.29.1"
 description: >
   One workflow, `@dataverket/mirror-forgejo-to-github`, that mirrors every
   repository of a Forgejo org to a GitHub org and keeps it that way.

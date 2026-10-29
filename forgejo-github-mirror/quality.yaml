@@ -1,0 +1,5 @@
+version: 1
+accept:
+  - rule: secret-unsafe-docs # the inputs name a vault and a key; the workflow resolves the tokens with vault.get
+    file: README.md
+    line: 69
