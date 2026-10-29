@@ -116,20 +116,25 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 
 ### Lane B: cosign keyless mode and flux `push_artifact`
 
-- [ ] cosign: `certificateIdentity`, `certificateIdentityRegexp` and
+- [x] cosign: `certificateIdentity`, `certificateIdentityRegexp` and
       `oidcIssuer` on the signer; `verify`, `verifyAttestation` and `verifyBlob`
       pass them instead of `--key`; `tlog: false` with them is refused;
       `arguments` refuses a public key together with an identity; the `signer`
       record gains `verifyMode: key | keyless`
-- [ ] cosign: unit tests for the keyless argv and refusals; live test against a
+- [x] cosign: unit tests for the keyless argv and refusals; live test against a
       public keyless-signed image only if the network allows, else skipped and
       said so; README, skill, review re-keyed, dry run
-- [ ] flux: read `flux/` first and follow its style; `push_artifact`: a
+      (the network allowed it: `cgr.dev/chainguard/static` verified keyless
+      from this machine, signature and SPDX attestation, wrong identity seen
+      to fail)
+- [x] flux: read `flux/` first and follow its style; `push_artifact`: a
       directory, optional `metadata` object written as `release.json` into it,
       pushed as `oci://<repo>:<tag>` with `--reproducible`, `--source`,
       `--revision`, annotations; records ref and digest
-- [ ] flux: unit test with a fake flux; live test against the registry if the
+- [x] flux: unit test with a fake flux; live test against the registry if the
       flux CLI is installed; README, review re-keyed, dry run
+      (flux 2.10.0 from Homebrew; live against `registry:2` on
+      `127.0.0.1:5002`, and once through swamp in a scratch repository)
 
 ### Lane C: ko additions and the first two compounds
 
@@ -199,3 +204,52 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   YAML) verbatim as the `Data` string of a `cosign.sigstore.dev/attestation/v1`
   predicate, so the manifests file attests as it is. A workflow-only extension
   needs no `.review/` report: the signed-images dry run has no warning.
+
+- Lane B: `verifyMode` has three values, `key`, `keyless` and `none`, not two:
+  a signer with neither key nor identity exists (it can `describe`) and the
+  record should say so rather than claim a key.
+- Lane B: an identity wins over a key in `verifyMode`, and `key` beside an
+  identity is accepted, so one signer can sign with its key and verify another
+  party keyless; but `tlog` is one choice for both sides, so the Phase 2 mirror
+  flow (keyless upstream verify, our key without a log) needs two signers.
+- Lane B: cosign stays at 2026.10.28.1, unpublished (`currentPublished` is
+  null), so no version bump and no `upgrades` entry; the three new arguments
+  default to empty and an existing signer definition parses unchanged.
+- Lane B: cosign's keyless wrong-identity verdict is exit 12 with `no matching
+  signatures: none of the expected identities matched ...`; the latter phrase
+  was added to the not-verified pattern so `verify-blob`, which lacks the
+  prefix, is a record too.
+- Lane B: `push_artifact` lives in its own file, `flux/push_artifact.ts`, as
+  `export const extension` on `@dataverket/flux/source`, not in `source.ts`:
+  that file is upstream's and `reset.ts` is the precedent for this package's
+  own methods. It is listed in the manifest after `reset.ts`.
+- Lane B: checks never run before a method named `list`, so the source type's
+  kubectl check was dormant and would have started running before
+  `push_artifact`, which needs no kubectl; it is now `appliesTo: ["list"]`,
+  which keeps it for `swamp model validate` only, and the flux check on the
+  extension is `appliesTo: ["push_artifact"]`, which the extension-check
+  merge honours (seen in `swamp model validate --method push_artifact`).
+- Lane B: `flux push artifact --output json` prints `url`, `repository`, `tag`
+  and `digest`; the record keeps `url` as printed and `ref` as
+  `<repository>@<digest>`, the form cosign signs. The digest depends on
+  `--source` and `--revision` too, not only on the content.
+- Lane B: `flux pull artifact --output <dir>` needs the directory to exist.
+- Lane B: the flux dry run on `main` already had five unresolved warnings
+  besides the stale review: two unaccepted `Deno.Command` spawns and three
+  `uncatalogued-model` findings, because the types wrote `version:
+  FORK_VERSION` instead of a string literal. Fixed in this lane: acceptance
+  comments on the two spawns, literal `"2026.10.05.1"` in each model with the
+  constant still ending the upgrade chain and a test pinning them equal. The
+  model type versions were not bumped (no schema change), so no new
+  `upgrades` entry; the manifest is 2026.10.29.1. Push now prints an
+  informational `versionBumpUpgrade` notice per type, "no upgrades array",
+  because its static check only sees a literal array and ours is
+  `upgrades: forkUpgrades` from `_helpers.ts`; the chain exists at runtime and
+  a test asserts it ends at the version. Not an unresolved warning; left as
+  is rather than copying the array into three files.
+- Lane B: a scratch repository created with `--no-vault` cannot run a cosign
+  signer's `verify`, since the type's `keypair` spec has a sensitive field;
+  `swamp vault create local_encryption <name> --config '{"auto_generate":
+  true}'` unblocks it. `swamp model validate` without `--method` runs every
+  check, so a verify-only signer always fails `key-usable` there; with
+  `--method verify` it does not.
