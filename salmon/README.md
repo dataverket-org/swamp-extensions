@@ -2,38 +2,47 @@
 
 A throwaway [Salmon](https://git.dataverket.org/dataverket/salmon) for
 end-to-end tests of anything that takes Salmon's tokens: database validators,
-message brokers, services. Three model types.
+message brokers, services. Two model types.
 
 ## `@dataverket/salmon/stack`
 
-The published Salmon image with a Postgres and an OpenLDAP seeded with Salmon's
-reference directory, as one docker compose project generated in code.
+One container of the published Salmon image: an in-memory SQLite database, a
+`userdb` identity provider with Salmon's reference people, and the apps, trust
+and grants a test needs, loaded with Salmon's `--seed` before it serves. The
+image must be one with `--seed` (Salmon #60 or later).
 
-- `ensure` starts the project, or leaves it running, and waits until Salmon's
-  discovery document answers. Only Salmon's port is published.
-- `stop` removes the containers, the network and the volumes.
+- `ensure` starts Salmon with the seed, or leaves it running, and waits until
+  its discovery document answers. Salmon refuses a bad seed and exits; `ensure`
+  then fails with Salmon's log.
+- `revoke --input app=<key>` restarts Salmon without the trust's grants at that
+  app, to test a refusal. The next `ensure` restores them.
+- `stop` removes the container and the network.
 
-| Argument    | Default                                       |                                                              |
-| ----------- | --------------------------------------------- | ------------------------------------------------------------ |
-| `project`   | `salmon-e2e`                                  | compose project; one stack per name                          |
-| `image`     | `registry.dataverket.org/tools/salmon:latest` | pin `sha-<short>` for reproducible runs                      |
-| `issuerUrl` | `http://localhost:8080/issuer/`               | the issuer as Salmon's clients reach it; must end `/issuer/` |
-| `port`      | `8080`                                        | host port Salmon is published on                             |
-| `networks`  | `[]`                                          | existing docker networks Salmon also joins, e.g. `kind`      |
+Everything lives in Salmon's memory, signing keys included: a restart starts
+from the seed again with new keys.
 
-The directory: alice is in `Salmon-Administrator` (Salmon's admins), bob in
-`Salmon-Registry-Administrator`, carol in `Salmon-Registry-Viewer`, dave in no
-group, and `Registry-Push` is a role `Salmon-Registry-Administrator` manages, so
-a team of that group may grant it to a trust. Every password is `password`.
+| Argument    | Default                                       |                                                                       |
+| ----------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| `project`   | `salmon-e2e`                                  | compose project; one stack per name                                   |
+| `image`     | `registry.dataverket.org/tools/salmon:latest` | pin `sha-<short>` for reproducible runs                               |
+| `issuerUrl` | `http://localhost:8080/issuer/`               | the issuer as Salmon's clients reach it; must end `/issuer/`          |
+| `port`      | `8080`                                        | host port Salmon is published on                                      |
+| `networks`  | `[]`                                          | existing docker networks Salmon also joins, e.g. `kind`               |
+| `name`      | `e2e`                                         | fixture name; ids are derived from the project, it and each app's key |
+| `owners`    | `[users/Salmon-Registry-Administrator]`       | groups that own the seeded apps and trust                             |
+| `apps`      | `[]`                                          | `{key, name}`; grants refer to an app by `key`                        |
+| `trust`     | none                                          | `{issuer, subject, audience?, insecure?}` of the workload's token     |
+| `grants`    | `[]`                                          | `{app, role}`, role `users/Registry-Push` by default                  |
 
-## `@dataverket/salmon/fixture`
+The `stack` record carries `apps` (ids by key), `trustId` and `grants` (with
+`revoked`), for CEL. The ids are the same on every run.
 
-The team, apps, trust and grants one test needs, written into the stack's
-database with SQL (Salmon has no API for them yet). Ids are derived from the
-project, the fixture's `name` and each entry's key, so `seed` replaces the
-previous run's rows. `revoke` deletes the trust's grants at one app, to test a
-refusal. Salmon still checks with LDAP on every exchange that the team's group
-manages each granted role.
+The people, in the `userdb` provider `users`: alice is in `Salmon-Administrator`
+(Salmon's admins), bob in `Salmon-Registry-Administrator` and `Registry-Push`,
+carol in `Salmon-Registry-Viewer` and `frank-viewer`, dave in no group. Every
+email is `<name>@salmon.local` and every password is `password`. `Registry-Push`
+is managed by `Salmon-Registry-Administrator`, so it can be granted; Salmon
+checks that on every exchange too.
 
 ## `@dataverket/salmon/token-exchange`
 
@@ -48,11 +57,9 @@ The types drive docker and kubectl as subprocesses, with arguments as argv
 arrays, never through a shell:
 
 - `stack`: `docker compose -f - up` with the generated project on stdin,
-  `docker compose -p <project> logs|down`. `project` is restricted to
-  `[a-z0-9][a-z0-9_-]*`.
-- `fixture`: `docker ps` to find the project's Postgres container, then
-  `docker exec -i <container> psql` with the SQL on stdin; every value in it is
-  quoted as an SQL literal.
+  `docker compose -p <project> logs|down` and `docker ps` to see whether Salmon
+  still runs. `project` is restricted to `[a-z0-9][a-z0-9_-]*`. The seed and
+  `salmon.yaml` travel inside the project as compose configs.
 - `token-exchange`: `kubectl --context <ctx> -n <ns> get|create serviceaccount`
   and `create token`.
 
@@ -81,12 +88,7 @@ The keys must be readable without credentials:
 globalArguments:
   issuerUrl: http://localhost:8080/issuer/
   networks: [kind]
----
-# fixture
-globalArguments:
-  project: ${{ data.latest("stack", "stack").attributes.project }}
   name: orders
-  team: { name: orders e2e }
   apps: [{ key: db, name: orders database }]
   trust:
     issuer: https://<cluster>-control-plane:6443
@@ -99,12 +101,12 @@ globalArguments:
   issuerUrl: ${{ data.latest("stack", "stack").attributes.localIssuerUrl }}
   audience: ${{ data.latest("stack", "stack").attributes.issuerUrl }}
   kubeContext: kind-<cluster>
-  trustId: ${{ data.latest("fixture", "fixture").attributes.trustId }}
-  requestAudience: ${{ data.latest("fixture", "fixture").attributes.apps.db }}
+  trustId: ${{ data.latest("stack", "stack").attributes.trustId }}
+  requestAudience: ${{ data.latest("stack", "stack").attributes.apps.db }}
 ```
 
-`ensure`, `seed` and `test` then exchange a token for one carrying
-`roles: [ldap/Registry-Push]`; after `revoke --input app=db` the exchange fails
+`ensure` and `test` then exchange a token for one carrying
+`roles: [users/Registry-Push]`; after `revoke --input app=db` the exchange fails
 with `invalid_target`.
 
 ## License

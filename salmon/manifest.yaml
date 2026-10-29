@@ -1,18 +1,17 @@
 manifestVersion: 1
 name: "@dataverket/salmon"
-version: "2026.10.27.1"
+version: "2026.10.29.1"
 description: >
   A throwaway Salmon for end-to-end tests of anything that takes Salmon's
   tokens: database validators, message brokers, services.
 
-  `@dataverket/salmon/stack` runs the published Salmon image with a Postgres
-  and an OpenLDAP seeded with Salmon's reference directory, as one docker
-  compose project generated in code, and waits until Salmon's discovery
-  document answers. `@dataverket/salmon/fixture` writes the team, apps, trust
-  and grants a test needs into that Salmon, with ids stable across runs, and
-  revokes a grant to test refusals. `@dataverket/salmon/token-exchange` mints a
-  Kubernetes ServiceAccount token, exchanges it at Salmon (RFC 8693) for a
-  token for one app, and records the token's subject and roles, never the
+  `@dataverket/salmon/stack` runs the published Salmon image as one container:
+  an in-memory SQLite database, a userdb identity provider with Salmon's
+  reference people, and the apps, trust and grants a test needs, loaded with
+  Salmon's `--seed` under ids stable across runs. `revoke` restarts it without
+  the grants at one app, to test refusals. `@dataverket/salmon/token-exchange`
+  mints a Kubernetes ServiceAccount token, exchanges it at Salmon (RFC 8693) for
+  a token for one app, and records the token's subject and roles, never the
   token.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
@@ -20,7 +19,6 @@ paths:
   base: manifest
 models:
   - stack.ts
-  - fixture.ts
   - token_exchange.ts
 workflows: []
 vaults: []
@@ -37,5 +35,5 @@ labels:
   - e2e
   - testing
   - docker-compose
-  - ldap
+  - userdb
 dependencies: []
