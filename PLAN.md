@@ -92,27 +92,27 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 
 ### Lane A: `@dataverket/crane` (new directory `crane/`)
 
-- [ ] Repo init (`swamp repo init --tool claude --no-vault`), deno.json,
+- [x] Repo init (`swamp repo init --tool claude --no-vault`), deno.json,
       LICENSE.md from a sibling, manifest, README skeleton
-- [ ] Type `@dataverket/crane/registry`: global args `registry`, `namespace`,
+- [x] Type `@dataverket/crane/registry`: global args `registry`, `namespace`,
       optional `username` and `password` (sensitive, vault expressions, logged
       in to a temporary docker config for one run), `insecure`, `craneBinary`
-- [ ] `digest` (read): tag to digest, records tag, digest, seen-at
-- [ ] `describe` (read): manifest and config, platforms, media type, created,
+- [x] `digest` (read): tag to digest, records tag, digest, seen-at
+- [x] `describe` (read): manifest and config, platforms, media type, created,
       labels, size; an index and an image both handled
-- [ ] `copy`: `source@digest` into `<registry>/<namespace>/<name>:<tag>`,
+- [x] `copy`: `source@digest` into `<registry>/<namespace>/<name>:<tag>`,
       unchanged when the digest is already there, digest checked after
-- [ ] `tag`: a digest given a tag, the digest the tag held before recorded
-- [ ] `blob`: one file out of an artifact layer as a record (Flux artifacts are
+- [x] `tag`: a digest given a tag, the digest the tag held before recorded
+- [x] `blob`: one file out of an artifact layer as a record (Flux artifacts are
       a tar+gzip layer: `release.json`, `manifests.yaml`)
-- [ ] Checks: `arguments`, `crane-installed`, `registry-reachable` (live)
-- [ ] Unit tests with a fake crane; `CRANE_E2E=1` against the registry with an
+- [x] Checks: `arguments`, `crane-installed`, `registry-reachable` (live)
+- [x] Unit tests with a fake crane; `CRANE_E2E=1` against the registry with an
       image pushed by ko
-- [ ] Workflow `@dataverket/mirror-image`: a list of upstream references, tags
+- [x] Workflow `@dataverket/mirror-image`: a list of upstream references, tags
       resolved to digests, copied under the namespace, asserted
-- [ ] Workflow `@dataverket/base-image-watch`: read-only, the digest of every
+- [x] Workflow `@dataverket/base-image-watch`: read-only, the digest of every
       watched upstream tag recorded; made to run daily
-- [ ] Skill `crane`; README; review; quality; dry run
+- [x] Skill `crane`; README; review; quality; dry run
 
 ### Lane B: cosign keyless mode and flux `push_artifact`
 
@@ -253,3 +253,31 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
   true}'` unblocks it. `swamp model validate` without `--method` runs every
   check, so a verify-only signer always fails `key-usable` there; with
   `--method verify` it does not.
+
+- Lane A: `zmx run <session> podman run -d ...` hands `-d` to zmx, not podman:
+  the registry ran attached in the session until interrupted. Flags that zmx
+  also knows go through stdin (`printf '...' | zmx run <session>`).
+- Lane A: `digest` reads its own last record per tag through `readResource`
+  and carries `firstSeenAt` forward while the digest is unchanged, so the
+  Phase 2 quarantine compares one field against `run.startedAt`:
+  `timestamp(run.startedAt) - timestamp(...firstSeenAt) >= duration("168h")`.
+  CEL `now()` evaluates in `swamp data query` but compared as if it were the
+  epoch, so the docs use `run.startedAt`, which the workflow reference lists.
+- Lane A: `copy` takes sources as `<repository>:<tag>@sha256:<digest>`; the
+  `digest` record's `pinned` field is exactly that, so the workflow maps
+  records to sources with one CEL expression and no map literal.
+- Lane A: the secret-docs analyzer flags any `--input <name>=<value>` whose
+  name holds password, token, secret or credential, placeholders included;
+  `passphrase` (cosign) passes. `passwordKey=password` in the README is
+  accepted in `crane/quality.yaml`, which is part of the content hash.
+- Lane A: `swamp extension quality` warns "Skipping broken extension
+  workflow" for every file under `crane/.swamp/workflows-evaluated/`, since
+  the extension source is the repo directory itself; harmless, the score is
+  unaffected.
+- Lane A: `crane config` on an index silently picks linux/amd64; `describe`
+  reads the first platform child's config instead, and `configDigest` is that
+  child's config blob (a first version recorded the child manifest digest,
+  caught in the live run).
+- Lane A: `flux push artifact` into the registry worked and `blob` read its
+  `release.json` through swamp; the e2e test builds an equivalent artifact
+  with `crane append --oci-empty-base` so it needs crane only.

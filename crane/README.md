@@ -115,7 +115,7 @@ resolves every `vault.get` at run start, so all three are required.
 
 ```sh
 swamp extension pull @dataverket/crane
-swamp vault put registry username robot
+swamp vault put registry username            # the user, prompted
 swamp vault put registry password            # the token, prompted
 
 # Mirror upstream images, by digest, under registry.example.org/mirror

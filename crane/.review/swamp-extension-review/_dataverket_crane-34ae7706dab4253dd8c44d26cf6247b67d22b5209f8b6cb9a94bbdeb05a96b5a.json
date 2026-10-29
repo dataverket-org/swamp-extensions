@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/crane",
+  "version": "2026.10.29.1",
+  "reviewedAt": "2026-10-29T08:52:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "username and password are sensitive fields given as vault expressions; the password reaches crane on stdin (--password-stdin) into a docker config directory made per run and removed in finally, pointed at through DOCKER_CONFIG; it is never an argument, a record, a log property or an error message (a failing login reports argv, which holds no password). With both empty crane uses the caller's container config. The arguments check refuses an unevaluated ${{ expression and a lone username or password."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs what it is about to do and, per reference, what it found or did, with structured placeholders; the login logs the registry only."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A crane failure throws before any write with argv and stderr. A missing manifest is told apart from any other failure by crane's MANIFEST_UNKNOWN/NAME_UNKNOWN: digest, describe and blob fail on it, copy and tag take it as not there yet; a network or auth failure never reads as absence. Refused before crane runs: a reference with a scheme, whitespace or a malformed digest, a copy source without a digest, a bare name with no registry, a bad tag or name, copy or tag with registry empty. A target whose digest after copy or tag differs from the one asked for fails the method. blob names every file in the layer when path is not among them and refuses a non-tar layer with a path."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "18 unit tests with a fake crane over a fake registry cover parsing, the arguments check, both live checks (crane-installed with a binary that cannot run, registry-reachable against a closed loopback port), digest first/again/changed with readResource, the credential session and its cleanup, insecure, describe of an index with an attestation child and of an image, copy copied/unchanged/moved/untagged and its post-copy digest check, tag new/unchanged/moved, the tar reader with pax and GNU long names, and blob out of a tar+gzip layer built in the test. The CRANE_E2E test ran crane 0.22.1 against a registry:2 in podman holding an index ko pushed: digest, describe, copy twice, tag twice, blob from an artifact crane append made. Both workflows ran through swamp against that registry, and blob read release.json out of an artifact flux push artifact made."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "copy reads the target's digest first and copies only when it differs, recording unchanged otherwise; tag does the same and records changed: false. digest carries firstSeenAt forward from its last record while the digest stays the same. A copy interrupted mid-way leaves blobs the registry can garbage-collect and no record; the next run copies again. The per-run docker config is removed in finally on every path."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP but the registry-reachable check, which GETs /v2/ and accepts any status, since 401 is a registry asking for credentials. crane's outputs are parsed as crane 0.22.1 prints them: digest as one line checked against sha256:<64 hex>, manifest and config as JSON objects checked before fields are read, blob as raw bytes; an index is recognised by its manifests list or media type, an attestation child by its unknown/unknown platform; the config of an index comes from its first platform image, never from crane config on the index, whose platform choice is implicit."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The only temporary file is the docker config directory, removed in finally; a layer is unpacked in memory and the tar reader stops at the file asked for; subprocesses run with the context signal, and stdin is closed after the password is written."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, skill and tests use registry.example.org, docker.io/library/nats, cgr.dev/chainguard/static and localhost:5001; no real infrastructure is named. The secret-unsafe-docs finding on README line 122 is accepted in quality.yaml: passwordKey names the vault key, the value shown is that key's name, never the password."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Every resource schema is a closed z.object; no passthrough. blob.json is z.unknown() by design: it is whatever the file holds (a release.json image map), read through CEL by the next step; text and sha256 beside it are typed."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource declares lifetime infinite; digest keeps 30 versions, since a daily watch is its history, the others 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "A registry's contents are evidence, not a managed resource: nothing here is created to be updated or deleted later; delete was left out on purpose, a mirror is pruned by registry policy."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "arguments (policy), crane-installed (local, live) and registry-reachable (live) run before copy and tag; digest, describe and blob are declared kind read."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "digest-<repository>-<tag>, image-<repository>-<12 hex>, mirror-<target repository>-<tag or 12 hex>, tagging-<repository>-<tag>, blob-<repository>-<12 hex>-<file>: the sanitized repository is in every name, so the same image in two registries never collides, and no two specs share a prefix."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "digest reads its own last record per tag through context.readResource, optional in the context type so the method runs without it; nothing touches dataRepository."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial version."
+    }
+  ]
+}
