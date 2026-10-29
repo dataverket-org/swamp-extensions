@@ -1,0 +1,272 @@
+id: ef303fe3-2ace-42b2-b3f6-7f4d64ae50c4
+name: "@dataverket/signed-release"
+description: >-
+  A signed release: a directory of rendered manifests becomes one OCI artifact in the registry, pushed with
+  flux push artifact, tagged with the commit, signed by digest with cosign using a key held in a vault, with
+  the rendered manifests attested onto it, and both verified; the run fails unless all of it happened. ko
+  resolve over the directory, pushing nothing, lists every image pinned by digest in it as this run's
+  resolution record; release.json is built from that record, environment, revision, source, the resolution id
+  and every image with repository, digest and builtHere, and written into the artifact beside the manifests.
+  Every digest comes from a record of this run, the images from the resolution and the artifact from flux's
+  record, never from an input. A directory that still holds a ko:// reference is not a release, since ko
+  would build the image here and push it nowhere, so the run fails before the push when the resolution built
+  anything or an image is not pinned. ko resolve is the image lister, so dir must be a Go module. The key and its passphrase
+  are named by vault and key; with tlog false, the default, signatures go to the registry only. Registry
+  credentials come from the container config of the user running swamp. Its models are created on first use
+  as signed-release-ko, signed-release-flux and signed-release-cosign; runs for different releases share them,
+  so run one release at a time.
+version: 1
+inputs:
+  properties:
+    path:
+      type: string
+      description: The directory of rendered manifests, relative to the repository root; what the artifact carries
+    dir:
+      type: string
+      default: .
+      description: A Go module's directory for ko to run in, absolute or relative to the repository root
+    environment:
+      type: string
+      description: The environment the release is for, written into release.json
+    repository:
+      type: string
+      description: Where the artifact is pushed, <registry>/<path>, one repository per environment
+    tag:
+      type: string
+      default: ""
+      description: The artifact's tag; revision when empty
+    source:
+      type: string
+      description: The source address Flux shows for the artifact, such as the Git URL
+    revision:
+      type: string
+      description: >-
+        The commit the manifests were rendered from, flux's --revision and the artifact's tag unless tag is
+        given; a revision in flux's <branch>@sha1:<commit> form is not a tag, so give tag with it
+    keyVault:
+      type: string
+      description: Vault holding the signing key as a PEM
+    keyKey:
+      type: string
+      description: Key of the signing key in keyVault
+    passphraseVault:
+      type: string
+      default: ""
+      description: Vault holding the key's passphrase; keyVault when empty
+    passphraseKey:
+      type: string
+      description: Key of the passphrase in that vault; store an empty passphrase there for a key that has none
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations the artifact carries, its signature carries and verification requires, key=value
+    tlog:
+      type: boolean
+      default: false
+      description: Record the signature and attestation in a transparency log and require a log entry when verifying
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP, for ko and flux, or whose certificate does not verify, for cosign
+  required:
+    - path
+    - environment
+    - repository
+    - source
+    - revision
+    - keyVault
+    - keyKey
+    - passphraseKey
+jobs:
+  - name: resolve
+    steps:
+      - name: images
+        description: ko resolve over the directory, pushing nothing; every image pinned by digest in it becomes the resolution record, the rendered manifests the manifests file.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: signed-release-ko
+          methodName: resolve
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ""
+            sbom: none
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            files:
+              - ${{ inputs.path }}
+            recursive: true
+            push: false
+      - name: every-image-pinned-none-built
+        description: >-
+          Every image in the directory is pinned by digest, there is at least one, and ko built nothing here,
+          so what the release lists exists in a registry as its producer pushed it; checked before anything is
+          pushed.
+        dependsOn:
+          - step: images
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.latest("signed-release-ko", "resolution").tags.?workflowRunId.orValue("") == run.id
+            && data.latest("signed-release-ko", "resolution").attributes.allPinned == true
+            && data.latest("signed-release-ko", "resolution").attributes.imageCount >= 1
+            && data.latest("signed-release-ko", "resolution").attributes.builtCount == 0
+          message: >-
+            ${{ inputs.path }} is not a rendered release: ${{ data.latest("signed-release-ko", "resolution").attributes.imageCount }} images pinned,
+            not pinned ${{ data.latest("signed-release-ko", "resolution").attributes.unpinned }},
+            built here ${{ data.latest("signed-release-ko", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.ref) }}
+          severity: high
+  - name: push
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: artifact
+        description: flux push artifact of the directory, with release.json built from this run's resolution record written into the pushed copy; the artifact record holds the digest flux printed.
+        task:
+          type: model_method
+          modelType: "@dataverket/flux/source"
+          modelName: signed-release-flux
+          methodName: push_artifact
+          inputs:
+            path: ${{ inputs.path }}
+            repository: ${{ inputs.repository }}
+            tag: >-
+              ${{ inputs.tag == "" ? inputs.revision : inputs.tag }}
+            source: ${{ inputs.source }}
+            revision: ${{ inputs.revision }}
+            metadata:
+              environment: ${{ inputs.environment }}
+              revision: ${{ inputs.revision }}
+              source: ${{ inputs.source }}
+              resolution: ${{ data.latest("signed-release-ko", "resolution").attributes.id }}
+              imageCount: ${{ data.latest("signed-release-ko", "resolution").attributes.imageCount }}
+              images: >-
+                ${{ data.latest("signed-release-ko", "resolution").attributes.images.map(i, {"repository": i.repository, "digest": i.digest, "builtHere": i.builtHere}) }}
+            annotations: ${{ inputs.annotations }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+  - name: sign
+    dependsOn:
+      - job: push
+        condition:
+          type: succeeded
+    steps:
+      - name: signature
+        description: cosign sign of the artifact this run pushed, by repository and digest from its artifact record.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: signed-release-cosign
+          methodName: sign
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: >-
+              ${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).map(a, a.attributes.ref) }}
+            annotations: ${{ inputs.annotations }}
+      - name: attestation
+        description: cosign attest of the rendered manifests this run's resolve wrote onto the artifact, as a custom predicate.
+        dependsOn:
+          - step: signature
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: signed-release-cosign
+          methodName: attest
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: >-
+              ${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).map(a, a.attributes.ref) }}
+            predicate: ${{ data.latest("signed-release-ko", "manifests").path }}
+            type: custom
+  - name: verify
+    dependsOn:
+      - job: sign
+        condition:
+          type: succeeded
+    steps:
+      - name: verification
+        description: cosign verify of the artifact against the key's public half.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: signed-release-cosign
+          methodName: verify
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: >-
+              ${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).map(a, a.attributes.ref) }}
+            annotations: ${{ inputs.annotations }}
+      - name: attestation-verification
+        description: cosign verify-attestation of the custom attestation on the artifact against the key's public half.
+        dependsOn:
+          - step: verification
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: signed-release-cosign
+          methodName: verifyAttestation
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: >-
+              ${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).map(a, a.attributes.ref) }}
+            type: custom
+      - name: release-pushed-signed-attested-verified
+        description: >-
+          This run wrote the resolution record, every image in the directory is pinned by digest, there is at
+          least one, none was built here, and this run recorded exactly one artifact, one signature, one
+          attestation, one verified verification and one verified attestation verification.
+        dependsOn:
+          - step: attestation-verification
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.latest("signed-release-ko", "resolution").tags.?workflowRunId.orValue("") == run.id
+            && data.latest("signed-release-ko", "resolution").attributes.allPinned == true
+            && data.latest("signed-release-ko", "resolution").attributes.imageCount >= 1
+            && data.latest("signed-release-ko", "resolution").attributes.builtCount == 0
+            && data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("signed-release-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("signed-release-cosign", "attestation").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("signed-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == 1
+            && data.findBySpec("signed-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == 1
+          message: >-
+            The release of ${{ inputs.path }} for ${{ inputs.environment }} is incomplete: ${{ data.latest("signed-release-ko", "resolution").attributes.imageCount }} images pinned,
+            ${{ data.latest("signed-release-ko", "resolution").attributes.builtCount }} built here (must be 0),
+            not pinned ${{ data.latest("signed-release-ko", "resolution").attributes.unpinned }},
+            ${{ data.findBySpec("signed-release-flux", "artifact").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() }} artifacts pushed,
+            ${{ data.findBySpec("signed-release-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() }} signed,
+            ${{ data.findBySpec("signed-release-cosign", "attestation").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() }} attested,
+            ${{ data.findBySpec("signed-release-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} verified,
+            ${{ data.findBySpec("signed-release-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} attestations verified
+          severity: high
