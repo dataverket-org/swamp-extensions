@@ -1,24 +1,27 @@
 manifestVersion: 1
 name: "@dataverket/platform-health"
-version: "2026.10.28.1"
+version: "2026.10.29.1"
 description: >
-  One workflow, `@dataverket/platform-health`, that checks the forges and S3
-  gateways a repository names and fails when one of them is down.
+  One workflow, `@dataverket/platform-health`, that checks the forges, S3
+  gateways and HTTP endpoints a repository names and fails when one of them is
+  down.
 
   Each run calls the read-only `health` method of every `@dataverket/forgejo`
-  model in `forgeModels` and of every `@dataverket/versitygw/gateway` model in
-  `gatewayModels`, which records each one's version and health, or
-  reachability, TLS and latency, as that model's own record. One assertion per
-  model then fails the run when a forge answers unhealthy or a gateway is
-  unreachable, or slower than `maxLatencyMs` when that is set. Nothing is
+  model in `forgeModels`, every `@dataverket/versitygw/gateway` model in
+  `gatewayModels` and every `@dataverket/http/endpoint` model in
+  `endpointModels`, which records each one's version and health, or
+  reachability, TLS and latency, or status, TLS, redirects and latency, as that
+  model's own record. One assertion per model then fails the run when a forge
+  answers unhealthy, a gateway is unreachable or an endpoint is not ok, or
+  either is slower than `maxLatencyMs` when that is set. Nothing is
   written to any service.
 
   The models are the caller's, named by name, so URLs, tokens and CA files stay
   in the caller's definitions and no input ever carries a value. A run takes a
   few seconds and is made to be run often: by hand as the morning check, on a
   schedule under `swamp serve`, or as the first step of a larger workflow.
-  Built on `@dataverket/forgejo` and `@dataverket/versitygw`, both
-  dependencies.
+  Built on `@dataverket/forgejo`, `@dataverket/versitygw` and
+  `@dataverket/http`, all three dependencies.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:
@@ -39,7 +42,10 @@ labels:
   - gitea
   - versitygw
   - s3
+  - http
+  - endpoints
   - read-only
 dependencies:
   - "@dataverket/forgejo"
   - "@dataverket/versitygw"
+  - "@dataverket/http"

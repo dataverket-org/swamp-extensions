@@ -1,12 +1,13 @@
 id: a360195c-7a3a-45ad-9cdf-473fbf6be70c
 name: '@dataverket/platform-health'
 description: >-
-  One read-only check of the forges and S3 gateways a repository names: the health method of every
-  @dataverket/forgejo model in forgeModels and of every @dataverket/versitygw/gateway model in gatewayModels, each
-  recorded as that model's own status or health record, then one assertion per model that fails the run when a
-  forge answers unhealthy or a gateway is unreachable, or slower than maxLatencyMs when that is set. Nothing is
-  written to any service: a forge health is GET /api/v1/version and /api/healthz with the model's token, a gateway
-  health is an unsigned GET of its health path on the S3 port. The models are the caller's, named by the caller,
+  One read-only check of the forges, S3 gateways and HTTP endpoints a repository names: the health method of every
+  @dataverket/forgejo model in forgeModels, every @dataverket/versitygw/gateway model in gatewayModels and every
+  @dataverket/http/endpoint model in endpointModels, each recorded as that model's own status or health record,
+  then one assertion per model that fails the run when a forge answers unhealthy, a gateway is unreachable or an
+  endpoint is not ok, or either is slower than maxLatencyMs when that is set. Nothing is written to any service: a
+  forge health is GET /api/v1/version and /api/healthz with the model's token, a gateway health is an unsigned GET
+  of its health path on the S3 port, an endpoint health is a plain GET with redirects followed. The models are the caller's, named by the caller,
   so their URLs, tokens and CA files stay in the caller's definitions and nothing here carries a value. Runs in a
   few seconds; made to be run often, by hand, on a schedule, or as the first step of something larger.
 version: 1
@@ -24,10 +25,16 @@ inputs:
         type: string
       default: []
       description: Names of @dataverket/versitygw/gateway models whose health is checked; each must exist in the repository
+    endpointModels:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Names of @dataverket/http/endpoint models whose health is checked; each must exist in the repository
     maxLatencyMs:
       type: integer
       default: 0
-      description: Fail a gateway whose health GET took longer than this many milliseconds; 0 checks reachability only
+      description: Fail a gateway or endpoint whose GET took longer than this many milliseconds; 0 checks reachability only
 jobs:
   - name: forges
     steps:
@@ -51,12 +58,26 @@ jobs:
           type: model_method
           modelIdOrName: ${{ self.m }}
           methodName: health
+  - name: endpoints
+    steps:
+      - name: endpoint-${{ self.m }}
+        description: One GET of an HTTP endpoint, redirects followed, recorded as its health record. Read-only.
+        forEach:
+          item: m
+          in: ${{ inputs.endpointModels }}
+        task:
+          type: model_method
+          modelIdOrName: ${{ self.m }}
+          methodName: health
   - name: verify
     dependsOn:
       - job: forges
         condition:
           type: succeeded
       - job: gateways
+        condition:
+          type: succeeded
+      - job: endpoints
         condition:
           type: succeeded
     steps:
@@ -88,5 +109,22 @@ jobs:
             reachable=${{ data.latest(self.m, "health").attributes.reachable }}
             status=${{ data.latest(self.m, "health").attributes.status }}
             latencyMs=${{ data.latest(self.m, "health").attributes.latencyMs }}
+            error=${{ data.latest(self.m, "health").attributes.error }}
+          severity: high
+      - name: endpoint-${{ self.m }}-ok
+        description: The endpoint's health record says ok, and within maxLatencyMs when set.
+        forEach:
+          item: m
+          in: ${{ inputs.endpointModels }}
+        task:
+          type: assert
+          expr: >-
+            data.latest(self.m, "health").attributes.ok == true
+            && (inputs.maxLatencyMs == 0 || data.latest(self.m, "health").attributes.latencyMs <= inputs.maxLatencyMs)
+          message: >-
+            Endpoint ${{ self.m }} failed its health check: ${{ data.latest(self.m, "health").attributes.finalUrl }}
+            status=${{ data.latest(self.m, "health").attributes.status }}
+            latencyMs=${{ data.latest(self.m, "health").attributes.latencyMs }}
+            tls=${{ data.latest(self.m, "health").attributes.tls }}
             error=${{ data.latest(self.m, "health").attributes.error }}
           severity: high

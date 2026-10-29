@@ -1,0 +1,74 @@
+{
+  "extension": "@dataverket/http",
+  "version": "2026.10.29.1",
+  "reviewedAt": "2026-10-29T10:25:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No credential at all: a plain GET with Accept and User-Agent; a CA file is read for verification only. Nothing sensitive exists to record or log."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "One info line on entry, one on the outcome with URL, status and latency, a warning with the reason when not ok; structured placeholders throughout."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A URL that is not http or https, or a caFile that cannot be read, fails before anything is recorded; every runtime outcome, a wrong status, a missing body text, a refused connection, a timeout, a chain that does not verify, is a record with ok false and the reason, fetch's wrapped cause included."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "10 unit tests against a real local server cover every outcome, redirects followed, capped and refused, the timeout, the cause chain and both checks; HTTP_E2E=1 verifies a public HTTPS site and sees self-signed.badssl.com recorded as tls failed."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Read-only; a run is one GET with a hard timeout; redirects are bounded by maxRedirects; the body is read only when asked."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Plain HTTP semantics: 3xx with Location is a redirect, anything else is the final answer; the status compared is the final one."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Response bodies are cancelled when not read, the CA HttpClient is closed in finally, the timeout timer is cleared and the outer abort listener removed on every path."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README uses example.org and self-signed.badssl.com, the public test host; no real infrastructure named."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "One closed z.object record with nullable fields where an answer may be missing."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "health: lifetime infinite, garbageCollection 10, so the history is the uptime log."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "A probe, not a managed resource."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "arguments (policy) and ca-readable (local); health is a read, so they run with swamp model validate."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "One spec, one instance, health."
+    },
+    { "id": "data-access", "verdict": "na", "note": "Nothing is read back." },
+    { "id": "version-upgrades", "verdict": "na", "note": "Initial version." }
+  ]
+}

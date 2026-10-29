@@ -1,0 +1,39 @@
+manifestVersion: 1
+name: "@dataverket/http"
+version: "2026.10.29.1"
+description: >
+  One HTTP or HTTPS endpoint, asked whether it answers, as swamp data.
+
+  One model type, `@dataverket/http/endpoint`, one URL. `health` GETs it,
+  follows redirects and counts them, and records the final URL, the status,
+  whether the TLS chain verified against the system store or a CA file of
+  your own, the latency, and whether the body holds a text you name. An
+  endpoint that is down, slow, wrong or serving a chain that does not verify
+  is recorded with the reason, never thrown, so a workflow asserts over many
+  endpoints and names every one that failed. Made for the morning check of a
+  website, a registry's /v2/, an OIDC discovery document, a forum, next to
+  the forges and gateways `@dataverket/platform-health` already checks, and
+  that workflow takes these endpoints too. No credential, no header beyond
+  User-Agent, nothing written anywhere.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - endpoint.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - http
+  - https
+  - health
+  - monitoring
+  - uptime
+  - tls
+  - read-only
+dependencies: []
