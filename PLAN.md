@@ -133,11 +133,11 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 
 ### Lane C: ko additions and the first two compounds
 
-- [ ] ko `resolve`: every pinned image in the rendered manifests recorded in
+- [x] ko `resolve`: every pinned image in the rendered manifests recorded in
       `resolution.images`, ko-built or not, each with `builtHere: bool`
-- [ ] ko `build`: the build record also written as a file, `buildRecord` (JSON),
+- [x] ko `build`: the build record also written as a file, `buildRecord` (JSON),
       so `attest` can take it as a predicate
-- [ ] ko: tests, README, review re-keyed, dry run
+- [x] ko: tests, README, review re-keyed, dry run
 - [ ] `signed-images` workflow `@dataverket/ko-signed-manifests`: `resolve`,
       `cosign-sign` of the images, `attest` of the rendered manifests onto each
       image, asserted
@@ -177,3 +177,13 @@ Lanes touch disjoint directories. The top-level README is touched by no lane.
 ## Notes from the work
 
 (agents append here: what surprised, what was decided on the spot)
+
+- Lane C: `swamp extension source add .` inside a worktree resolves `.` against
+  the main checkout's git toplevel, so every extension in every worktree is
+  loaded and the alphabetically first copy of a type wins (lane-a's old `ko/`
+  over lane-c's). Add sources by absolute path; `.swamp-sources.yaml` is
+  gitignored, so nothing leaks.
+- Lane C: ko's `--image-refs` file is never opened when a resolve publishes
+  nothing (manifests already rendered), so `resolve` reads a missing file as
+  empty. `resolution.imageCount` now counts every pinned image, so
+  `ko-manifests` asserts on the new `builtCount` instead.

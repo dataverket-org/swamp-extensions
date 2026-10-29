@@ -39,13 +39,14 @@ package; the model lists them with `go list` and refuses a library.
 
 ## What gets recorded
 
-| Record             | Holds                                                                           |
-| ------------------ | ------------------------------------------------------------------------------- |
-| `module`           | Module path, Go and ko versions, config file and base image in effect, commands |
-| `image-<command>`  | One image: `ref`, `repository`, `tag`, `digest`, where it went                  |
-| `build`            | One build: every ref and digest, counts                                         |
-| `resolution`       | One resolve: the images built, `unpinned` images, `allPinned`                   |
-| `manifests` (file) | The rendered manifests; `data.latest("ko-manifests", "manifests").path`         |
+| Record               | Holds                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `module`             | Module path, Go and ko versions, config file and base image in effect, commands                                                                   |
+| `image-<command>`    | One image: `ref`, `repository`, `tag`, `digest`, where it went                                                                                    |
+| `build`              | One build: every ref and digest, counts                                                                                                           |
+| `buildRecord` (file) | The build record as JSON; `data.latest("ko-images", "buildRecord").path`, a predicate for `cosign attest`                                         |
+| `resolution`         | One resolve: every pinned image in the rendered manifests as `images`, each with `builtHere`; `imageCount`, `builtCount`, `unpinned`, `allPinned` |
+| `manifests` (file)   | The rendered manifests; `data.latest("ko-manifests", "manifests").path`                                                                           |
 
 The workflows' models are `ko-verify`, `ko-images` and `ko-manifests`. Read the
 latest build with:
@@ -61,6 +62,16 @@ guessing a path:
 inputs:
   path: ${{ data.latest("ko-manifests", "manifests").path }}
 ```
+
+The images a resolve built, pinned by digest, for signing or verifying:
+
+```yaml
+refs: ${{ data.latest("ko-manifests", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+```
+
+Drop the filter for every pinned image in the manifests, third-party ones
+included. A resolve over manifests already rendered builds nothing and lists
+them all with `builtHere: false`.
 
 ## Hermetic builds
 

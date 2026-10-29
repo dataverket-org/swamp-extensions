@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/ko"
-version: "2026.10.28.1"
+version: "2026.10.29.1"
 description: >
   Go programs built into container images by ko, https://ko.build: no
   Dockerfile, no container daemon, one image per main package, pushed to a
@@ -10,12 +10,13 @@ description: >
   what ko works with: module path, Go and ko versions, the config file and
   base image in effect, every main package. `build` builds the commands named
   (paths or patterns, each checked to be a main package with go list), one ko
-  run per command, and records every image with its reference and digest.
+  run per command, and records every image with its reference and digest,
+  plus the build record, also as a JSON file for an attestation to carry.
   `resolve` builds and publishes the ko:// references in a set of manifests
-  and records the rendered manifests as a file, plus every image in them that
-  is not pinned by digest. Images are named <repo>/<command> by default. A
-  base image pinned by digest and a cache directory make a build need the
-  network only once.
+  and records the rendered manifests as a file, every image pinned by digest
+  in them with whether it was built here, and every image not pinned. Images
+  are named <repo>/<command> by default. A base image pinned by digest and a
+  cache directory make a build need the network only once.
 
   Three workflows, each bringing its own model and ending in an assertion:
   `@dataverket/ko-verify` proves every command builds, without a registry;

@@ -6,11 +6,11 @@ to a registry, loaded into the local daemon, or written to a tarball. One model
 type, `@dataverket/ko/module`, three workflows that bring their own model, and a
 skill, `ko`, that says which to run for what.
 
-| Method     | Runs                                                        | Records                                                                                                 |
-| ---------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `describe` | `go list`, `go version`, `ko version`; reads `.ko.yaml`     | `module`: module path, Go and ko versions, the config file and base image in effect, every main package |
-| `build`    | `go list` to find the commands, then `ko build` per command | One `image-<command>` per command: reference, repository, tag, digest, where it went; and one `build`   |
-| `resolve`  | `ko resolve` over a set of manifests                        | `manifests`, a file: the rendered manifests; `resolution`: the images built, and every image not pinned |
+| Method     | Runs                                                        | Records                                                                                                                                               |
+| ---------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `describe` | `go list`, `go version`, `ko version`; reads `.ko.yaml`     | `module`: module path, Go and ko versions, the config file and base image in effect, every main package                                               |
+| `build`    | `go list` to find the commands, then `ko build` per command | One `image-<command>` per command: reference, repository, tag, digest, where it went; one `build`; and the same build record as a file, `buildRecord` |
+| `resolve`  | `ko resolve` over a set of manifests                        | `manifests`, a file: the rendered manifests; `resolution`: every image pinned by digest in them, built here or not, and every image not pinned        |
 
 Written and tested against ko 0.19.1.
 
@@ -64,6 +64,31 @@ into the daemon, so either with `local` is refused too:
 image: ${{ data.latest("api", "image-cmd-api").attributes.repository }}@${{ data.latest("api", "image-cmd-api").attributes.digest }}
 ```
 
+The build record is also written as a file, `buildRecord`, the same fields as
+JSON, so a step that needs it as a file takes its path, for instance `attest` of
+`@dataverket/cosign` with it as the predicate:
+
+```yaml
+inputs:
+  predicate: ${{ data.latest("api", "buildRecord").path }}
+  refs: ${{ data.latest("api", "build").attributes.refs }}
+```
+
+A `resolution` lists every image pinned by digest in the rendered manifests in
+`images`, each `ref`, `repository`, `tag`, `digest` and `builtHere`: `true` for
+an image ko built in that run, matched by digest against what ko recorded,
+`false` for a third-party image that was pinned already. `imageCount` counts
+them all, `builtCount` ko's own; `unpinned` and `allPinned` say what is not
+pinned at all. For a multi-platform build the manifest names the index, so the
+index counts and the per-platform images under it do not. A resolve over
+manifests already rendered builds nothing and lists every pinned image with
+`builtHere: false`, which is how a later step lists the images a rendered file
+names:
+
+```yaml
+refs: ${{ data.latest("api", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+```
+
 ## Workflows
 
 Each creates its model on first use, named after itself, and ends with an
@@ -73,11 +98,11 @@ container config of the user running swamp (`ko login`, `podman login`,
 `docker login`), and workflow inputs are recorded in cleartext in the run
 history, so a credential must never be one.
 
-| Workflow                   | Does                                                                                                                                                  | Model          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| `@dataverket/ko-verify`    | `describe`, then builds every command pushing nowhere, to a tarball when asked; fails unless each was recorded with a digest. A check before merge    | `ko-verify`    |
-| `@dataverket/ko-images`    | `describe`, then builds and pushes every command, or loads it into the daemon when `repo` is `ko.local`; fails unless each was recorded with a digest | `ko-images`    |
-| `@dataverket/ko-manifests` | `resolve` over `files`, images pushed; fails unless at least one was built and, with `requirePinned`, every image in the rendered manifests is pinned | `ko-manifests` |
+| Workflow                   | Does                                                                                                                                                       | Model          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `@dataverket/ko-verify`    | `describe`, then builds every command pushing nowhere, to a tarball when asked; fails unless each was recorded with a digest. A check before merge         | `ko-verify`    |
+| `@dataverket/ko-images`    | `describe`, then builds and pushes every command, or loads it into the daemon when `repo` is `ko.local`; fails unless each was recorded with a digest      | `ko-images`    |
+| `@dataverket/ko-manifests` | `resolve` over `files`, images pushed; fails unless at least one was built here and, with `requirePinned`, every image in the rendered manifests is pinned | `ko-manifests` |
 
 ```sh
 swamp extension pull @dataverket/ko
@@ -180,10 +205,11 @@ KO_E2E=1 deno test --allow-env --allow-read --allow-write --allow-run
 
 The unit tests drive the model with a fake `go` and `ko`. With `KO_E2E=1` one
 test runs the real ones against `fixtures/hello`, a module of two commands and
-one library, pushing nowhere: a build to a tarball and a resolve of its
-deployment, which keeps one third-party image unpinned on purpose. It needs ko
-on `PATH` (or `KO_BINARY`) and, with no `KOCACHE` holding the base image
-already, the network once.
+one library, pushing nowhere: a build to a layout and a tarball, a resolve of
+its deployment, which keeps one third-party image unpinned on purpose, and a
+resolve of the rendered result, which builds nothing. It needs ko on `PATH` (or
+`KO_BINARY`) and, with no `KOCACHE` holding the base image already, the network
+once.
 
 ## License
 
