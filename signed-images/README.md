@@ -1,50 +1,5 @@
 # @dataverket/signed-images
 
-Four [swamp](https://github.com/swamp-club/swamp) workflows that compose
-[`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign) and
-[`@dataverket/flux`](../flux): Go images built by [ko](https://ko.build), signed
-by digest with [cosign](https://github.com/sigstore/cosign) using a key held in
-a vault, verified, and released as one OCI artifact pushed by
-[flux](https://fluxcd.io), each in one run that fails unless all of it happened
-for all of them.
-
-| Workflow                          | Does                                                                                                                                                                                                                              | Models                                                              |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `@dataverket/ko-signed-images`    | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                                                                                     | `ko-signed-images-ko`, `ko-signed-images-cosign`                    |
-| `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                       | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`              |
-| `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                       | `verified-manifests-ko`, `verified-manifests-cosign`                |
-| `@dataverket/signed-release`      | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign` |
-Three [swamp](https://github.com/swamp-club/swamp) workflows that compose
-[`@dataverket/ko`](../ko) and [`@dataverket/cosign`](../cosign): Go images built
-by [ko](https://ko.build), signed by digest with
-[cosign](https://github.com/sigstore/cosign) using a key held in a vault, and
-verified, each in one run that fails unless all of it happened for all of them.
-
-| Workflow                          | Does                                                                                                                                                                        | Models                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `@dataverket/ko-signed-images`    | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                               | `ko-signed-images-ko`, `ko-signed-images-cosign`       |
-| `@dataverket/ko-signed-manifests` | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign` |
-| `@dataverket/verified-manifests`  | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                 | `verified-manifests-ko`, `verified-manifests-cosign`   |
-| `@dataverket/pinned-base-image`   | A base image mirrored by digest after a quarantine: the upstream tag watched, verified keyless, copied into our registry, signed with our key, verified                     | `base-image-watch`, `pinned-base-image`, two signers   |
-Seven [swamp](https://github.com/swamp-club/swamp) workflows that compose
-[`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign),
-[`@dataverket/flux`](../flux) and [`@dataverket/crane`](../crane): Go images
-built by [ko](https://ko.build), signed by digest with
-[cosign](https://github.com/sigstore/cosign) using a key held in a vault,
-verified, released as one OCI artifact pushed by [flux](https://fluxcd.io), and
-that release verified, promoted by retag and mirrored with
-[crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md),
-each in one run that fails unless all of it happened for all of them.
-
-| Workflow                            | Does                                                                                                                                                                                                                              | Models                                                                                |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `@dataverket/ko-signed-images`      | A signed build: every command of one Go module built and pushed, every image signed, every signature verified                                                                                                                     | `ko-signed-images-ko`, `ko-signed-images-cosign`                                      |
-| `@dataverket/ko-signed-manifests`   | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                       | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`                                |
-| `@dataverket/verified-manifests`    | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                       | `verified-manifests-ko`, `verified-manifests-cosign`                                  |
-| `@dataverket/signed-release`        | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign`                   |
-| `@dataverket/verify-release`        | The gate: the artifact's tag pinned to its digest, its signature and attestation verified, `release.json` read out of it, every image it lists verified; read-only                                                                | `verify-release-crane`, `verify-release-cosign`                                       |
-| `@dataverket/promote-release`       | `verify-release`, then the channel tag such as `current` pointed at the verified digest and read back; the digest it held before recorded, for a rollback                                                                         | `promote-release-crane`, and `verify-release`'s                                       |
-| `@dataverket/mirror-release-images` | `verify-release`, then every image it lists copied by digest into another registry with its signature tag, and verified there                                                                                                     | `mirror-release-images-crane`, `mirror-release-images-cosign`, and `verify-release`'s |
 Eight [swamp](https://github.com/swamp-club/swamp) workflows that compose
 [`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign),
 [`@dataverket/flux`](../flux) and [`@dataverket/crane`](../crane): Go images
@@ -533,16 +488,15 @@ run over the rendered result of a `ko-manifests` run copied into a directory,
 pushed to the same registry, and the artifact's signature and attestation were
 read back with `cosign tree`, `cosign verify` and `flux pull artifact`; over the
 fixture's own deployment it fails before the push, naming the unpinned image and
-the one it would have built.
-image unpinned on purpose and fails the assertion by name. `pinned-base-image`
-ran against the real `cgr.dev/chainguard/static:latest`, which Chainguard signs
-keyless, into the throwaway registry: with `minimumAgeDays: 0` the whole chain
-passed, with the default the quarantine failed as it should for a digest first
-seen that day; `ko-signed-images` with `baseImageFrom=pinned-base-image` then
-built `fixtures/hello` on the mirror, the mirror's layer being the built image's
-first.
-the one it would have built. `verify-release` was run on that release, by tag
-and by digest, with and without its annotation, and on an artifact pushed
+the one it would have built. image unpinned on purpose and fails the assertion
+by name. `pinned-base-image` ran against the real
+`cgr.dev/chainguard/static:latest`, which Chainguard signs keyless, into the
+throwaway registry: with `minimumAgeDays: 0` the whole chain passed, with the
+default the quarantine failed as it should for a digest first seen that day;
+`ko-signed-images` with `baseImageFrom=pinned-base-image` then built
+`fixtures/hello` on the mirror, the mirror's layer being the built image's
+first. the one it would have built. `verify-release` was run on that release, by
+tag and by digest, with and without its annotation, and on an artifact pushed
 without a signature, which fails at the first assertion; `promote-release` moved
 `current` to it, then to a second release with the first's digest in
 `previousDigest`, then found it already there; `mirror-release-images` copied
