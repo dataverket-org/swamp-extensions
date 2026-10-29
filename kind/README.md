@@ -25,13 +25,32 @@ for other models to reference:
 kubeContext: ${{ data.latest("kind", "cluster").attributes.context }}
 ```
 
+## Use
+
+One behavior per cluster, named after it, with the kind config and the manifests
+as paths in the repository:
+
+```yaml
+# e2e
+globalArguments:
+  clusterName: e2e
+  configPath: test/kind.yaml
+  manifests:
+    - test/namespace.yaml
+    - test/fixtures.yaml
+```
+
+```sh
+swamp behavior run e2e ensure   # creates the cluster when missing, applies the manifests
+swamp behavior run e2e get      # records whether it exists
+swamp behavior run e2e delete   # succeeds when it is already gone
+```
+
 ## Commands
 
 The model runs `kind get clusters`, `kind create cluster`,
-`kind delete
-cluster`, `kubectl config view`, `kubectl get --raw /readyz` and
-`kubectl apply
--f` as subprocesses in the repository root, with arguments as
+`kind delete cluster`, `kubectl config view`, `kubectl get --raw /readyz` and
+`kubectl apply -f` as subprocesses in the repository root, with arguments as
 argv arrays, never through a shell.
 
 ## As a workload issuer for Salmon
