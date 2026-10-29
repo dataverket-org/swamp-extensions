@@ -1,0 +1,236 @@
+id: 67950888-67dc-4aa8-8bd3-e88389aeecce
+name: "@dataverket/ko-signed-manifests"
+description: >-
+  Signed manifests: ko resolve renders the manifests in files with every ko:// reference built from the Go
+  module in dir, pushed to repo and pinned by digest; cosign signs every image built in that run by digest with
+  a key held in a vault, attests the rendered manifests onto each of them as a custom predicate, and verifies
+  both the signatures and the attestations; the run fails unless all of it happened for every image built. The
+  images come from this run's resolution record, never from an input, so what is signed is exactly what was
+  built; the rendered manifests are the resolution's manifests file. The key and its passphrase are named by
+  vault and key; with tlog false, the default, signatures go to the registry only. Registry credentials come
+  from the container config of the user running swamp. Third-party images pinned in the manifests are listed
+  in the resolution record but neither signed nor verified here; @dataverket/verified-manifests checks them all.
+  Its models are created on first use as ko-signed-manifests-ko and ko-signed-manifests-cosign; runs for
+  different modules share them, so run one module at a time.
+version: 1
+inputs:
+  properties:
+    dir:
+      type: string
+      default: .
+      description: The Go module's directory, absolute or relative to the repository root
+    repo:
+      type: string
+      description: Registry path the images are pushed under (KO_DOCKER_REPO)
+    files:
+      type: array
+      items:
+        type: string
+      description: Manifests with ko:// references, files or directories, relative to the repository root
+    recursive:
+      type: boolean
+      default: false
+      description: Descend into the directories named in files
+    selector:
+      type: string
+      default: ""
+      description: Only resources matching this label selector
+    tags:
+      type: array
+      items:
+        type: string
+      default: [latest]
+      description: Tags for every image, such as a commit id and latest
+    naming:
+      type: string
+      enum: [default, preserve-import-paths, base-import-paths, bare]
+      default: base-import-paths
+      description: How an image is named under repo
+    platforms:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Platforms as os/arch, or all; empty is ko's default, linux/amd64
+    sbom:
+      type: string
+      enum: [spdx, none]
+      default: spdx
+      description: The SBOM pushed beside each image
+    baseImage:
+      type: string
+      default: ""
+      description: Base image for every command, overriding .ko.yaml; pin it by digest
+    cache:
+      type: string
+      default: ""
+      description: Directory where ko caches base images, relative to the repository root
+    keyVault:
+      type: string
+      description: Vault holding the signing key as a PEM
+    keyKey:
+      type: string
+      description: Key of the signing key in keyVault
+    passphraseVault:
+      type: string
+      default: ""
+      description: Vault holding the key's passphrase; keyVault when empty
+    passphraseKey:
+      type: string
+      description: Key of the passphrase in that vault; store an empty passphrase there for a key that has none
+    annotations:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Annotations every signature carries and verification requires, key=value, such as a commit id
+    tlog:
+      type: boolean
+      default: false
+      description: Record signatures and attestations in a transparency log and require a log entry when verifying
+    insecureRegistry:
+      type: boolean
+      default: false
+      description: Allow a registry served over plain HTTP, for ko, or whose certificate does not verify, for cosign
+  required:
+    - repo
+    - files
+    - keyVault
+    - keyKey
+    - passphraseKey
+jobs:
+  - name: resolve
+    steps:
+      - name: manifests
+        description: ko resolve over the files, images pushed; the rendered manifests become the manifests file, every pinned image in them the resolution record.
+        task:
+          type: model_method
+          modelType: "@dataverket/ko/module"
+          modelName: ko-signed-manifests-ko
+          methodName: resolve
+          globalArgs:
+            dir: ${{ inputs.dir }}
+            repo: ${{ inputs.repo }}
+            naming: ${{ inputs.naming }}
+            platforms: ${{ inputs.platforms }}
+            sbom: ${{ inputs.sbom }}
+            baseImage: ${{ inputs.baseImage }}
+            cache: ${{ inputs.cache }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            files: ${{ inputs.files }}
+            recursive: ${{ inputs.recursive }}
+            selector: ${{ inputs.selector }}
+            tags: ${{ inputs.tags }}
+            push: true
+  - name: sign
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: signatures
+        description: cosign sign of every image this run built, by repository and digest from its resolution record.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-manifests-cosign
+          methodName: sign
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.latest("ko-signed-manifests-ko", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+            annotations: ${{ inputs.annotations }}
+  - name: attest
+    dependsOn:
+      - job: sign
+        condition:
+          type: succeeded
+    steps:
+      - name: attestations
+        description: cosign attest of the rendered manifests file onto each of the same images, as a custom predicate.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-manifests-cosign
+          methodName: attest
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.latest("ko-signed-manifests-ko", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+            predicate: ${{ data.latest("ko-signed-manifests-ko", "manifests").path }}
+            type: custom
+  - name: verify
+    dependsOn:
+      - job: attest
+        condition:
+          type: succeeded
+    steps:
+      - name: verifications
+        description: cosign verify of the same images against the key's public half.
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-manifests-cosign
+          methodName: verify
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.latest("ko-signed-manifests-ko", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+            annotations: ${{ inputs.annotations }}
+      - name: attestation-verifications
+        description: cosign verify-attestation of the custom attestations on the same images against the key's public half.
+        dependsOn:
+          - step: verifications
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: ko-signed-manifests-cosign
+          methodName: verifyAttestation
+          globalArgs:
+            key: ${{ vault.get(inputs.keyVault, inputs.keyKey) }}
+            password: '${{ vault.get(inputs.passphraseVault == "" ? inputs.keyVault : inputs.passphraseVault, inputs.passphraseKey) }}'
+            tlog: ${{ inputs.tlog }}
+            insecureRegistry: ${{ inputs.insecureRegistry }}
+            httpRegistry: ${{ inputs.insecureRegistry }}
+          inputs:
+            refs: ${{ data.latest("ko-signed-manifests-ko", "resolution").attributes.images.filter(i, i.builtHere).map(i, i.repository + "@" + i.digest) }}
+            type: custom
+      - name: every-image-built-signed-attested-verified
+        description: >-
+          This run wrote the resolution record, built at least one image, and recorded one signature, one
+          attestation, one verified verification and one verified attestation verification per image built.
+        dependsOn:
+          - step: attestation-verifications
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.latest("ko-signed-manifests-ko", "resolution").tags.?workflowRunId.orValue("") == run.id
+            && data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount >= 1
+            && data.findBySpec("ko-signed-manifests-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount
+            && data.findBySpec("ko-signed-manifests-cosign", "attestation").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() == data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount
+            && data.findBySpec("ko-signed-manifests-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount
+            && data.findBySpec("ko-signed-manifests-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() == data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount
+          message: >-
+            The signed manifests of ${{ inputs.files }} are incomplete: ${{ data.latest("ko-signed-manifests-ko", "resolution").attributes.builtCount }} images built,
+            ${{ data.findBySpec("ko-signed-manifests-cosign", "signature").filter(s, s.tags.?workflowRunId.orValue("") == run.id).size() }} signed,
+            ${{ data.findBySpec("ko-signed-manifests-cosign", "attestation").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() }} attested,
+            ${{ data.findBySpec("ko-signed-manifests-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} verified,
+            ${{ data.findBySpec("ko-signed-manifests-cosign", "attestationVerification").filter(v, v.tags.?workflowRunId.orValue("") == run.id && v.attributes.verified == true).size() }} attestations verified
+          severity: high
