@@ -782,6 +782,32 @@ export const OidcTokenSettings = z.object({
   timestamp: z.string(),
 });
 
+/**
+ * How one kind of one-time code or secret is made, instance-wide, on the v1
+ * Admin API: how long it is and how long it stays valid. The record holds the
+ * shape of the codes, never a code.
+ */
+export const SecretGenerator = z.object({
+  generator: z.string().describe(
+    "Which kind: initCode, verifyEmailCode, verifyPhoneCode, passwordResetCode, passwordlessInitCode, appSecret, otpSms or otpEmail",
+  ),
+  generatorType: z.string().describe(
+    "The same as Zitadel names it, e.g. SECRET_GENERATOR_TYPE_PASSWORDLESS_INIT_CODE",
+  ),
+  length: z.number().describe("How many characters a code has"),
+  expiry: z.string().optional().describe(
+    "How long a code stays valid, as Zitadel reports it: a protobuf duration such as 3600s",
+  ),
+  expirySeconds: z.number().optional(),
+  includeLowerLetters: z.boolean(),
+  includeUpperLetters: z.boolean(),
+  includeDigits: z.boolean(),
+  includeSymbols: z.boolean(),
+  scope: z.string().describe("Always instance: a generator is the instance's"),
+  action: Action,
+  timestamp: z.string(),
+});
+
 /** How a login may be done, and how long each factor is trusted for. */
 export const LoginSettings = z.object({
   allowUsernamePassword: z.boolean().optional(),

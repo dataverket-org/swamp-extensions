@@ -13,11 +13,13 @@
  *
  * Only two settings are writable through v2, and both are here: the security
  * settings (iframe embedding and impersonation) and the hosted login
- * translations. Writing the login policy, lockout, password complexity,
- * branding or legal links is still the v1 Management API for an organization
- * and the v1 Admin API instance-wide, and neither is in this extension: a
- * service-user key that can read every policy is a much smaller thing to hold
- * than one that can weaken them.
+ * translations. One v1 Admin write is here as well, `secretGeneratorSet`: how
+ * long a one-time code such as a passkey registration code stays valid, which
+ * is what an operator mailing such a code has to decide. Writing the login
+ * policy, lockout, password complexity, branding or legal links is still the
+ * v1 Management API for an organization and the v1 Admin API instance-wide,
+ * and neither is in this extension: a service-user key that can read every
+ * policy is a much smaller thing to hold than one that can weaken them.
  *
  * @module
  */
@@ -51,6 +53,7 @@ import {
   OidcTokenSettings,
   PasswordComplexitySettings,
   PasswordExpirySettings,
+  SecretGenerator,
   SecuritySettings,
   settingsScope,
 } from "./schema.ts";
@@ -73,6 +76,33 @@ const SecuritySetArgs = z.object({
   ),
   enableImpersonation: z.boolean().describe(
     "Whether a holder of an *_IMPERSONATOR role may act as another user",
+  ),
+});
+/** Zitadel's name for each kind of code, by the short name an argument uses. */
+const GENERATOR_TYPES = {
+  initCode: "SECRET_GENERATOR_TYPE_INIT_CODE",
+  verifyEmailCode: "SECRET_GENERATOR_TYPE_VERIFY_EMAIL_CODE",
+  verifyPhoneCode: "SECRET_GENERATOR_TYPE_VERIFY_PHONE_CODE",
+  passwordResetCode: "SECRET_GENERATOR_TYPE_PASSWORD_RESET_CODE",
+  passwordlessInitCode: "SECRET_GENERATOR_TYPE_PASSWORDLESS_INIT_CODE",
+  appSecret: "SECRET_GENERATOR_TYPE_APP_SECRET",
+  otpSms: "SECRET_GENERATOR_TYPE_OTP_SMS",
+  otpEmail: "SECRET_GENERATOR_TYPE_OTP_EMAIL",
+} as const;
+type GeneratorName = keyof typeof GENERATOR_TYPES;
+const GENERATOR_NAMES = Object.keys(GENERATOR_TYPES) as [
+  GeneratorName,
+  ...GeneratorName[],
+];
+const SecretGeneratorSetArgs = z.object({
+  generator: z.enum(GENERATOR_NAMES).describe(
+    "Which kind of code: passwordlessInitCode is the passkey registration code, initCode the first-login code, passwordResetCode, verifyEmailCode, verifyPhoneCode, otpEmail and otpSms the others, appSecret a client secret",
+  ),
+  expirySeconds: z.coerce.number().int().positive().optional().describe(
+    "How long a code stays valid, in seconds; e.g. 172800 for two days. Omit to keep the current value",
+  ),
+  length: z.coerce.number().int().positive().optional().describe(
+    "How many characters a code has; omit to keep the current value",
   ),
 });
 const TranslationSetArgs = z.object({
@@ -110,6 +140,42 @@ export function durationSeconds(value: unknown): number | undefined {
 
 /** Where the instance's OIDC token lifetimes are read. */
 const OIDC_TOKENS_PATH = "/admin/v1/settings/oidc";
+
+/** Where the instance's secret generators are read and written. */
+const SECRET_GENERATORS_PATH = "/admin/v1/secretgenerators";
+
+/** The short name of a generator Zitadel names, when it is one this type knows. */
+function generatorName(generatorType: unknown): GeneratorName | undefined {
+  return GENERATOR_NAMES.find((name) =>
+    GENERATOR_TYPES[name] === generatorType
+  );
+}
+
+/**
+ * One secret generator as a record: what Zitadel reports plus the seconds,
+ * and nothing else. Zitadel omits a `false` flag and a zero length, like
+ * every proto3 zero value.
+ */
+function generatorRecord(
+  raw: Json,
+  action: "observed" | "updated" | "unchanged",
+  timestamp: string,
+): Record<string, unknown> {
+  return {
+    generator: generatorName(raw.generatorType) ?? str(raw.generatorType),
+    generatorType: str(raw.generatorType),
+    length: Number(raw.length ?? 0),
+    expiry: optStr(raw.expiry),
+    expirySeconds: durationSeconds(raw.expiry),
+    includeLowerLetters: flag(raw.includeLowerLetters),
+    includeUpperLetters: flag(raw.includeUpperLetters),
+    includeDigits: flag(raw.includeDigits),
+    includeSymbols: flag(raw.includeSymbols),
+    scope: "instance",
+    action,
+    timestamp,
+  };
+}
 
 /** One settings kind: where to read it and how to shape what comes back. */
 interface SettingsKind {
@@ -240,7 +306,7 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.11.02.1",
+  version: "2026.11.06.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -259,6 +325,12 @@ export const model = {
         "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
+    {
+      toVersion: "2026.11.06.1",
+      description:
+        "secretGeneratorSet sets how long a one-time code stays valid, and read also stores each secret generator; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
   ],
   globalArguments: GlobalArgsSchema,
   checks,
@@ -267,6 +339,13 @@ export const model = {
       description:
         "How long access, ID and refresh tokens live, instance-wide; the refresh token lifetimes are the ones a policy decision is about",
       schema: OidcTokenSettings,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    "secret-generator": {
+      description:
+        "How one kind of one-time code is made, instance-wide: its length and how long it stays valid; the passkey registration code is passwordlessInitCode",
+      schema: SecretGenerator,
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
@@ -377,10 +456,26 @@ export const model = {
           );
         }
 
-        // Token lifetimes are instance-wide and on the v1 Admin API, so a key
-        // that may read an organization but not the instance is told, and the
-        // organization's settings are still stored.
+        // Token lifetimes and secret generators are instance-wide and on the v1
+        // Admin API, so a key that may read an organization but not the
+        // instance is told, and the organization's settings are still stored.
         try {
+          const generators = await call(globalArgs, {
+            method: "POST",
+            path: `${SECRET_GENERATORS_PATH}/_search`,
+            body: {},
+          });
+          handles.push(
+            ...await writeAll(
+              context,
+              "secret-generator",
+              "secret-generator",
+              asArray(generators.body.result).map((raw) =>
+                generatorRecord(raw, "observed", timestamp)
+              ),
+              (generator) => str(generator.generator),
+            ),
+          );
           const result = await call(globalArgs, {
             method: "GET",
             path: OIDC_TOKENS_PATH,
@@ -418,7 +513,7 @@ export const model = {
           const message = err instanceof Error ? err.message : String(err);
           if (!/HTTP 403/.test(message)) throw err;
           context.logger.warning(
-            "this key may not read the instance's OIDC token lifetimes; no oidc-tokens record this run",
+            "this key may not read the instance's secret generators and OIDC token lifetimes; no secret-generator or oidc-tokens record this run",
           );
         }
 
@@ -507,6 +602,73 @@ export const model = {
               ...settingsScope(raw, undefined, nowIso()),
               action,
             },
+          ),
+        };
+      },
+    },
+    secretGeneratorSet: {
+      description:
+        "Set how long one kind of one-time code stays valid, and how long it is, instance-wide: passwordlessInitCode is the code in a passkey registration link, initCode the first-login code. The character set stays as it is. Needs iam.write, the IAM_OWNER role. Idempotent: a value already in force is reported as unchanged.",
+      arguments: SecretGeneratorSetArgs,
+      execute: async (
+        args: z.infer<typeof SecretGeneratorSetArgs>,
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const globalArgs = context.globalArgs;
+        if (args.expirySeconds === undefined && args.length === undefined) {
+          throw new Error("give expirySeconds, length or both");
+        }
+        const generatorType = GENERATOR_TYPES[args.generator];
+        const path = `${SECRET_GENERATORS_PATH}/${seg(generatorType)}`;
+        // Zitadel's update replaces every field, and a flag left out is a
+        // flag turned off: a code with no character set at all cannot be made.
+        // So the generator is read first and only what was asked for changes.
+        const before = await call(globalArgs, { method: "GET", path });
+        const current = obj(before.body.secretGenerator);
+        const expirySeconds = args.expirySeconds ??
+          durationSeconds(current.expiry) ?? 0;
+        const length = args.length ?? Number(current.length ?? 0);
+        context.logger.info(
+          "setting the {generator} generator: {length} characters, valid {expiry}s",
+          {
+            generator: args.generator,
+            length,
+            expiry: expirySeconds,
+          },
+        );
+        let action: "updated" | "unchanged" = "updated";
+        try {
+          await call(globalArgs, {
+            method: "PUT",
+            path,
+            body: {
+              length,
+              expiry: `${expirySeconds}s`,
+              includeLowerLetters: flag(current.includeLowerLetters),
+              includeUpperLetters: flag(current.includeUpperLetters),
+              includeDigits: flag(current.includeDigits),
+              includeSymbols: flag(current.includeSymbols),
+            },
+          });
+        } catch (err) {
+          // As for securitySet: a write that changes nothing is a 400 "No
+          // changes", which is the method being idempotent, not a failure.
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/no changes/i.test(message)) throw err;
+          action = "unchanged";
+        }
+        const after = await call(globalArgs, { method: "GET", path });
+        return {
+          dataHandles: await writeOne(
+            context,
+            "secret-generator",
+            "secret-generator",
+            args.generator,
+            generatorRecord(
+              obj(after.body.secretGenerator),
+              action,
+              nowIso(),
+            ),
           ),
         };
       },

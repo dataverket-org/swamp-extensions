@@ -30,7 +30,7 @@ const Empty = z.object({});
 /** Zitadel organizations. */
 export const model = {
   type: "@dataverket/zitadel/org",
-  version: "2026.11.02.1",
+  version: "2026.11.06.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -47,6 +47,12 @@ export const model = {
       toVersion: "2026.11.02.1",
       description:
         "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.06.1",
+      description:
+        "Released with the settings change of this version (secretGeneratorSet); nothing in this type changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

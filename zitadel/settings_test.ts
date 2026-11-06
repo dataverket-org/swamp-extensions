@@ -19,6 +19,7 @@ const KINDS = [
   "GET /v2/settings",
   "GET /v2/settings/login/idps",
   "GET /admin/v1/settings/oidc",
+  "POST /admin/v1/secretgenerators/_search",
 ];
 
 const OIDC_TOKENS = {
@@ -30,11 +31,27 @@ const OIDC_TOKENS = {
   },
 };
 
-/** Answer every settings read with something shaped right. */
+const PASSKEY_CODE = {
+  generatorType: "SECRET_GENERATOR_TYPE_PASSWORDLESS_INIT_CODE",
+  length: 12,
+  expiry: "3600s",
+  includeLowerLetters: true,
+  includeUpperLetters: true,
+  includeDigits: true,
+};
+
+/**
+ * Answer every settings read with something shaped right. The v1 Admin reads
+ * share one key, so a refusal given for the token lifetimes is given for the
+ * secret generators too.
+ */
 function settingsFake(query: string, tokens: FakeResponse = OIDC_TOKENS) {
   return installFake((call) => {
     const path = line(call);
     if (path === "GET /admin/v1/settings/oidc") return tokens;
+    if (path === "POST /admin/v1/secretgenerators/_search") {
+      return tokens === OIDC_TOKENS ? { result: [PASSKEY_CODE] } : tokens;
+    }
     if (!path.startsWith("GET /v2/settings")) return undefined;
     if (!path.endsWith(query) && query !== "") return undefined;
     const bare = path.replace(query, "");
@@ -203,6 +220,13 @@ Deno.test("read stores the OIDC token lifetimes as Zitadel reports them and in s
     assertEquals(tokens?.data.refreshTokenSeconds, 7776000);
     assertEquals(tokens?.data.refreshTokenIdleSeconds, 2592000);
     assertEquals(tokens?.data.accessTokenSeconds, 43200);
+    const code = written.find((w) => w.spec === "secret-generator");
+    assertEquals(code?.name, "secret-generator-passwordlessinitcode");
+    assertEquals(code?.data.generator, "passwordlessInitCode");
+    assertEquals(code?.data.expirySeconds, 3600);
+    assertEquals(code?.data.length, 12);
+    assertEquals(code?.data.includeSymbols, false);
+    assertEquals(code?.data.action, "observed");
   } finally {
     fake.restore();
   }
@@ -220,6 +244,7 @@ Deno.test("a key that may not read the token lifetimes is warned, and the rest i
       context,
     );
     assertEquals(written.find((w) => w.spec === "oidc-tokens"), undefined);
+    assertEquals(written.find((w) => w.spec === "secret-generator"), undefined);
     assert(written.some((w) => w.spec === "login"));
     assert(
       logs.some((l) =>
@@ -255,4 +280,128 @@ Deno.test("durationSeconds reads a protobuf duration and nothing else", () => {
   assertEquals(durationSeconds("12h"), undefined);
   assertEquals(durationSeconds(undefined), undefined);
   assertEquals(durationSeconds(43200), undefined);
+});
+
+/** The passkey code generator, answering a read and taking a write. */
+function generatorFake(
+  onPut: (body: Record<string, unknown>) => FakeResponse,
+) {
+  const path =
+    "/admin/v1/secretgenerators/SECRET_GENERATOR_TYPE_PASSWORDLESS_INIT_CODE";
+  return installFake((call) => {
+    if (line(call) === `GET ${path}`) return { secretGenerator: PASSKEY_CODE };
+    if (line(call) === `PUT ${path}`) {
+      return onPut(call.body as Record<string, unknown>);
+    }
+    return undefined;
+  });
+}
+
+Deno.test("secretGeneratorSet changes the expiry and keeps the rest of the generator", async () => {
+  let put: Record<string, unknown> | undefined;
+  const fake = generatorFake((body) => {
+    put = body;
+    return { details: {} };
+  });
+  const { context, written } = makeContext();
+  try {
+    await model.methods.secretGeneratorSet.execute(
+      { generator: "passwordlessInitCode", expirySeconds: 172800 },
+      context,
+    );
+    assertEquals(put, {
+      length: 12,
+      expiry: "172800s",
+      includeLowerLetters: true,
+      includeUpperLetters: true,
+      includeDigits: true,
+      includeSymbols: false,
+    });
+    const record = written.find((w) => w.spec === "secret-generator");
+    assertEquals(record?.name, "secret-generator-passwordlessinitcode");
+    assertEquals(record?.data.action, "updated");
+    assertEquals(record?.data.scope, "instance");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("secretGeneratorSet reads the arguments as the CLI gives them", () => {
+  const parsed = model.methods.secretGeneratorSet.arguments.parse({
+    generator: "passwordlessInitCode",
+    expirySeconds: "172800",
+  });
+  assertEquals(parsed.expirySeconds, 172800);
+  assertEquals(parsed.length, undefined);
+  assert(
+    !model.methods.secretGeneratorSet.arguments.safeParse({
+      generator: "passwordlessInitCode",
+      expirySeconds: "-1",
+    }).success,
+  );
+  assert(
+    !model.methods.secretGeneratorSet.arguments.safeParse({
+      generator: "somethingElse",
+      expirySeconds: "60",
+    }).success,
+  );
+});
+
+Deno.test("secretGeneratorSet with nothing to set is refused before any call", async () => {
+  const fake = installFake(() => undefined);
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () =>
+        model.methods.secretGeneratorSet.execute(
+          { generator: "passwordlessInitCode" },
+          context,
+        ),
+      Error,
+      "expirySeconds",
+    );
+    assertEquals(fake.calls.length, 0);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("secretGeneratorSet reports a value already in force as unchanged", async () => {
+  const fake = generatorFake(() => ({
+    status: 400,
+    body: { message: "No changes (COMMAND-m0o3f)" },
+  }));
+  const { context, written } = makeContext();
+  try {
+    await model.methods.secretGeneratorSet.execute(
+      { generator: "passwordlessInitCode", expirySeconds: 3600 },
+      context,
+    );
+    const record = written.find((w) => w.spec === "secret-generator");
+    assertEquals(record?.data.action, "unchanged");
+    assertEquals(record?.data.expirySeconds, 3600);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("secretGeneratorSet passes any other refusal on", async () => {
+  const fake = generatorFake(() => ({
+    status: 403,
+    body: { message: "permission denied" },
+  }));
+  const { context } = makeContext();
+  try {
+    await assertRejects(
+      () =>
+        model.methods.secretGeneratorSet.execute(
+          { generator: "passwordlessInitCode", length: 16 },
+          context,
+        ),
+      Error,
+      "HTTP 403",
+    );
+  } finally {
+    fake.restore();
+  }
 });

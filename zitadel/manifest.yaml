@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/zitadel"
-version: "2026.11.02.1"
+version: "2026.11.06.1"
 description: >
   Zitadel for swamp, over its API: eight model types, one per resource, with
   the whole life cycle of each.
@@ -25,7 +25,8 @@ description: >
   instance will accept. `@dataverket/zitadel/settings` reads the login,
   lockout, password, branding, domain, legal and security settings in force for
   an organization or the instance, each saying whether it is the
-  organization's own or inherited, and writes the two that v2 exposes.
+  organization's own or inherited, writes the two that v2 exposes, and sets
+  how long a one-time code such as a passkey registration code stays valid.
   `@dataverket/zitadel/system` is the instance's domain list, kept with a
   System API user: list, add, remove verify-first, and set the primary.
 

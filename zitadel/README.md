@@ -103,16 +103,26 @@ from the instance. That is what an audit is actually asking, and it is one run
 and one lock rather than ten.
 
 The same run stores `oidc-tokens-instance`: how long access, ID and refresh
-tokens live, read from the v1 Admin API, as Zitadel's durations and in seconds.
-They are instance-wide, so they come with an organization's read as well. A key
-that may read the organization but not the instance gets a warning in the log
-and no such record, and the rest of the run stands.
+tokens live, read from the v1 Admin API, as Zitadel's durations and in seconds;
+and one `secret-generator-<kind>` per kind of one-time code the instance makes
+(`passwordlessInitCode` is the passkey registration code, `initCode` the
+first-login code, and so on): its length, how long it stays valid, and its
+character set — the shape of the codes, never a code. These are instance-wide,
+so they come with an organization's read as well. A key that may read the
+organization but not the instance gets a warning in the log and no such records,
+and the rest of the run stands.
 
 `securitySet` (iframe embedding and impersonation) and `loginTranslationSet` are
-the only writes v2 exposes. Writing a login policy, lockout, password
-complexity, branding or legal links is still v1 Management for an organization
-and v1 Admin instance-wide, and neither is here: a key that can read every
-policy is a much smaller thing to hold than one that can weaken them.
+the only writes v2 exposes. `secretGeneratorSet` is one v1 Admin write, kept
+because an operator mailing a passkey registration link has to decide how long
+the code in it lives: it sets a kind's `expirySeconds`, its `length`, or both,
+reads the generator first so the character set stays as it is (Zitadel's update
+replaces every field, and a flag left out is a flag turned off), and reports a
+value already in force as `unchanged`. It needs `iam.write`, the IAM_OWNER role.
+Writing a login policy, lockout, password complexity, branding or legal links is
+still v1 Management for an organization and v1 Admin instance-wide, and neither
+is here: a key that can read every policy is a much smaller thing to hold than
+one that can weaken them.
 
 ### `@dataverket/zitadel/grant`
 

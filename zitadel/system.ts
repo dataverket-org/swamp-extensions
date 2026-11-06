@@ -166,7 +166,15 @@ function shapeDomain(
 /** The instance's domains, kept with a System API user. */
 export const model = {
   type: "@dataverket/zitadel/system",
-  version: "2026.11.02.1",
+  version: "2026.11.06.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.06.1",
+      description:
+        "Released with the settings change of this version (secretGeneratorSet); nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: SystemGlobalArgsSchema,
   checks: {
     "credential-named": {

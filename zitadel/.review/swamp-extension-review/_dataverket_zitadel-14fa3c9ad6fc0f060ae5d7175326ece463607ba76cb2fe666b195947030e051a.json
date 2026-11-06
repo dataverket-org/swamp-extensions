@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/zitadel",
+  "version": "2026.11.06.1",
+  "reviewedAt": "2026-11-06T13:30:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Nothing new carries a secret. A secret-generator record is the shape of a kind of code (length, expiry, character set) and never a code; no acceptance comment was needed on its expiry field, since the rule does not fire there. The code a generator makes still leaves only through PasskeyRegistration.code, marked and vault-stored as in 2026.11.02.1. The method needs iam.write and says so, so a reader key is refused by Zitadel, not helped past."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "secretGeneratorSet logs the kind, the length and the seconds at info with structured placeholders; the 403 warning in read now names both v1 Admin reads it covers. No body, key or token reaches a log line."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A call with neither expirySeconds nor length is refused before any call, unit tested. Zitadel's update replaces every field and a flag left out is a flag turned off, which would leave the instance unable to make that code at all (an empty character set panics in GenerateRandomString, read in v4.15.3's internal/crypto/code.go), so the generator is read first and only what was asked for changes; the test asserts the full body sent. A 400 No changes is unchanged, as in securitySet; any other refusal keeps its status and message, unit tested with a 403. In read, only an HTTP 403 on the two v1 Admin reads is downgraded to a warning, as before; a 500 still fails the run."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "122 unit tests, 5 new: the body sent and the rest of the generator kept, CLI string coercion and the two schema refusals (negative seconds, unknown kind), the refusal before any call, unchanged on No changes, and a 403 passed on; the read tests now cover the secret-generator records and their absence under 403. Live on a throwaway Zitadel v4.15.3 in podman from this checkout: read stored eight secret-generator records with the flags Zitadel reports; secretGeneratorSet passwordlessInitCode expirySeconds=172800 took the expiry from 3600s to 172800s keeping length 12 and the three flags, a second run reported unchanged, an unknown kind and a missing argument were refused, and a passkey registration code was still made afterwards (the character set survived the write). The full smoke suite was not rerun; no batch's path changed."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "secretGeneratorSet with the value in force reports unchanged through Zitadel's No changes answer, live checked. A run interrupted between the PUT and the write leaves Zitadel changed and no record; the next run reads the live generator and reports unchanged, so nothing is lost."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Paths and bodies read from proto/zitadel/admin.proto and settings.proto of v4.15.3 and confirmed live: GET and PUT /admin/v1/secretgenerators/{generator_type} with length, expiry (a protobuf duration, sent as <n>s) and the four include flags; POST /admin/v1/secretgenerators/_search answering result[]. The eight generator types are the enum's eight non-zero values, mapped from short names so a workflow never spells SECRET_GENERATOR_TYPE_. The command's own replace-all semantics were read in internal/command/instance_settings.go."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One more POST per settings read and three calls per set (read, write, read back); no new long-lived handles, timers or caches."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README settings section and manifest description name the new write and the new records; the module doc says why one v1 Admin write is here when the rest stay out. Example values are durations and kinds; no real host, address or id appears. The .review report is committed with the release as before."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "generator is a z.enum of eight; expirySeconds and length are coerced positive integers, optional, so a CLI string works and a negative or zero value is refused by the schema, unit tested. SecretGenerator is a plain z.object with the four flags required and expiry optional, the one field Zitadel may omit."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "secret-generator is infinite with garbageCollection 10, as every other settings kind; eight fixed instance names, so records overwrite rather than accumulate."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "A generator is read in read and written in secretGeneratorSet; the Admin API has no add or delete for one (an instance is born with all eight), so there is nothing more. The character set is read-only here on purpose: the one decision an operator mailing a code makes is how long it lives, and a method that could empty the character set would be a method that could break every code the instance makes."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "The shared checks are unchanged and still run before every method."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "secret-generator-<kind> through instanceName's sanitiser, so the short name is lowercased (secret-generator-passwordlessinitcode); read and secretGeneratorSet write the same shape under the same name, so a set overwrites the read's record and a later read overwrites the set's."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "No method reads stored state back; the set reads the live generator from Zitadel and writes what Zitadel reports afterwards. A workflow reads expirySeconds with data.latest and can assert it before mailing a code."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "All eight types move to 2026.11.06.1 with an upgrade entry each: settings names the new method and record, the others say nothing in them changed; the system type gets its first upgrades list. Attributes pass through unchanged, since no argument changed. The manifest is 2026.11.06.1."
+    }
+  ]
+}
