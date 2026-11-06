@@ -364,6 +364,56 @@ Deno.test("passwordResetLinkCreate returns a code and refuses a machine user", a
   }
 });
 
+Deno.test("passkeyRegistrationLinkCreate returns a code with its id, mails with the template, and refuses a machine user", async () => {
+  const sent: unknown[] = [];
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) {
+      const body = call.body as {
+        queries?: { userNameQuery: { userName: string } }[];
+      };
+      const name = body.queries?.[0]?.userNameQuery.userName;
+      return users([name === "kari" ? HUMAN_USER : MACHINE_USER]);
+    }
+    if (
+      line(call) ===
+        `POST /v2/users/${HUMAN_USER.userId}/passkeys/registration_link`
+    ) {
+      sent.push(call.body);
+      const body = call.body as { returnCode?: unknown };
+      return body.returnCode ? { code: { id: "c1", code: "reg-once" } } : {};
+    }
+    return undefined;
+  });
+  const { context, written } = makeContext();
+  try {
+    await model.methods.passkeyRegistrationLinkCreate.execute(
+      { user: "kari", delivery: "return", urlTemplate: undefined },
+      context,
+    );
+    assertEquals(written[0].data.code, "reg-once");
+    assertEquals(written[0].data.codeId, "c1");
+    const template =
+      "https://auth.example.org/ui/v2/login/passkey/set?code={{.Code}}";
+    await model.methods.passkeyRegistrationLinkCreate.execute(
+      { user: "kari", delivery: "email", urlTemplate: template },
+      context,
+    );
+    assertEquals(sent[1], { sendLink: { urlTemplate: template } });
+    assertEquals(written[1].data.code, undefined);
+    await assertRejects(
+      () =>
+        model.methods.passkeyRegistrationLinkCreate.execute(
+          { user: "svc-flux", delivery: "return", urlTemplate: undefined },
+          context,
+        ),
+      Error,
+      "not a human user",
+    );
+  } finally {
+    fake.restore();
+  }
+});
+
 Deno.test("authFactorList gathers second factors and passkeys together", async () => {
   const fake = installFake((call) => {
     if (line(call) === SEARCH) return users([HUMAN_USER]);

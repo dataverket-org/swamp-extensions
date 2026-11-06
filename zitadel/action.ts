@@ -279,7 +279,7 @@ async function resolveTarget(
 /** Zitadel v2 actions: targets and executions. */
 export const model = {
   type: "@dataverket/zitadel/action",
-  version: "2026.10.05.1",
+  version: "2026.11.02.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -290,6 +290,12 @@ export const model = {
       toVersion: "2026.10.05.1",
       description:
         "Released with the app and settings changes of this version; nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.02.1",
+      description:
+        "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

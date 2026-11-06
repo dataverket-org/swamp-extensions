@@ -226,6 +226,52 @@ export const PasswordReset = z.object({
   timestamp: z.string(),
 });
 
+/**
+ * A passkey registration a human can act on without logging in first, from
+ * `passkeyRegistrationLinkCreate`. The code and its id are both needed to
+ * register, so both are stored when the code is returned.
+ */
+export const PasskeyRegistration = z.object({
+  userId: z.string(),
+  username: z.string().optional(),
+  delivery: z.string().describe("return (the code is stored) or email"),
+  codeId: z.string().optional().describe(
+    "The code's id, which the registration page takes beside the code",
+  ),
+  code: z.string().optional().meta({ sensitive: true }).describe(
+    "Emitted once when the code is returned rather than mailed",
+  ),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/**
+ * One domain of an instance, as the System API lists them. The one flagged
+ * primary is where Zitadel links to in a mail that no request triggered; a
+ * generated one is `<random>.<ExternalDomain>` and cannot be removed.
+ */
+export const InstanceDomain = z.object({
+  instanceId: z.string(),
+  domain: z.string(),
+  primary: z.boolean().describe(
+    "The domain Zitadel links to when no request supplies one",
+  ),
+  generated: z.boolean().describe(
+    "Made by setup from ExternalDomain; never removable",
+  ),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/** The instance a System API user acts on. */
+export const InstanceInfo = z.object({
+  instanceId: z.string(),
+  name: z.string().optional(),
+  state: z.string().optional(),
+  action: Action,
+  timestamp: z.string(),
+});
+
 /** A user grant: which roles a user holds on a project. */
 export const GrantInfo = z.object({
   grantId: z.string(),
@@ -704,13 +750,21 @@ const settingsBase = {
 
 /** How long the tokens OIDC issues live; instance-wide, on the v1 Admin API. */
 export const OidcTokenSettings = z.object({
+  // A lifetime read from the login policy, a duration, not a token.
+  // swamp-quality-ignore credentials-sensitive-field
   accessTokenLifetime: z.string().optional().describe(
     "As Zitadel reports it, a protobuf duration such as 43200s",
   ),
+  // A lifetime read from the login policy, a duration, not a token.
+  // swamp-quality-ignore credentials-sensitive-field
   idTokenLifetime: z.string().optional(),
+  // A lifetime read from the login policy, a duration, not a token.
+  // swamp-quality-ignore credentials-sensitive-field
   refreshTokenIdleExpiration: z.string().optional().describe(
     "How long a refresh token stays valid unused",
   ),
+  // A lifetime read from the login policy, a duration, not a token.
+  // swamp-quality-ignore credentials-sensitive-field
   refreshTokenExpiration: z.string().optional().describe(
     "How long a refresh token stays valid at all",
   ),
@@ -745,6 +799,8 @@ export const LoginSettings = z.object({
   defaultRedirectUri: z.string().optional(),
   secondFactors: z.array(z.string()).optional(),
   multiFactors: z.array(z.string()).optional(),
+  // How long a password check stays valid, a duration, not a password.
+  // swamp-quality-ignore credentials-sensitive-field
   passwordCheckLifetime: z.string().optional(),
   externalLoginCheckLifetime: z.string().optional(),
   multiFactorCheckLifetime: z.string().optional(),

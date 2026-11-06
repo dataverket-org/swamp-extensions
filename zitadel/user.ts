@@ -10,7 +10,11 @@
  *
  * No password is ever an argument. A human's password is set by the human,
  * from a reset link `passwordResetLinkCreate` mints — returned once into a
- * sensitive spec, or mailed by Zitadel and never seen here.
+ * sensitive spec, or mailed by Zitadel and never seen here. A passkey is
+ * registered the same way, from a link `passkeyRegistrationLinkCreate` mints:
+ * the person registers on the page the link names, without logging in first,
+ * which is how an account gets a passkey for a name of the instance it has
+ * none for yet.
  *
  * Every credential this type mints — a personal access token, a key's JSON, a
  * machine user's client secret — is emitted exactly once into the
@@ -61,6 +65,7 @@ import {
   DeleteResult,
   IdpLink,
   MetadataEntry,
+  PasskeyRegistration,
   PasswordReset,
   shapeUser,
   StateResult,
@@ -225,6 +230,20 @@ const PasswordResetArgs = z.object({
     "Link template for the mail, e.g. https://example.org/reset?code={{.Code}}",
   ),
 });
+const PasskeyRegistrationArgs = z.object({
+  user: UserRef,
+  delivery: z.enum(["return", "email"]).default("return").describe(
+    "return stores the code and its id once as a secret; email has Zitadel " +
+      "send the link",
+  ),
+  urlTemplate: z.string().optional().describe(
+    "Link template for the mail; the passkey binds to the host the page is " +
+      "on, so the template names the host the person should register at, " +
+      "e.g. https://auth.example.org/ui/v2/login/passkey/set?codeId=" +
+      "{{.CodeID}}&code={{.Code}}&userId={{.UserID}}&organization={{.OrgID}}. " +
+      "Without it Zitadel links to the host this request came in on",
+  ),
+});
 
 /** The profile fields of a human user, as the v2 API nests them. */
 function humanProfile(args: {
@@ -271,7 +290,7 @@ function userFilter(userId: string): Record<string, unknown> {
 /** Users of a Zitadel organization, human and machine. */
 export const model = {
   type: "@dataverket/zitadel/user",
-  version: "2026.10.05.1",
+  version: "2026.11.02.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -282,6 +301,12 @@ export const model = {
       toVersion: "2026.10.05.1",
       description:
         "Released with the app and settings changes of this version; nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.02.1",
+      description:
+        "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -329,6 +354,13 @@ export const model = {
     "password-reset": {
       description: "A password reset a human can act on",
       schema: PasswordReset,
+      lifetime: "infinite" as const,
+      garbageCollection: 5,
+    },
+    "passkey-registration": {
+      description:
+        "A passkey registration a human can act on without logging in first",
+      schema: PasskeyRegistration,
       lifetime: "infinite" as const,
       garbageCollection: 5,
     },
@@ -1420,6 +1452,64 @@ export const model = {
               username: str(live.username),
               delivery: args.delivery,
               verificationCode: optStr(created.body.verificationCode),
+              action: "created",
+              timestamp: nowIso(),
+            },
+          ),
+        };
+      },
+    },
+    passkeyRegistrationLinkCreate: {
+      description:
+        "Mint a passkey registration for a human user, which lets them register a passkey without logging in first: either a code and its id returned once into a sensitive spec, or a link Zitadel mails to them. The passkey binds to the host the registration page is on, so the urlTemplate names the host the person should register at — the way an account gets a passkey for a new name of the instance.",
+      arguments: PasskeyRegistrationArgs,
+      execute: async (
+        args: z.infer<typeof PasskeyRegistrationArgs>,
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const globalArgs = context.globalArgs;
+        const live = await resolveUser(globalArgs, args.user);
+        const userId = str(live.userId ?? live.id);
+        const username = str(live.username) || userId;
+        if (live.human === undefined) {
+          throw new Error(
+            `user ${
+              str(live.username)
+            } is not a human user; a machine user has no passkey`,
+          );
+        }
+        const body: Record<string, unknown> = args.delivery === "email"
+          ? {
+            sendLink: {
+              ...(args.urlTemplate ? { urlTemplate: args.urlTemplate } : {}),
+            },
+          }
+          : { returnCode: {} };
+        context.logger.info(
+          "requesting a passkey registration for {username}",
+          {
+            username: str(live.username),
+            delivery: args.delivery,
+          },
+        );
+        const created = await call(globalArgs, {
+          method: "POST",
+          path: v2(`/users/${seg(userId)}/passkeys/registration_link`),
+          body,
+        });
+        const code = obj(created.body.code);
+        return {
+          dataHandles: await writeOne(
+            context,
+            "passkey-registration",
+            "passkey-registration",
+            username,
+            {
+              userId,
+              username: str(live.username),
+              delivery: args.delivery,
+              codeId: optStr(code.id),
+              code: optStr(code.code),
               action: "created",
               timestamp: nowIso(),
             },

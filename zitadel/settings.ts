@@ -240,7 +240,7 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.10.05.1",
+  version: "2026.11.02.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -251,6 +251,12 @@ export const model = {
       toVersion: "2026.10.05.1",
       description:
         "read also stores oidc-tokens-instance, the OIDC token lifetimes from the v1 Admin API; a key that may not read them gets a warning, not a failed run. No argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.02.1",
+      description:
+        "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

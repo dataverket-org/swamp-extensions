@@ -1,8 +1,8 @@
 manifestVersion: 1
 name: "@dataverket/zitadel"
-version: "2026.10.27.1"
+version: "2026.11.02.1"
 description: >
-  Zitadel for swamp, over its API: seven model types, one per resource, with
+  Zitadel for swamp, over its API: eight model types, one per resource, with
   the whole life cycle of each.
 
   `@dataverket/zitadel/project` lists, reads, creates, renames, deactivates and
@@ -12,8 +12,10 @@ description: >
   rest of a shared client, client-secret rotation, application keys, and
   deactivate or delete. `@dataverket/zitadel/user` is human and machine users
   over the v2 user service: find-or-create, update, deactivate, lock, delete,
-  personal access tokens, keys, client secrets, metadata, and a password reset
-  that mints a link rather than taking a password.
+  personal access tokens, keys, client secrets, metadata, a password reset
+  that mints a link rather than taking a password, and a passkey registration
+  link that lets a person register a passkey on the host the link names
+  without logging in first.
   `@dataverket/zitadel/grant` is the roles a user holds on a project, and
   `@dataverket/zitadel/org` reads the organizations and their managers.
   `@dataverket/zitadel/action` covers v2 actions: the targets an instance calls
@@ -24,6 +26,8 @@ description: >
   lockout, password, branding, domain, legal and security settings in force for
   an organization or the instance, each saying whether it is the
   organization's own or inherited, and writes the two that v2 exposes.
+  `@dataverket/zitadel/system` is the instance's domain list, kept with a
+  System API user: list, add, remove verify-first, and set the primary.
 
   Projects also carry their grants to other organizations, and the members who
   administer them; users carry their authentication factors and
@@ -38,7 +42,10 @@ description: >
 
   Authentication is a JWT private-key service account: the key is named by the
   definition, as a vault value (`keyJson`) or as a file read at call time
-  (`keyJsonFile`), and exchanged per run for a short-lived token. Users speak
+  (`keyJsonFile`), and exchanged per run for a short-lived token. Or a bearer
+  token in a file (`accessTokenFile`), sent as it is, so a workflow runs as the
+  person whose login wrote it. The system type signs with a System API user's
+  key (`systemKeyFile`, `systemUser`), which is the bearer itself. Users speak
   the v2 API, which is the supported surface on Zitadel v4; projects,
   applications, roles and grants speak v1 Management, where v2 is still beta.
 
@@ -56,6 +63,7 @@ models:
   - grant.ts
   - action.ts
   - settings.ts
+  - system.ts
 workflows: []
 vaults: []
 datastores: []

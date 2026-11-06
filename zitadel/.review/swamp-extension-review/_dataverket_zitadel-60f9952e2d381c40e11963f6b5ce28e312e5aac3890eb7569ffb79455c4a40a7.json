@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/zitadel",
+  "version": "2026.11.02.1",
+  "reviewedAt": "2026-11-06T11:33:23Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Two credential kinds added and neither carries a value: accessTokenFile and systemKeyFile are paths read at call time, like keyJsonFile; the token and the signed system assertion live in memory for the run, the assertion cached for its hour under apiUrl|systemUser. Nothing new is logged or stored: the only new sensitive field, PasskeyRegistration.code, is marked and emitted once. Seven credentials-sensitive-field warnings are accepted in place with the reason beside each: a path to a token, an OAuth scope string, five policy durations read from the login settings. The system type's role is wide by Zitadel's design (SYSTEM_OWNER is the only role with system.domain.write); the type offers four domain methods and no other, which is the scoping the code can give."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs its intent at info with structured placeholders ({domain}, {instance}, {username}) and its outcome; domainRemove logs the removal at warning as user delete does; a no-op says so at info. No path, token or key material reaches a log line or a property."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Every write follows a successful API call; a refusal (wrong confirm, generated or primary domain, absent domain, two instances, no credential, an empty token file, a key file that cannot be read) throws before any call or write, with the operation and the name in the message. API errors carry method, path, status and Zitadel's message; 429 and 503 retry with backoff as before. credentialKind centralises the one-credential rule so the policy check and the transport cannot disagree."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "117 unit tests, 12 new: credentialKind for every kind and both refusals, systemAssertionClaims, getToken from a bearer file including the empty-file refusal, a System API assertion signed with a generated RSA key and cached, the passkey link in both deliveries and its machine-user refusal, and the four domain methods with the fake caller covering idempotent add, every domainRemove refusal, dryRun, the tombstone and the primary no-op. Live on 2026-11-06 against Zitadel v4.15.3 in podman with a SystemAPIUsers key mounted: domainList, domainAdd twice, domainSetPrimary there and back, the confirm refusal, dryRun, domainRemove and the list after, all as the unit tests say; and user list through accessTokenFile with a token the service key had minted. The smoke batches a to p were not rerun: no existing method's path, body or lifecycle changed, only the credential plumbing, which the live run exercised."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "domainAdd returns the live domain unchanged when it is there; domainSetPrimary is a no-op on the primary; domainRemove is verify-first and refuses a domain that is not there rather than succeeding silently, which is this package's convention for every delete (confirm repeats the live name) and is stated in the description. A run interrupted between the API call and the write leaves Zitadel changed and no record, which the next domainList repairs."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "System API v1 paths and bodies read from proto/zitadel/system.proto of v4.15.3 and confirmed live: instances/_search, instances/{id}/domains/_search, instances/{id}/domains, DELETE instances/{id}/domains/{domain}, instances/{id}/domains/_set_primary; the passkey link from user_service.proto with sendLink.urlTemplate. Both searches send an explicit query limit of 1000, above any instance's domain count, and fields are read through str, optStr and === true, never assumed. The audience of the system assertion is baseUrl(apiUrl) without a trailing slash, which is what the server builds from ExternalDomain, ExternalPort and ExternalSecure, and the README says so."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Files are read whole with Deno.readTextFile; fetches carry the per-request timeout; nothing is created outside Zitadel. The instance id and every domain are stored as resources a later run can read."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and manifest describe the eighth type and the three credential kinds with example.org names and placeholder paths; test fixtures use example.org and example.test; no real host, address or id appears. The .review report is committed with the release as before."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "InstanceDomain, InstanceInfo and PasskeyRegistration are plain z.object with no passthrough; the two booleans are required, the optional fields are the ones the API may omit (name, state, codeId, code)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "instance-domain and passkey-registration carry lifetime infinite with garbageCollection 10 and 5, instance 5, matching the package's sibling specs."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "The system type is list, add, remove and set-primary, which is the whole of what the System API offers for a domain; there is no update. A generated domain cannot be removed by anyone (Zitadel refuses with GeneratedNotRemovable) and the method refuses it first with a plain message; the README says so."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Every type keeps credential-named (policy) and reachable (live); the system type's own pair checks that the credential is a system key with its user and that the System API lists an instance for it. Mutating methods are guarded by the checks' labels for selective skipping as before."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "instance-domain-<domain>, instance-<id> and passkey-registration-<username>, all through instanceName's sanitiser, no collision across methods: every method writing instance-domain writes the same shape, and domainRemove tombstones the name before writing its removed record, as user delete does."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "No method reads stored state back; each reads the live list from Zitadel and compares. No dataRepository access."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "All seven existing types move to 2026.11.02.1 with an upgrade entry naming the new optional argument and that nothing existing changed; the system type is new at 2026.11.02.1 with no upgrades. The manifest is 2026.11.02.1."
+    }
+  ]
+}

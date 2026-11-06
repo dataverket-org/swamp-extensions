@@ -9,6 +9,15 @@
  * is ever stored, and the key material is read at call time — from a vault
  * value (`keyJson`) or from a file the definition names (`keyJsonFile`).
  *
+ * Two more credential kinds share the same transport. `accessTokenFile` names a
+ * file holding a bearer token that is sent as it is, with no exchange: the run
+ * is whoever the token belongs to, typically the operator whose own login wrote
+ * it. `systemKeyFile` with `systemUser` names the private key of a System API
+ * user, a key Zitadel knows from its configuration rather than its database;
+ * the signed assertion is itself the bearer, with the user's name as issuer and
+ * subject and the instance as audience. Exactly one kind is named per
+ * definition.
+ *
  * Signing uses the Web Crypto global, so the extension has no dependency to
  * resolve at score time. Zitadel issues PKCS#1 keys and Web Crypto imports only
  * PKCS#8, so {@link importSigningKey} wraps PKCS#1 in the PKCS#8 envelope.
@@ -284,23 +293,27 @@ interface Transport {
   apiUrl: string;
   keyJson?: string;
   keyJsonFile?: string;
+  accessTokenFile?: string;
+  systemKeyFile?: string;
+  systemUser?: string;
   orgId?: string;
   httpTimeoutMs: number;
   tokenScope: string;
 }
 
+function optional(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
 function transport(globalArgs: Json): Transport {
   return {
     apiUrl: String(globalArgs.apiUrl ?? ""),
-    keyJson: typeof globalArgs.keyJson === "string"
-      ? globalArgs.keyJson
-      : undefined,
-    keyJsonFile: typeof globalArgs.keyJsonFile === "string"
-      ? globalArgs.keyJsonFile
-      : undefined,
-    orgId: typeof globalArgs.orgId === "string" && globalArgs.orgId
-      ? globalArgs.orgId
-      : undefined,
+    keyJson: optional(globalArgs.keyJson),
+    keyJsonFile: optional(globalArgs.keyJsonFile),
+    accessTokenFile: optional(globalArgs.accessTokenFile),
+    systemKeyFile: optional(globalArgs.systemKeyFile),
+    systemUser: optional(globalArgs.systemUser),
+    orgId: optional(globalArgs.orgId),
     httpTimeoutMs: Number(globalArgs.httpTimeoutMs ?? 30000),
     tokenScope: String(
       globalArgs.tokenScope ??
@@ -320,33 +333,149 @@ export function expandHome(path: string): string {
   return home + path.slice(1);
 }
 
+/** The kinds of credential a definition may name, one at a time. */
+export type CredentialKind =
+  | "keyJson"
+  | "keyJsonFile"
+  | "accessTokenFile"
+  | "systemKeyFile";
+
 /**
- * Read the service user's key JSON: the vault value when the definition gives
- * one, otherwise the file it names. Exactly one of the two must be set.
+ * Which credential the definition names. Exactly one of `keyJson`,
+ * `keyJsonFile`, `accessTokenFile` and `systemKeyFile` must be set; a
+ * `systemKeyFile` also needs `systemUser`, the name Zitadel's configuration
+ * knows the key by.
  */
-export async function readKeyJson(globalArgs: Json): Promise<string> {
+export function credentialKind(globalArgs: Json): CredentialKind {
   const g = transport(globalArgs);
-  if (g.keyJson && g.keyJsonFile) {
-    throw new Error("give keyJson or keyJsonFile, not both");
+  const named: CredentialKind[] = [];
+  if (g.keyJson) named.push("keyJson");
+  if (g.keyJsonFile) named.push("keyJsonFile");
+  if (g.accessTokenFile) named.push("accessTokenFile");
+  if (g.systemKeyFile) named.push("systemKeyFile");
+  if (named.length > 1) {
+    throw new Error(
+      `give one credential, not both ${named.join(" and ")}`,
+    );
   }
-  if (g.keyJson) return g.keyJson;
-  if (!g.keyJsonFile) {
-    throw new Error("no credential: set keyJson (from a vault) or keyJsonFile");
+  if (named.length === 0) {
+    throw new Error(
+      "no credential: set keyJson (from a vault), keyJsonFile, " +
+        "accessTokenFile or systemKeyFile",
+    );
   }
-  const path = expandHome(g.keyJsonFile);
+  if (named[0] === "systemKeyFile" && !g.systemUser) {
+    throw new Error(
+      "systemKeyFile needs systemUser, the name in SystemAPIUsers",
+    );
+  }
+  return named[0];
+}
+
+async function readFileNamed(label: string, path: string): Promise<string> {
   try {
-    return await Deno.readTextFile(path);
+    return await Deno.readTextFile(expandHome(path));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`cannot read keyJsonFile ${g.keyJsonFile}: ${message}`);
+    throw new Error(`cannot read ${label} ${path}: ${message}`);
   }
 }
 
-/** Mint (or reuse) an access token for the service user. */
+/**
+ * Read the service user's key JSON: the vault value when the definition gives
+ * one, otherwise the file it names. A definition that names another kind of
+ * credential has no key JSON, and says so.
+ */
+export async function readKeyJson(globalArgs: Json): Promise<string> {
+  const g = transport(globalArgs);
+  switch (credentialKind(globalArgs)) {
+    case "keyJson":
+      return g.keyJson as string;
+    case "keyJsonFile":
+      return await readFileNamed("keyJsonFile", g.keyJsonFile as string);
+    default:
+      throw new Error("the definition names no service-user key");
+  }
+}
+
+/**
+ * Read the bearer token a definition names, as it is: the run is whoever the
+ * token belongs to. Surrounding whitespace is dropped, nothing else is looked
+ * at.
+ */
+export async function readAccessToken(globalArgs: Json): Promise<string> {
+  const g = transport(globalArgs);
+  const token =
+    (await readFileNamed("accessTokenFile", g.accessTokenFile as string))
+      .trim();
+  if (!token) throw new Error(`accessTokenFile ${g.accessTokenFile} is empty`);
+  return token;
+}
+
+/**
+ * The claims of a System API user's assertion: the user's configured name is
+ * issuer and subject, the audience is the instance's own issuer, and it lives
+ * an hour. Zitadel verifies it against the public key in `SystemAPIUsers`
+ * rather than exchanging it, so the assertion is the bearer. Pure.
+ */
+export function systemAssertionClaims(
+  systemUser: string,
+  apiUrl: string,
+  nowSec: number,
+): Json {
+  return {
+    iss: systemUser,
+    sub: systemUser,
+    aud: baseUrl(apiUrl),
+    iat: nowSec,
+    exp: nowSec + 3600,
+  };
+}
+
+async function signSystemAssertion(
+  pemKey: string,
+  systemUser: string,
+  apiUrl: string,
+  nowSec: number,
+): Promise<string> {
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = b64url(
+    JSON.stringify(systemAssertionClaims(systemUser, apiUrl, nowSec)),
+  );
+  const input = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    await importSigningKey(pemKey),
+    new TextEncoder().encode(input),
+  );
+  return `${input}.${b64url(new Uint8Array(signature))}`;
+}
+
+/**
+ * The bearer for the next call: a token read from a file as it is, a System
+ * API assertion signed and cached for its hour, or a service user's access
+ * token minted by the jwt-bearer exchange and cached until it nearly expires.
+ */
 export async function getToken(globalArgs: Json): Promise<string> {
   const g = transport(globalArgs);
-  const key = parseKeyJson(await readKeyJson(globalArgs));
+  const kind = credentialKind(globalArgs);
   const nowSec = Math.floor(Date.now() / 1000);
+  if (kind === "accessTokenFile") return readAccessToken(globalArgs);
+  if (kind === "systemKeyFile") {
+    const cacheKey = `${baseUrl(g.apiUrl)}|system:${g.systemUser}`;
+    const cached = tokenCache.get(cacheKey);
+    if (cached && cached.expSec - 60 > nowSec) return cached.token;
+    const pem = await readFileNamed("systemKeyFile", g.systemKeyFile as string);
+    const token = await signSystemAssertion(
+      pem,
+      g.systemUser as string,
+      g.apiUrl,
+      nowSec,
+    );
+    tokenCache.set(cacheKey, { token, expSec: nowSec + 3600 });
+    return token;
+  }
+  const key = parseKeyJson(await readKeyJson(globalArgs));
   const cacheKey = `${baseUrl(g.apiUrl)}|${key.keyId}`;
   const cached = tokenCache.get(cacheKey);
   if (cached && cached.expSec - 60 > nowSec) return cached.token;

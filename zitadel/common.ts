@@ -5,13 +5,14 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import { getToken, type Json, readKeyJson } from "./api.ts";
+import { credentialKind, getToken, type Json } from "./api.ts";
 
 /**
- * Global arguments shared by every `@dataverket/zitadel/*` model. The service
- * user's key is either a value from a vault (`keyJson`) or a file the
- * definition names (`keyJsonFile`) and that is read at call time — one or the
- * other, never both.
+ * Global arguments shared by every `@dataverket/zitadel/*` model. The
+ * credential is one of three: the service user's key as a value from a vault
+ * (`keyJson`) or as a file the definition names (`keyJsonFile`), or a bearer
+ * token in a file (`accessTokenFile`), which is sent as it is and makes the run
+ * whoever the token belongs to. Each is read at call time; exactly one is set.
  */
 export const GlobalArgsSchema = z.object({
   apiUrl: z.string().describe(
@@ -25,7 +26,16 @@ export const GlobalArgsSchema = z.object({
   ),
   keyJsonFile: z.string().optional().describe(
     "Path to the service user's machine key JSON, read at call time; a " +
-      "leading ~/ is expanded from HOME. Mutually exclusive with keyJson",
+      "leading ~/ is expanded from HOME. One credential only: not with " +
+      "keyJson or accessTokenFile",
+  ),
+  // A path to a token, never the token: a reference, as keyJsonFile is.
+  // swamp-quality-ignore credentials-sensitive-field
+  accessTokenFile: z.string().optional().describe(
+    "Path to a file holding a bearer access token, read at call time and sent " +
+      "as it is, with no exchange: the run is whoever the token belongs to, " +
+      "such as the operator whose own login wrote the file. A leading ~/ is " +
+      "expanded from HOME. One credential only: not with keyJson or keyJsonFile",
   ),
   orgId: z.string().optional().describe(
     "Target organization id (the x-zitadel-orgid header). Omit to act in the " +
@@ -34,6 +44,8 @@ export const GlobalArgsSchema = z.object({
   httpTimeoutMs: z.coerce.number().int().default(30000).describe(
     "Per-request timeout in milliseconds, for the token exchange and API calls",
   ),
+  // An OAuth scope string, which names what a token may reach, never a token.
+  // swamp-quality-ignore credentials-sensitive-field
   tokenScope: z.string().default(
     "openid profile urn:zitadel:iam:org:project:id:zitadel:aud",
   ).describe(
@@ -86,7 +98,7 @@ export interface CheckResult {
 }
 
 /** The subset of the check context the shared checks use. */
-interface CheckContext {
+export interface CheckContext {
   globalArgs: GlobalArgs;
 }
 
@@ -102,28 +114,21 @@ function unresolved(value: unknown): boolean {
 export const checks = {
   "credential-named": {
     description:
-      "Exactly one of keyJson or keyJsonFile names the service user's key",
+      "Exactly one of keyJson, keyJsonFile or accessTokenFile names the credential",
     labels: ["policy"],
     execute: (context: CheckContext): Promise<CheckResult> => {
-      const { keyJson, keyJsonFile } = context.globalArgs;
-      if (keyJson && keyJsonFile) {
-        return Promise.resolve({
-          pass: false,
-          errors: ["give keyJson or keyJsonFile, not both"],
-        });
+      try {
+        credentialKind(context.globalArgs as unknown as Json);
+        return Promise.resolve({ pass: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return Promise.resolve({ pass: false, errors: [message] });
       }
-      if (!keyJson && !keyJsonFile) {
-        return Promise.resolve({
-          pass: false,
-          errors: ["no credential: set keyJson (from a vault) or keyJsonFile"],
-        });
-      }
-      return Promise.resolve({ pass: true });
     },
   },
   "reachable": {
     description:
-      "The instance answers and the service-user key authenticates against it",
+      "The instance answers and the credential authenticates against it",
     labels: ["live"],
     execute: async (context: CheckContext): Promise<CheckResult> => {
       const g = context.globalArgs as unknown as Json;
@@ -134,7 +139,6 @@ export const checks = {
         return { pass: true };
       }
       try {
-        await readKeyJson(g);
         await getToken(g);
         return { pass: true };
       } catch (err) {

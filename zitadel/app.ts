@@ -201,7 +201,7 @@ function loginVersionBody(
 /** Applications of a Zitadel project. */
 export const model = {
   type: "@dataverket/zitadel/app",
-  version: "2026.10.05.1",
+  version: "2026.11.02.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -213,6 +213,12 @@ export const model = {
       toVersion: "2026.10.05.1",
       description:
         "ensureOidc takes idTokenRoleAssertion, accessTokenRoleAssertion, idTokenUserinfoAssertion, loginVersion and loginBaseUri, all off by default as before; redirectSet carries the role assertion and the login UI over; the app record reads them. No existing argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.02.1",
+      description:
+        "accessTokenFile added as a third credential, a bearer sent as it is; no existing argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
