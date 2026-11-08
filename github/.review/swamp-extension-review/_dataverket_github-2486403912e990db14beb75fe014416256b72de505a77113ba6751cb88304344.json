@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/github",
+  "version": "2026.11.08.1",
+  "reviewedAt": "2026-11-09T09:03:09Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged: token is sensitive in the global schema and comes from a vault expression; the fetch transport in repo_settings.ts masks the token wherever a response echoes it; Octokit receives it only as auth. writeRecord logs only data names, never a token."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs its outcome at info with structured placeholders. writeRecord warns once per repository, with {legacy} and {name} as properties, the first time it writes a portable name while the pre-2026.11.08.1 name holds data, and points at the README for the removal. Verified live: one warning on the first run, none on the second, none for a repository never listed."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The REST transport throws before any writeResource with method, path, status and GitHub's message; repoDelete treats 404 as absent. readOrNull swallows every error from readResource deliberately: the read-back only decides whether to print the notice, and a name Windows cannot store fails at the path rather than as not-found; the write itself still surfaces its own errors."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "The three repo_settings methods and the check are tested with a strict fake caller and a mocked fetch. New: dataName rejects every character Windows refuses and a trailing dot, keeps the three specs distinct and never starts with upstream's repo- prefix; legacyDataName matches what the old safeName produced; writeRecord warns once and never twice, stays quiet without old data, without readResource and when the old name cannot be read; branches_list end to end writes branches-<repo>. 22 tests. Still open from upstream: the four Octokit methods (sync, ensureRepo, ensureRelease, openPr) have no injectable client."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "Unchanged: ensureRepo, ensureRelease and openPr find existing state first; default_branch_ensure reports unchanged; repo_delete treats absent as a no-op. Kept from upstream: ensureRepo creates only and never converges an existing repository's settings. The name change is non-destructive: nothing deletes, renames or rewrites data under an old name; removal is the user's swamp data delete --prefix, documented with its dry run."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged: every page of repositories, releases and pulls through Octokit paginate; branches_list follows every page up to a cap and records truncated. No Retry-After handling."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "No files, handles or cloud resources beyond what is recorded; every request carries the method's abort signal. The two read-backs in writeRecord run concurrently and hold nothing."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and tests use acme, tool, example-org and forge.example.net; the issue links point at the public tracker and the Swamp Club lab. No real hosts or account identifiers."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged: every schema is a plain z.object; the info objects written are the schema types themselves, so schema-write conformance holds field for field (owner, repo, defaultBranch, branches, truncated, timestamp; owner, repo, defaultBranch, action, timestamp; owner, repo, action, timestamp)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All seven resource specs declare lifetime infinite and garbageCollection 10; the README says so in one place. An item left under an old name is never expired by GC, which is why the README gives the explicit delete."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "Unchanged: releases and pull requests are create only, as upstream designed. Narrow by intent."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: github-token-accepted (label live) runs before every method and proves the token and that it can see the owner."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated: repos; repo-<slug>; release-<slug>-<slug>; pull-<slug>-<slug>-<slug>; branches-<repo>; default-branch-<repo>; delete-<repo>. The three follow upstream's shape: spec word first, parts joined with -, the repository through the same slug helper, no owner since the owner is the model's. Each spec is written by one method; the first words differ from upstream's repo- so a repository named delete-x cannot collide with a delete receipt. No ':' anywhere (dataverket-org/swamp-extensions#1, swamp-club/swamp#3205); the repository is reduced to [A-Za-z0-9._-] with trailing dots trimmed. Verified live against swamp 20261106: the portability warning the old names drew is gone."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "writeRecord reads back the latest record under the new and the old name through context.readResource, both tolerant of failure, only to decide whether to print the one-time notice; it uses nothing beyond the documented context API, never reads another behavior's data and never deletes. Old data is left in place; the README documents its removal with swamp data delete --prefix, dry run first, verified live."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Version 2026.11.08.1 with a no-op upgrades entry after the 2026.10.05.1 one; the global arguments are unchanged, so a definition is stamped and not transformed. The chain is chronological and tested to end at the model's version. Verified live: an instance created at 2026.10.27.1 reports typeVersion 2026.11.08.1 and staleness current after one run."
+    }
+  ]
+}

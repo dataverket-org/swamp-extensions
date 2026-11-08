@@ -155,12 +155,19 @@ async function getRepo(
 /** The `@dataverket/github` model: repositories, releases and pull requests. */
 export const model = {
   type: "@dataverket/github",
-  version: "2026.10.05.1",
+  version: "2026.11.08.1",
   upgrades: [
     {
       toVersion: "2026.10.05.1",
       description:
         "Forked from @goodcraft/github 2026.06.14.1 as @dataverket/github; no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.08.1",
+      description:
+        "branches_list, default_branch_ensure and repo_delete store under portable data names " +
+        "(branches-<repo>, no ':'); no schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

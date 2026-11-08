@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/github"
-version: "2026.10.27.1"
+version: "2026.11.08.1"
 description: >
   GitHub repositories, releases, pull requests and repository settings for
   swamp, over the REST API. One model type, `@dataverket/github`.
@@ -21,6 +21,11 @@ description: >
   text. This is what a push mirror needs: GitHub rejects a mirror push from a
   repository whose default branch is not the one being pushed, and the fix is
   to converge GitHub's default first.
+
+  Their records are stored under portable data names, `branches-<repo>`,
+  `default-branch-<repo>` and `delete-<repo>`, so they hold on Windows too;
+  before 2026.11.08.1 the names used `:`, which Windows refuses. Data under
+  an old name is left where it is; the README says how to remove it.
 
   A live pre-flight check proves the token is still accepted and can see the
   model's owner. The token comes from a vault expression and is never

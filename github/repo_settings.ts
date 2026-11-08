@@ -14,6 +14,7 @@
  * @module
  */
 import { z } from "npm:zod@4";
+import { slug } from "./_lib/github_plan.ts";
 
 /** One REST request against the GitHub API. */
 export interface ApiCall {
@@ -98,7 +99,85 @@ async function call(api: Caller, c: ApiCall): Promise<ApiResult> {
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
   `/repos/${enc(owner)}/${enc(repo)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
+
+/** The specs this module writes, and the word each record's name starts with. */
+const NAME_PART = {
+  repoDelete: "delete",
+  branches: "branches",
+  defaultBranch: "default-branch",
+} as const;
+type RecordSpec = keyof typeof NAME_PART;
+
+/**
+ * The name a record is stored under: `branches-tool`, `default-branch-tool`,
+ * `delete-tool`, the shape of upstream's `repo-<slug>`. The owner is the
+ * model's, so the repository alone makes the name unique, and the spec word
+ * comes first so no two specs share a name. A data name becomes a directory
+ * name in a filesystem datastore, so it has to hold on Windows too, which
+ * refuses `:` and `< > " | ? *` and a trailing dot or space
+ * (dataverket-org/swamp-extensions#1, swamp-club/swamp#3205); the repository
+ * is reduced to `[A-Za-z0-9._-]` and trailing dots are trimmed.
+ */
+export function dataName(spec: RecordSpec, repo: string): string {
+  return `${NAME_PART[spec]}-${slug(repo).replace(/\.+$/, "")}`;
+}
+
+/**
+ * The name the same record had before 2026.11.08.1, `acme:tool:branches`,
+ * with `/` and `\` turned into `:`. It cannot be written on Windows; on Linux
+ * and macOS data may still exist under it.
+ */
+export function legacyDataName(
+  spec: RecordSpec,
+  owner: string,
+  repo: string,
+): string {
+  return `${owner}:${repo}:${NAME_PART[spec]}`.replace(/[\\/]/g, ":");
+}
+
+/** The latest record under `name`, or null when there is none or it cannot be read. */
+async function readOrNull(
+  context: Pick<Ctx, "readResource">,
+  name: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return (await context.readResource?.(name)) ?? null;
+  } catch {
+    // a name Windows cannot store fails at the path, not as "not found"
+    return null;
+  }
+}
+
+/**
+ * Writes a record under its portable name. The first time a record is written
+ * under that name while data exists under the pre-2026.11.08.1 name, the run
+ * says so once: the old data is left as it was and is no longer updated, and
+ * the README says how to remove it.
+ */
+export async function writeRecord(
+  context: Ctx,
+  spec: RecordSpec,
+  owner: string,
+  repo: string,
+  data: Record<string, unknown>,
+): Promise<{ name: string }> {
+  const name = dataName(spec, repo);
+  const legacy = legacyDataName(spec, owner, repo);
+  if (context.readResource) {
+    const [fresh, old] = await Promise.all([
+      readOrNull(context, name),
+      readOrNull(context, legacy),
+    ]);
+    if (fresh === null && old !== null) {
+      context.logger.warn(
+        "Data under the old name {legacy} is left as it was and is no longer updated; " +
+          "this record and later ones are {name}. README.md, Data names, says how to remove the old data.",
+        { legacy, name },
+      );
+    }
+  }
+  return await context.writeResource(spec, name, data);
+}
 /** Pages of 100 branches to follow; 10000 branches is far past any real repo. */
 const MAX_BRANCH_PAGES = 100;
 
@@ -263,12 +342,20 @@ export async function repoDelete(
 interface Ctx {
   globalArgs: GlobalArgs;
   signal?: AbortSignal;
-  logger: { info(msg: string, props?: Record<string, unknown>): void };
+  logger: {
+    info(msg: string, props?: Record<string, unknown>): void;
+    warn(msg: string, props?: Record<string, unknown>): void;
+  };
   writeResource(
     spec: string,
     name: string,
     data: Record<string, unknown>,
   ): Promise<{ name: string }>;
+  /** Absent in some test contexts; swamp always supplies it to a method. */
+  readResource?(
+    name: string,
+    version?: number,
+  ): Promise<Record<string, unknown> | null>;
 }
 
 /** Branch listing, default-branch convergence, delete and a live check on `@dataverket/github`. */
@@ -359,9 +446,11 @@ export const extension = {
           repo: `${info.owner}/${info.repo}`,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repoDelete",
-          safeName(`${info.owner}:${info.repo}:delete`),
+          info.owner,
+          info.repo,
           info,
         );
         return { dataHandles: [handle] };
@@ -383,9 +472,11 @@ export const extension = {
           count: info.branches.length,
           default: info.defaultBranch || "(none)",
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "branches",
-          safeName(`${info.owner}:${info.repo}:branches`),
+          info.owner,
+          info.repo,
           info,
         );
         return { dataHandles: [handle] };
@@ -411,9 +502,11 @@ export const extension = {
           branch: info.defaultBranch,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "defaultBranch",
-          safeName(`${info.owner}:${info.repo}:default-branch`),
+          info.owner,
+          info.repo,
           info,
         );
         return { dataHandles: [handle] };

@@ -7,9 +7,12 @@ import {
   type ApiCall,
   branchesList,
   type Caller,
+  dataName,
   defaultBranchEnsure,
   extension,
+  legacyDataName,
   repoDelete,
+  writeRecord,
 } from "./repo_settings.ts";
 
 function fakeApi(
@@ -252,6 +255,135 @@ Deno.test("github-token-accepted fails with GitHub's message when the owner is u
     );
     assertEquals(r.pass, false);
     assertStringIncludes(r.errors![0], "Not Found");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+// dataverket-org/swamp-extensions#1: a data name is a directory name in a
+// filesystem datastore, and Windows refuses ':' there, so the names must hold
+// on every platform.
+// deno-lint-ignore no-control-regex
+const WINDOWS_UNSAFE = /[<>:"|?*\\/\x00-\x1f]|[. ]$/;
+
+Deno.test("records are stored under portable names, the spec word first, the owner left out", () => {
+  assertEquals(dataName("branches", "tool"), "branches-tool");
+  assertEquals(dataName("defaultBranch", "tool"), "default-branch-tool");
+  assertEquals(dataName("repoDelete", "tool"), "delete-tool");
+  // whatever the forge hands back, nothing Windows refuses gets through
+  const wild = dataName("branches", 'a<b>:c"d|e?f*g/h\\i. ');
+  assertEquals(WINDOWS_UNSAFE.test(wild), false);
+  assertEquals(wild, "branches-a-b-c-d-e-f-g-h-i");
+  // the same repository under two specs never shares a name, and a repository
+  // named like another spec's word cannot collide with upstream's repo-<slug>
+  assertEquals(
+    new Set(
+      (["branches", "defaultBranch", "repoDelete"] as const).map((spec) =>
+        dataName(spec, "tool")
+      ),
+    ).size,
+    3,
+  );
+  assertEquals(dataName("repoDelete", "tool").startsWith("repo-"), false);
+});
+
+Deno.test("the pre-2026.11.08.1 name is what the old safeName produced", () => {
+  assertEquals(
+    legacyDataName("branches", "acme", "tool"),
+    "acme:tool:branches",
+  );
+  assertEquals(
+    legacyDataName("defaultBranch", "acme", "tool"),
+    "acme:tool:default-branch",
+  );
+  assertEquals(
+    legacyDataName("repoDelete", "acme", "tool"),
+    "acme:tool:delete",
+  );
+  assertEquals(
+    WINDOWS_UNSAFE.test(legacyDataName("branches", "acme", "tool")),
+    true,
+  );
+});
+
+function recordCtx(stored: Record<string, Record<string, unknown>>) {
+  const writes: { spec: string; name: string }[] = [];
+  const warnings: Record<string, unknown>[] = [];
+  const ctx = {
+    globalArgs: { token: "t", owner: "acme" },
+    logger: {
+      info() {},
+      warn(_msg: string, props?: Record<string, unknown>) {
+        warnings.push(props ?? {});
+      },
+    },
+    writeResource(spec: string, name: string) {
+      writes.push({ spec, name });
+      stored[name] = { written: true };
+      return Promise.resolve({ name });
+    },
+    readResource(name: string) {
+      if (name.includes("\0")) throw new Error("os error 123");
+      return Promise.resolve(stored[name] ?? null);
+    },
+  };
+  return { ctx, writes, warnings };
+}
+
+Deno.test("writeRecord writes the portable name and says once that old data is left behind", async () => {
+  const stored: Record<string, Record<string, unknown>> = {
+    "acme:tool:branches": { branches: ["main"] },
+  };
+  const { ctx, writes, warnings } = recordCtx(stored);
+  const h = await writeRecord(ctx, "branches", "acme", "tool", { n: 1 });
+  assertEquals(h.name, "branches-tool");
+  assertEquals(writes, [{ spec: "branches", name: "branches-tool" }]);
+  assertEquals(warnings, [{
+    legacy: "acme:tool:branches",
+    name: "branches-tool",
+  }]);
+  // the old data is untouched, and the next write is quiet
+  assertEquals(stored["acme:tool:branches"], { branches: ["main"] });
+  await writeRecord(ctx, "branches", "acme", "tool", { n: 2 });
+  assertEquals(warnings.length, 1);
+});
+
+Deno.test("writeRecord is quiet without old data, without readResource, and when the old name cannot be read", async () => {
+  const fresh = recordCtx({});
+  await writeRecord(fresh.ctx, "repoDelete", "acme", "tool", { n: 1 });
+  assertEquals(fresh.warnings, []);
+  assertEquals(fresh.writes[0].name, "delete-tool");
+
+  const { readResource: _, ...bare } = recordCtx({}).ctx;
+  const h = await writeRecord(bare, "defaultBranch", "acme", "tool", { n: 1 });
+  assertEquals(h.name, "default-branch-tool");
+
+  // on Windows the old name fails at the path; that is "no old data", not a failure
+  const broken = recordCtx({});
+  const unsafe = await writeRecord(broken.ctx, "branches", "acme", "tool\0", {
+    n: 1,
+  });
+  assertEquals(unsafe.name, "branches-tool");
+  assertEquals(broken.warnings, []);
+});
+
+Deno.test("branches_list stores its record under the portable name", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (input: string | URL | Request) => {
+    const url = String(input);
+    const body = url.endsWith("/branches?per_page=100&page=1")
+      ? [{ name: "main" }]
+      : { default_branch: "main" };
+    return Promise.resolve(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+  };
+  try {
+    const { ctx, writes } = recordCtx({});
+    const methods = extension.methods[0];
+    const r = await methods.branches_list.execute({ name: "tool" }, ctx);
+    assertEquals(r.dataHandles, [{ name: "branches-tool" }]);
+    assertEquals(writes, [{ spec: "branches", name: "branches-tool" }]);
   } finally {
     globalThis.fetch = original;
   }

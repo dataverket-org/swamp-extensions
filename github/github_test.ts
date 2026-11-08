@@ -11,7 +11,7 @@ import {
 
 Deno.test("the forked base owns the @dataverket/github type at this package's version", () => {
   assertEquals(model.type, "@dataverket/github");
-  assertEquals(model.version, "2026.10.05.1");
+  assertEquals(model.version, "2026.11.08.1");
   // the add-on lands on the same type, not on another collective's
   assertEquals(extension.type, model.type);
 });

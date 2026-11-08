@@ -124,18 +124,52 @@ deleted organization repositories restorable for 90 days.
 
 ## What gets recorded
 
-| Spec            | Lifetime | Holds                                                    |
-| --------------- | -------- | -------------------------------------------------------- |
-| `repos`         | infinite | The owner's repositories, from `sync`                    |
-| `repoEnsure`    | infinite | The outcome of an `ensureRepo`: exists, created, planned |
-| `release`       | infinite | The outcome of an `ensureRelease`                        |
-| `pull`          | infinite | The outcome of an `openPr`                               |
-| `branches`      | infinite | A repository's branches and its default branch           |
-| `defaultBranch` | infinite | Which branch is now default, and whether it changed      |
-| `repoDelete`    | infinite | A repository deletion under the model's owner            |
+| Spec            | Name                        | Holds                                                    |
+| --------------- | --------------------------- | -------------------------------------------------------- |
+| `repos`         | `repos`                     | The owner's repositories, from `sync`                    |
+| `repoEnsure`    | `repo-<repo>`               | The outcome of an `ensureRepo`: exists, created, planned |
+| `release`       | `release-<repo>-<tag>`      | The outcome of an `ensureRelease`                        |
+| `pull`          | `pull-<repo>-<head>-<base>` | The outcome of an `openPr`                               |
+| `branches`      | `branches-<repo>`           | A repository's branches and its default branch           |
+| `defaultBranch` | `default-branch-<repo>`     | Which branch is now default, and whether it changed      |
+| `repoDelete`    | `delete-<repo>`             | A repository deletion under the model's owner            |
 
-No secret is recorded. The token lives in the vault the definition names, and a
-response that echoes it back is masked before it becomes data.
+Every spec has an infinite lifetime and keeps ten versions. No secret is
+recorded. The token lives in the vault the definition names, and a response that
+echoes it back is masked before it becomes data.
+
+## Data names
+
+A data name becomes a directory name in a filesystem datastore, so it has to
+hold on Windows too, which refuses `:` and `< > " | ? *` in a file name and a
+trailing dot or space. Each name above is a spec word and the repository joined
+with `-`, the repository reduced to letters, digits, `.`, `_` and `-`:
+`branches-tool`, `default-branch-tool`, `delete-tool`. The owner is the model's,
+so it is not repeated in the name, the same shape as upstream's `repo-<repo>`.
+
+Before 2026.11.08.1 the three repository-settings records were named
+`acme:tool:branches`, `acme:tool:default-branch` and `acme:tool:delete`, and
+every method writing one failed on Windows after its API call had succeeded
+([issue 1](https://github.com/dataverket-org/swamp-extensions/issues/1),
+[swamp-club/swamp#3205](https://swamp-club.com/lab/3568)).
+
+### Upgrading from a version before 2026.11.08.1
+
+Nothing is required and nothing stored is touched. The next run writes under the
+new name; an item under an old name stays where it is, is no longer updated, and
+still counts as a latest record under its own name, so a spec query without a
+run filter returns it beside the new one. The run says so once per repository,
+the first time it writes a new name while the old one holds data. An expression
+that reads an old name by name keeps returning the last value stored there and
+should be pointed at the new name.
+
+Every old name starts with the owner and `:`, and no new name contains `:`, so
+one prefix delete removes them. Preview first; the delete is permanent:
+
+```sh
+swamp data delete github --prefix 'acme:' --dry-run
+swamp data delete github --prefix 'acme:' --yes
+```
 
 ## Changes from upstream
 
