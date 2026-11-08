@@ -240,3 +240,229 @@ Deno.test("a named instanceId is taken without a search", async () => {
     fake.restore();
   }
 });
+
+Deno.test("instanceList stores every instance by id with the friendly state and the version", async () => {
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) {
+      return {
+        result: [
+          {
+            id: INSTANCE,
+            name: "dataverket",
+            state: "INSTANCE_STATE_RUNNING",
+            version: "v4.19.3",
+          },
+          { id: "2", name: "osl1", state: "INSTANCE_STATE_RUNNING" },
+        ],
+      };
+    }
+    return undefined;
+  });
+  const { context, written } = systemContext();
+  try {
+    await model.methods.instanceList.execute({}, context);
+    assertEquals(written.map((w) => w.name), [
+      `instance-${INSTANCE}`,
+      "instance-2",
+    ]);
+    assertEquals(written[0].data.state, "running");
+    assertEquals(written[0].data.version, "v4.19.3");
+    assertEquals(written[1].data.name, "osl1");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("instanceCreate leaves an instance of that name alone and mints nothing", async () => {
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) {
+      return { result: [{ id: INSTANCE, name: "osl1" }] };
+    }
+    return undefined;
+  });
+  const { context, written } = systemContext();
+  try {
+    await model.methods.instanceCreate.execute(
+      {
+        name: "osl1",
+        ownerUsername: "admin",
+        ownerCredential: "pat",
+        expirationDate: "2027-01-01T00:00:00Z",
+      },
+      context,
+    );
+    assertEquals(written.length, 1);
+    assertEquals(written[0].spec, "instance");
+    assertEquals(written[0].data.action, "unchanged");
+    assertEquals(fake.calls.length, 1);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("instanceCreate makes the instance with a machine owner and stores its token once", async () => {
+  let created: unknown;
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) return { result: [{ id: INSTANCE, name: "x" }] };
+    if (line(call) === "POST /system/v1/instances/_create") {
+      created = call.body;
+      return { instanceId: "2", pat: "PAT-SECRET" };
+    }
+    return undefined;
+  });
+  const { context, written } = systemContext();
+  try {
+    await model.methods.instanceCreate.execute(
+      {
+        name: "osl1",
+        firstOrgName: "osl1",
+        customDomain: "id.osl1.example",
+        defaultLanguage: "nb",
+        ownerUsername: "swamp",
+        ownerName: "swamp owner",
+        ownerCredential: "pat",
+        expirationDate: "2027-01-01T00:00:00Z",
+      },
+      context,
+    );
+    assertEquals(created, {
+      instanceName: "osl1",
+      firstOrgName: "osl1",
+      customDomain: "id.osl1.example",
+      defaultLanguage: "nb",
+      machine: {
+        userName: "swamp",
+        name: "swamp owner",
+        personalAccessToken: { expirationDate: "2027-01-01T00:00:00Z" },
+      },
+    });
+    // The owner's secret is the first thing stored, before any other call.
+    assertEquals(written[0].spec, "instance-owner");
+    assertEquals(written[0].name, "instance-owner-osl1-swamp");
+    assertEquals(written[0].data.secret, "PAT-SECRET");
+    assertEquals(written[0].data.kind, "pat");
+    assertEquals(written[1].spec, "instance");
+    assertEquals(written[1].name, "instance-2");
+    assertEquals(written[1].data.action, "created");
+    assertEquals(written[1].data.name, "osl1");
+    assertEquals(fake.calls.length, 2);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("instanceCreate with a key decodes the key JSON Zitadel returns as base64", async () => {
+  let created: unknown;
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) return { result: [] };
+    if (line(call) === "POST /system/v1/instances/_create") {
+      created = call.body;
+      return {
+        instanceId: "3",
+        machineKey: btoa('{"type":"serviceaccount","keyId":"k1"}'),
+      };
+    }
+    return undefined;
+  });
+  const { context, written } = systemContext();
+  try {
+    await model.methods.instanceCreate.execute(
+      {
+        name: "osl1",
+        ownerUsername: "admin",
+        ownerCredential: "key",
+        expirationDate: "2027-01-01T00:00:00Z",
+      },
+      context,
+    );
+    assertEquals(
+      (created as { machine: { machineKey: unknown } }).machine.machineKey,
+      { type: "KEY_TYPE_JSON", expirationDate: "2027-01-01T00:00:00Z" },
+    );
+    assertEquals(written[1].data.name, "osl1");
+    assertEquals(
+      written[0].data.secret,
+      '{"type":"serviceaccount","keyId":"k1"}',
+    );
+    assertEquals(written[0].data.kind, "key");
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("instanceCreate fails when Zitadel returns no credential for the owner", async () => {
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) return { result: [] };
+    if (line(call) === "POST /system/v1/instances/_create") {
+      return { instanceId: "4" };
+    }
+    return undefined;
+  });
+  const { context, written } = systemContext();
+  try {
+    await assertRejects(
+      () =>
+        model.methods.instanceCreate.execute(
+          {
+            name: "osl1",
+            ownerUsername: "admin",
+            ownerCredential: "pat",
+            expirationDate: "2027-01-01T00:00:00Z",
+          },
+          context,
+        ),
+      Error,
+      "returned no pat",
+    );
+    assertEquals(written.length, 0);
+  } finally {
+    fake.restore();
+  }
+});
+
+/** A throwaway RSA private key as a PKCS#8 PEM file, for a check that signs. */
+async function tempKeyFile(): Promise<string> {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  );
+  const der = new Uint8Array(
+    await crypto.subtle.exportKey("pkcs8", pair.privateKey),
+  );
+  const b64 = btoa(String.fromCharCode(...der)).replace(/(.{64})/g, "$1\n");
+  const path = await Deno.makeTempFile({ suffix: ".pem" });
+  await Deno.writeTextFile(
+    path,
+    `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`,
+  );
+  return path;
+}
+
+Deno.test("the reachable check passes with two instances; only a domain method needs to pick one", async () => {
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) return { result: [{ id: "1" }, { id: "2" }] };
+    return undefined;
+  });
+  const { context } = systemContext();
+  const pem = await tempKeyFile();
+  (context.globalArgs as unknown as Record<string, unknown>).systemKeyFile =
+    pem;
+  try {
+    const result = await model.checks.reachable.execute(
+      context as unknown as Parameters<
+        typeof model.checks.reachable.execute
+      >[0],
+    );
+    assertEquals(result.errors, undefined);
+    assertEquals(result.pass, true);
+  } finally {
+    fake.restore();
+    await Deno.remove(pem);
+  }
+});

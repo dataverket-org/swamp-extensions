@@ -29,12 +29,14 @@ import {
   boolArg,
   checks,
   type DataHandle,
+  friendlyState,
   GlobalArgsSchema,
   jsonArray,
   type MethodResult,
   type ModelContext,
   nowIso,
   obj,
+  optBool,
   optStr,
   optStrList,
   str,
@@ -45,11 +47,13 @@ import {
   ActiveIdentityProvider,
   BrandingSettings,
   DomainSettings,
+  EmailProvider,
   GeneralSettings,
   LegalSupportSettings,
   LockoutSettings,
   LoginSettings,
   LoginTranslation,
+  NotificationSettings,
   OidcTokenSettings,
   PasswordComplexitySettings,
   PasswordExpirySettings,
@@ -143,6 +147,33 @@ const OIDC_TOKENS_PATH = "/admin/v1/settings/oidc";
 
 /** Where the instance's secret generators are read and written. */
 const SECRET_GENERATORS_PATH = "/admin/v1/secretgenerators";
+const EMAIL_PROVIDERS_PATH = "/admin/v1/email/_search";
+const NOTIFICATION_PATH = "/admin/v1/policies/notification";
+
+/** One email provider as the v1 Admin API lists it, without its secrets. */
+function providerRecord(
+  raw: Json,
+  timestamp: string,
+): Record<string, unknown> {
+  const smtp = raw.smtp === undefined ? undefined : obj(raw.smtp);
+  const http = raw.http === undefined ? undefined : obj(raw.http);
+  return {
+    id: str(raw.id),
+    description: optStr(raw.description),
+    state: friendlyState(raw.state ?? "EMAIL_PROVIDER_STATE_UNSPECIFIED"),
+    kind: smtp ? "smtp" : http ? "http" : "unknown",
+    senderAddress: optStr(smtp?.senderAddress),
+    senderName: optStr(smtp?.senderName),
+    replyToAddress: optStr(smtp?.replyToAddress),
+    host: optStr(smtp?.host),
+    user: optStr(smtp?.user),
+    tls: smtp === undefined ? undefined : smtp.tls === true,
+    endpoint: optStr(http?.endpoint),
+    scope: "instance",
+    action: "observed",
+    timestamp,
+  };
+}
 
 /** The short name of a generator Zitadel names, when it is one this type knows. */
 function generatorName(generatorType: unknown): GeneratorName | undefined {
@@ -306,7 +337,7 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.11.06.1",
+  version: "2026.11.08.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -331,6 +362,12 @@ export const model = {
         "secretGeneratorSet sets how long a one-time code stays valid, and read also stores each secret generator; no argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
+    {
+      toVersion: "2026.11.08.1",
+      description:
+        "read also stores each email provider and the notification settings when the key may read the instance; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
   ],
   globalArguments: GlobalArgsSchema,
   checks,
@@ -346,6 +383,20 @@ export const model = {
       description:
         "How one kind of one-time code is made, instance-wide: its length and how long it stays valid; the passkey registration code is passwordlessInitCode",
       schema: SecretGenerator,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    "email-provider": {
+      description:
+        "How the instance's mails leave: an SMTP or HTTP provider's sender, host and user, never its password",
+      schema: EmailProvider,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    notification: {
+      description:
+        "Whether people are mailed about changes to their account, instance-wide",
+      schema: NotificationSettings,
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
@@ -421,7 +472,7 @@ export const model = {
     read: {
       kind: "list" as const,
       description:
-        "Read every settings kind in force for one organization, or for the instance, and store one resource per kind — each saying whether the values are the organization's own or inherited. The instance's OIDC token lifetimes come with either read, as oidc-tokens-instance, when the key may read the instance. Read-only, one run, one lock.",
+        "Read every settings kind in force for one organization, or for the instance, and store one resource per kind — each saying whether the values are the organization's own or inherited. The instance's OIDC token lifetimes, secret generators, email providers and notification settings come with either read when the key may read the instance. Read-only, one run, one lock.",
       arguments: ReadArgs,
       execute: async (
         args: z.infer<typeof ReadArgs>,
@@ -456,9 +507,10 @@ export const model = {
           );
         }
 
-        // Token lifetimes and secret generators are instance-wide and on the v1
-        // Admin API, so a key that may read an organization but not the
-        // instance is told, and the organization's settings are still stored.
+        // Token lifetimes, secret generators, email providers and the
+        // notification policy are instance-wide and on the v1 Admin API, so a
+        // key that may read an organization but not the instance is told, and
+        // the organization's settings are still stored.
         try {
           const generators = await call(globalArgs, {
             method: "POST",
@@ -474,6 +526,43 @@ export const model = {
                 generatorRecord(raw, "observed", timestamp)
               ),
               (generator) => str(generator.generator),
+            ),
+          );
+          const providers = await call(globalArgs, {
+            method: "POST",
+            path: EMAIL_PROVIDERS_PATH,
+            body: {},
+          });
+          handles.push(
+            ...await writeAll(
+              context,
+              "email-provider",
+              "email-provider",
+              asArray(providers.body.result).map((raw) =>
+                providerRecord(raw, timestamp)
+              ),
+              (provider) => str(provider.description) || str(provider.id),
+            ),
+          );
+          const notification = await call(globalArgs, {
+            method: "GET",
+            path: NOTIFICATION_PATH,
+          });
+          const policy = obj(notification.body.policy);
+          handles.push(
+            ...await writeOne(
+              context,
+              "notification",
+              "notification",
+              "instance",
+              {
+                passwordChange: policy.passwordChange === true,
+                isDefault: optBool(policy.isDefault),
+                scope: "instance",
+                orgId,
+                action: "observed",
+                timestamp,
+              },
             ),
           );
           const result = await call(globalArgs, {
@@ -513,7 +602,7 @@ export const model = {
           const message = err instanceof Error ? err.message : String(err);
           if (!/HTTP 403/.test(message)) throw err;
           context.logger.warning(
-            "this key may not read the instance's secret generators and OIDC token lifetimes; no secret-generator or oidc-tokens record this run",
+            "this key may not read the instance's secret generators, email providers, notification settings and OIDC token lifetimes; no secret-generator, email-provider, notification or oidc-tokens record this run",
           );
         }
 

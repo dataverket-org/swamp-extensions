@@ -11,10 +11,21 @@
  * nothing else: the signed assertion is the bearer, verified against the
  * public key the instance was configured with.
  *
- * The scope is the four domain operations and no other, although the role could
- * do more. `domainRemove` is verify-first: `confirm` must repeat the live
- * domain, a generated domain is refused before Zitadel refuses it, and `dryRun`
- * only reports. `domainAdd` and `domainSetPrimary` are idempotent.
+ * The scope is the four domain operations and the instances themselves, and no
+ * other, although the role could do more. `domainRemove` is verify-first:
+ * `confirm` must repeat the live domain, a generated domain is refused before
+ * Zitadel refuses it, and `dryRun` only reports. `domainAdd` and
+ * `domainSetPrimary` are idempotent.
+ *
+ * `instanceList` is the one read that spans instances, which is how one
+ * deployment hosting several is seen as one thing. `instanceCreate` makes an
+ * instance with its first organization and a machine user as its owner, and
+ * emits that owner's token or key exactly once into a sensitive spec: a human
+ * owner would need a password in the request, and no password is ever an
+ * argument in this extension, so people are added to the instance afterwards
+ * with the user type as that owner. An instance already named so is left as it
+ * is. There is no `instanceRemove`: removing an instance removes every
+ * organization and user in it, and stays a deliberate act with the key in hand.
  *
  * @module
  */
@@ -23,6 +34,7 @@ import {
   asArray,
   call,
   credentialKind,
+  fromBase64,
   getToken,
   type Json,
   seg,
@@ -33,6 +45,7 @@ import {
   type CheckResult,
   DryRun,
   forgetInstance,
+  friendlyState,
   type MethodResult,
   type ModelContext,
   nowIso,
@@ -42,7 +55,11 @@ import {
   writeAll,
   writeOne,
 } from "./common.ts";
-import { InstanceDomain, InstanceInfo } from "./schema.ts";
+import {
+  InstanceDomain,
+  InstanceInfo,
+  InstanceOwnerCredential,
+} from "./schema.ts";
 
 /** What a System API definition names: the instance, the key, the key's name. */
 export const SystemGlobalArgsSchema = z.object({
@@ -87,6 +104,37 @@ const RemoveArgs = z.object({
   ),
   dryRun: DryRun.describe("true reports what would be removed and stops"),
 });
+const InstanceCreateArgs = z.object({
+  name: z.string().min(1).describe(
+    "The instance's name; an instance already named so is left as it is",
+  ),
+  firstOrgName: z.string().optional().describe(
+    "The first organization's name; Zitadel names it ZITADEL when omitted",
+  ),
+  customDomain: z.string().optional().describe(
+    "A custom domain added at creation, e.g. id.example.org, beside the " +
+      "generated one, and made the primary",
+  ),
+  defaultLanguage: z.string().optional().describe(
+    "BCP-47 tag for the instance's default language, e.g. nb or en",
+  ),
+  ownerUsername: z.string().min(1).default("admin").describe(
+    "The machine user made in the first organization as the instance's " +
+      "owner, IAM_OWNER; people are added afterwards with the user type as " +
+      "this owner",
+  ),
+  ownerName: z.string().optional().describe(
+    "The owner's display name; the username when omitted",
+  ),
+  ownerCredential: z.enum(["pat", "key"]).default("pat").describe(
+    "What is minted for the owner, once: pat is a personal access token that " +
+      "accessTokenFile can name, key a machine key's JSON that keyJsonFile can",
+  ),
+  expirationDate: z.string().min(1).describe(
+    "RFC3339 expiry of the owner's token or key, e.g. 2027-01-01T00:00:00Z; " +
+      "the System API requires one",
+  ),
+});
 const Empty = z.object({});
 
 /** The instance to act on, as the System API lists it. */
@@ -94,6 +142,43 @@ interface LiveInstance {
   id: string;
   name?: string;
   state?: string;
+  version?: string;
+}
+
+/** Every instance the System API lists. */
+async function listInstances(globalArgs: Json): Promise<LiveInstance[]> {
+  const result = await call(globalArgs, {
+    method: "POST",
+    path: system("/instances/_search"),
+    body: { query: { offset: "0", limit: 1000, asc: true } },
+  });
+  return asArray(result.body.result).filter((row) => str(row.id))
+    .map(shapeLiveInstance);
+}
+
+function shapeLiveInstance(row: Json): LiveInstance {
+  return {
+    id: str(row.id),
+    name: optStr(row.name),
+    state: optStr(row.state),
+    version: optStr(row.version),
+  };
+}
+
+/** The stored record of one instance. */
+function instanceRecord(
+  live: LiveInstance,
+  action: z.infer<typeof InstanceInfo>["action"],
+  timestamp: string,
+): z.infer<typeof InstanceInfo> {
+  return {
+    instanceId: live.id,
+    name: live.name,
+    state: live.state ? friendlyState(live.state) : undefined,
+    version: live.version,
+    action,
+    timestamp,
+  };
 }
 
 /**
@@ -103,17 +188,7 @@ interface LiveInstance {
 async function resolveInstance(globalArgs: Json): Promise<LiveInstance> {
   const named = str(globalArgs.instanceId);
   if (named) return { id: named };
-  const result = await call(globalArgs, {
-    method: "POST",
-    path: system("/instances/_search"),
-    body: { query: { offset: "0", limit: 1000, asc: true } },
-  });
-  const instances = asArray(result.body.result).filter((row) => str(row.id))
-    .map((row) => ({
-      id: str(row.id),
-      name: optStr(row.name),
-      state: optStr(row.state),
-    }));
+  const instances = await listInstances(globalArgs);
   if (instances.length === 1) return instances[0];
   if (instances.length === 0) {
     throw new Error("the System API lists no instance");
@@ -166,12 +241,18 @@ function shapeDomain(
 /** The instance's domains, kept with a System API user. */
 export const model = {
   type: "@dataverket/zitadel/system",
-  version: "2026.11.06.1",
+  version: "2026.11.08.1",
   upgrades: [
     {
       toVersion: "2026.11.06.1",
       description:
         "Released with the settings change of this version (secretGeneratorSet); nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.08.1",
+      description:
+        "instanceList lists every instance the deployment hosts and instanceCreate makes one with a machine owner whose token or key is emitted once; the instance record's state is now the friendly spelling (running, not INSTANCE_STATE_RUNNING) and carries the version. No argument changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -199,13 +280,13 @@ export const model = {
     },
     "reachable": {
       description:
-        "The instance answers the System API and the key is one it was configured with",
+        "The instance answers the System API and the key is one it was configured with; which instance a domain method acts on is settled when it runs",
       labels: ["live"],
       execute: async (context: CheckContext): Promise<CheckResult> => {
         const g = context.globalArgs as unknown as Json;
         try {
           await getToken(g);
-          await resolveInstance(g);
+          await listInstances(g);
           return { pass: true };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -230,13 +311,153 @@ export const model = {
       garbageCollection: 10,
     },
     instance: {
-      description: "The instance the System API user acts on",
+      description:
+        "An instance this deployment hosts: the one acted on, or each one instanceList saw",
       schema: InstanceInfo,
+      lifetime: "infinite" as const,
+      garbageCollection: 5,
+    },
+    "instance-owner": {
+      description:
+        "The token or key of a new instance's owner, emitted once by instanceCreate",
+      schema: InstanceOwnerCredential,
       lifetime: "infinite" as const,
       garbageCollection: 5,
     },
   },
   methods: {
+    instanceList: {
+      kind: "list" as const,
+      description:
+        "List every instance this deployment hosts and store one resource per instance, with its name, state and version. Read-only, and the only read here that spans instances; instanceId is not consulted.",
+      arguments: Empty,
+      execute: async (
+        _args: Record<string, never>,
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const globalArgs = context.globalArgs as unknown as Json;
+        context.logger.info("listing the instances the System API user sees");
+        const timestamp = nowIso();
+        const instances = (await listInstances(globalArgs)).map((live) =>
+          instanceRecord(live, "observed", timestamp)
+        );
+        const handles = await writeAll(
+          context,
+          "instance",
+          "instance",
+          instances,
+          (instance) => instance.instanceId,
+        );
+        context.logger.info("stored {count} instances", {
+          count: instances.length,
+        });
+        return { dataHandles: handles };
+      },
+    },
+    instanceCreate: {
+      kind: "create" as const,
+      description:
+        "Create an instance with its first organization and a machine user as its owner, IAM_OWNER, whose personal access token or machine key is emitted once into the sensitive instance-owner spec. Idempotent on the name: an instance already named so is stored as unchanged and nothing is minted. The same deployment then answers for the new instance by its generated domain and by customDomain when given.",
+      arguments: InstanceCreateArgs,
+      execute: async (
+        args: z.infer<typeof InstanceCreateArgs>,
+        context: ModelContext,
+      ): Promise<MethodResult> => {
+        const globalArgs = context.globalArgs as unknown as Json;
+        const name = assertArg(args.name, "name").trim();
+        const timestamp = nowIso();
+        const existing = (await listInstances(globalArgs)).find((i) =>
+          i.name === name
+        );
+        if (existing) {
+          context.logger.info(
+            "instance {name} is already there as {instance}",
+            { name, instance: existing.id },
+          );
+          return {
+            dataHandles: await writeOne(
+              context,
+              "instance",
+              "instance",
+              existing.id,
+              instanceRecord(existing, "unchanged", timestamp),
+            ),
+          };
+        }
+        const machine: Json = {
+          userName: args.ownerUsername,
+          name: args.ownerName ?? args.ownerUsername,
+        };
+        if (args.ownerCredential === "key") {
+          machine.machineKey = {
+            type: "KEY_TYPE_JSON",
+            expirationDate: args.expirationDate,
+          };
+        } else {
+          machine.personalAccessToken = {
+            expirationDate: args.expirationDate,
+          };
+        }
+        const body: Json = { instanceName: name, machine };
+        if (args.firstOrgName) body.firstOrgName = args.firstOrgName;
+        if (args.customDomain) body.customDomain = args.customDomain;
+        if (args.defaultLanguage) body.defaultLanguage = args.defaultLanguage;
+        context.logger.info(
+          "creating instance {name} owned by machine user {owner} with a {kind}",
+          { name, owner: args.ownerUsername, kind: args.ownerCredential },
+        );
+        const created = await call(globalArgs, {
+          method: "POST",
+          path: system("/instances/_create"),
+          body,
+        });
+        const instanceId = str(created.body.instanceId);
+        if (!instanceId) {
+          throw new Error("Zitadel created the instance but named no id");
+        }
+        const secret = args.ownerCredential === "key"
+          ? fromBase64(str(created.body.machineKey))
+          : str(created.body.pat);
+        if (!secret) {
+          throw new Error(
+            `Zitadel created instance ${instanceId} but returned no ${args.ownerCredential} for its owner`,
+          );
+        }
+        // The owner's credential is stored before anything else is asked of
+        // Zitadel: a new instance is not readable the moment it is created,
+        // and a read that fails here must not lose the one copy of the secret.
+        const handles = await writeOne(
+          context,
+          "instance-owner",
+          "instance-owner",
+          `${name}-${args.ownerUsername}`,
+          {
+            instanceId,
+            instanceName: name,
+            username: args.ownerUsername,
+            kind: args.ownerCredential,
+            expirationDate: args.expirationDate,
+            secret,
+            action: "created",
+            timestamp,
+          },
+        );
+        handles.push(
+          ...await writeOne(
+            context,
+            "instance",
+            "instance",
+            instanceId,
+            instanceRecord({ id: instanceId, name }, "created", timestamp),
+          ),
+        );
+        context.logger.warning(
+          "created instance {instance} ({name}); its owner's {kind} is stored once as a secret",
+          { instance: instanceId, name, kind: args.ownerCredential },
+        );
+        return { dataHandles: handles };
+      },
+    },
     domainList: {
       kind: "list" as const,
       description:
@@ -264,13 +485,13 @@ export const model = {
           (d) => d.domain,
         );
         handles.push(
-          ...await writeOne(context, "instance", "instance", instanceId, {
+          ...await writeOne(
+            context,
+            "instance",
+            "instance",
             instanceId,
-            name: instance.name,
-            state: instance.state,
-            action: "observed",
-            timestamp,
-          }),
+            instanceRecord(instance, "observed", timestamp),
+          ),
         );
         context.logger.info("stored {count} domains", {
           count: domains.length,

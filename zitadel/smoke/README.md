@@ -8,9 +8,11 @@ _not_ happen.
 ## Run it
 
 ```sh
-# 1. a Zitadel of your own, with a service-user key written out at startup.
+# 1. a Zitadel of your own, with a service-user key written out at startup
+#    and a System API user whose key mksystem.sh makes first.
 #    ZITADEL_VERSION picks the release; run the suite on the one you deploy.
 mkdir -p machinekey && chmod 777 machinekey     # rootless podman writes as another uid
+eval "$(./mksystem.sh machinekey)"              # exports ZITADEL_SYSTEMAPIUSERS
 ZITADEL_VERSION=v4.15.3 podman compose -p zit-test up -d
 until curl -sf http://localhost:8899/debug/healthz; do sleep 3; done
 
@@ -22,8 +24,8 @@ mkdir /tmp/zit-smoke && cd /tmp/zit-smoke
 <this directory>/setup.sh <this directory>/machinekey
 
 # 3. the suite
-export REPO=$PWD ORG=$(cat org-id.txt)
-./fixtures.sh && for b in a b c d e f g h i j k l m n o p; do ./neg-$b.sh; done
+export REPO=$PWD ORG=$(cat org-id.txt) API=http://localhost:8899 SYSTEM_PEM=<this directory>/machinekey/system.pem
+./fixtures.sh && for b in a b c d e f g h i j k l m n o p q; do ./neg-$b.sh; done
 
 # 4. and away. setup.sh also left a copy of the throwaway key under
 #    ~/.cache/zitadel-smoke/, which batch E reads through a ~/ path.
@@ -53,6 +55,10 @@ rm -rf /tmp/zit-smoke ~/.cache/zitadel-smoke
 | `p`   | Keys that may do less: a reader that changes nothing, an owner of one project that   |
 |       | touches no other; one name for a grant from `list` and `ensure`; a default auth      |
 |       | method read back; a definition from an older type version migrated on its first run  |
+| `q`   | Instances: the owner's key reads the instance and its members, the System API key    |
+|       | lists and creates one — twice, the second run unchanged — and scopes a definition to |
+|       | it by `instanceId`; a trusted domain added once and removed verify-first; an SMTP    |
+|       | provider stored without its password; every human's factors summed up in one run     |
 
 `fixtures.sh` makes the least it can that the negatives need, and is the only
 batch that walks a golden path.

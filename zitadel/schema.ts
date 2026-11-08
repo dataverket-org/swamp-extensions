@@ -263,11 +263,90 @@ export const InstanceDomain = z.object({
   timestamp: z.string(),
 });
 
-/** The instance a System API user acts on. */
+/** An instance, as the System API lists it or the Admin API describes its own. */
 export const InstanceInfo = z.object({
   instanceId: z.string(),
   name: z.string().optional(),
-  state: z.string().optional(),
+  state: z.string().optional().describe("running, stopped or removed"),
+  version: z.string().optional().describe(
+    "The Zitadel version that answered, where the API says",
+  ),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/**
+ * The credential of an instance's first owner, from `instanceCreate`. The
+ * owner is a machine user with IAM_OWNER on the new instance, and this is the
+ * one time its token or key is seen.
+ */
+export const InstanceOwnerCredential = z.object({
+  instanceId: z.string(),
+  instanceName: z.string(),
+  username: z.string().describe("The machine user that owns the instance"),
+  kind: z.string().describe("pat or key"),
+  expirationDate: z.string(),
+  secret: z.string().meta({ sensitive: true }).describe(
+    "The personal access token, or the machine key's JSON that keyJsonFile " +
+      "can name — emitted once, never readable again",
+  ),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/** A member of the instance: who administers it, and with which roles. */
+export const InstanceMember = z.object({
+  userId: z.string(),
+  preferredLoginName: z.string().optional(),
+  email: z.string().optional(),
+  displayName: z.string().optional(),
+  userType: z.string().optional().describe("human or machine"),
+  orgId: z.string().optional().describe("The organization the user lives in"),
+  roles: z.array(z.string()).describe("Instance roles, e.g. IAM_OWNER"),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/**
+ * A trusted domain: a host the instance accepts as the public origin of a
+ * request, such as a login UI or an application on another name; Zitadel
+ * refuses to work for a Host it does not know.
+ */
+export const TrustedDomain = z.object({
+  domain: z.string(),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/**
+ * An email provider, instance-wide: how Zitadel's mails leave. The record
+ * holds the sender, the host and the user, never the password or signing key.
+ */
+export const EmailProvider = z.object({
+  id: z.string(),
+  description: z.string().optional(),
+  state: z.string().describe("active or inactive"),
+  kind: z.string().describe("smtp or http"),
+  senderAddress: z.string().optional(),
+  senderName: z.string().optional(),
+  replyToAddress: z.string().optional(),
+  host: z.string().optional().describe("SMTP host and port"),
+  user: z.string().optional().describe("The SMTP login, never its password"),
+  tls: z.boolean().optional(),
+  endpoint: z.string().optional().describe("An HTTP provider's endpoint"),
+  scope: z.string().describe("Always instance: a provider is the instance's"),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/** Whether people are told about changes to their account. */
+export const NotificationSettings = z.object({
+  passwordChange: z.boolean().describe(
+    "Whether a person is mailed when their password changes",
+  ),
+  isDefault: z.boolean().optional(),
+  scope: z.string(),
+  orgId: z.string().optional(),
   action: Action,
   timestamp: z.string(),
 });
@@ -943,6 +1022,28 @@ export const AuthFactor = z.object({
   id: z.string().optional().describe("The factor's id, where it has one"),
   name: z.string().optional().describe("What the person called it"),
   state: z.string().describe("ready, not-ready or removed"),
+  action: Action,
+  timestamp: z.string(),
+});
+
+/**
+ * What one person can prove who they are with, summed up: the audit line behind
+ * "who here actually has MFA", one record per human.
+ */
+export const AuthSummary = z.object({
+  userId: z.string(),
+  username: z.string().optional(),
+  email: z.string().optional(),
+  state: z.string().optional().describe("The user's state, e.g. active"),
+  totp: z.boolean().describe("A ready authenticator app"),
+  u2f: z.number().describe("Ready U2F keys"),
+  passkeys: z.number().describe("Ready passkeys"),
+  otpSms: z.boolean(),
+  otpEmail: z.boolean(),
+  factors: z.number().describe("Ready factors of any kind"),
+  mfa: z.boolean().describe(
+    "Whether at least one ready factor or passkey exists",
+  ),
   action: Action,
   timestamp: z.string(),
 });

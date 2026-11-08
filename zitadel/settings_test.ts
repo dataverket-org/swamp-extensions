@@ -45,12 +45,34 @@ const PASSKEY_CODE = {
  * share one key, so a refusal given for the token lifetimes is given for the
  * secret generators too.
  */
+/** An SMTP provider as /admin/v1/email/_search lists it; no password. */
+const SMTP_PROVIDER = {
+  id: "310000000000000001",
+  state: "EMAIL_PROVIDER_STATE_ACTIVE",
+  description: "Nordhost",
+  smtp: {
+    senderAddress: "noreply@example.org",
+    senderName: "Example",
+    tls: true,
+    host: "mail.example.org:587",
+    user: "noreply@example.org",
+  },
+};
+
 function settingsFake(query: string, tokens: FakeResponse = OIDC_TOKENS) {
   return installFake((call) => {
     const path = line(call);
     if (path === "GET /admin/v1/settings/oidc") return tokens;
     if (path === "POST /admin/v1/secretgenerators/_search") {
       return tokens === OIDC_TOKENS ? { result: [PASSKEY_CODE] } : tokens;
+    }
+    if (path === "POST /admin/v1/email/_search") {
+      return tokens === OIDC_TOKENS ? { result: [SMTP_PROVIDER] } : tokens;
+    }
+    if (path === "GET /admin/v1/policies/notification") {
+      return tokens === OIDC_TOKENS
+        ? { policy: { isDefault: true, passwordChange: true } }
+        : tokens;
     }
     if (!path.startsWith("GET /v2/settings")) return undefined;
     if (!path.endsWith(query) && query !== "") return undefined;
@@ -227,6 +249,18 @@ Deno.test("read stores the OIDC token lifetimes as Zitadel reports them and in s
     assertEquals(code?.data.length, 12);
     assertEquals(code?.data.includeSymbols, false);
     assertEquals(code?.data.action, "observed");
+    const mail = written.find((w) => w.spec === "email-provider");
+    assertEquals(mail?.name, "email-provider-nordhost");
+    assertEquals(mail?.data.kind, "smtp");
+    assertEquals(mail?.data.state, "active");
+    assertEquals(mail?.data.senderAddress, "noreply@example.org");
+    assertEquals(mail?.data.host, "mail.example.org:587");
+    assertEquals(mail?.data.tls, true);
+    assertEquals(Object.keys(mail?.data ?? {}).includes("password"), false);
+    const notify = written.find((w) => w.spec === "notification");
+    assertEquals(notify?.name, "notification-instance");
+    assertEquals(notify?.data.passwordChange, true);
+    assertEquals(notify?.data.isDefault, true);
   } finally {
     fake.restore();
   }
@@ -245,6 +279,8 @@ Deno.test("a key that may not read the token lifetimes is warned, and the rest i
     );
     assertEquals(written.find((w) => w.spec === "oidc-tokens"), undefined);
     assertEquals(written.find((w) => w.spec === "secret-generator"), undefined);
+    assertEquals(written.find((w) => w.spec === "email-provider"), undefined);
+    assertEquals(written.find((w) => w.spec === "notification"), undefined);
     assert(written.some((w) => w.spec === "login"));
     assert(
       logs.some((l) =>

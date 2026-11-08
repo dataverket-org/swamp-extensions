@@ -1,8 +1,8 @@
 manifestVersion: 1
 name: "@dataverket/zitadel"
-version: "2026.11.06.1"
+version: "2026.11.08.1"
 description: >
-  Zitadel for swamp, over its API: eight model types, one per resource, with
+  Zitadel for swamp, over its API: nine model types, one per resource, with
   the whole life cycle of each.
 
   `@dataverket/zitadel/project` lists, reads, creates, renames, deactivates and
@@ -25,15 +25,22 @@ description: >
   instance will accept. `@dataverket/zitadel/settings` reads the login,
   lockout, password, branding, domain, legal and security settings in force for
   an organization or the instance, each saying whether it is the
-  organization's own or inherited, writes the two that v2 exposes, and sets
-  how long a one-time code such as a passkey registration code stays valid.
-  `@dataverket/zitadel/system` is the instance's domain list, kept with a
-  System API user: list, add, remove verify-first, and set the primary.
+  organization's own or inherited, with the instance's token lifetimes, secret
+  generators, email providers and notification settings beside them, writes
+  the two that v2 exposes, and sets how long a one-time code such as a passkey
+  registration code stays valid. `@dataverket/zitadel/system` is the instances
+  a deployment hosts, kept with a System API user: each instance's domain list
+  — list, add, remove verify-first, set the primary — and the instances
+  themselves, listed and created with a first organization and a machine owner
+  whose token or key is emitted once. `@dataverket/zitadel/instance` is the
+  same instance read with an ordinary key: its domains, the domains it trusts,
+  and every holder of an instance role; trusted domains are added and removed
+  verify-first.
 
   Projects also carry their grants to other organizations, and the members who
   administer them; users carry their authentication factors and
-  identity-provider links, which is what "does this person actually have MFA"
-  is asked with.
+  identity-provider links, and one run can audit every human's factors with a
+  summary per person, which is what "who here actually has MFA" is asked with.
 
   Every hard delete re-reads the resource first, refuses unless a `confirm`
   argument repeats its live name, and takes `dryRun`; deactivating stays the
@@ -65,6 +72,7 @@ models:
   - action.ts
   - settings.ts
   - system.ts
+  - instance.ts
 workflows: []
 vaults: []
 datastores: []
@@ -74,6 +82,7 @@ additionalFiles:
   - LICENSE.md
 labels:
   - zitadel
+  - instances
   - actions
   - webhooks
   - settings

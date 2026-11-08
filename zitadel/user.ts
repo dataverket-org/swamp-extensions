@@ -61,6 +61,7 @@ import {
 } from "./common.ts";
 import {
   AuthFactor,
+  AuthSummary,
   CredentialRecord,
   DeleteResult,
   IdpLink,
@@ -195,7 +196,12 @@ const MetadataDeleteArgs = z.object({
   keys: jsonArray(z.string()).describe("Metadata keys to delete"),
   dryRun: DryRun.describe("Report what would be deleted and change nothing"),
 });
-const AuthFactorListArgs = z.object({ user: UserRef });
+const AuthFactorListArgs = z.object({
+  user: z.string().min(1).optional().describe(
+    "One person, by user id or username; omit to audit every human in the " +
+      "organization in one run and one lock",
+  ),
+});
 const AuthFactorRemoveArgs = z.object({
   user: UserRef,
   type: z.enum([
@@ -287,10 +293,109 @@ function userFilter(userId: string): Record<string, unknown> {
   return { filters: [{ userIdFilter: { id: userId } }] };
 }
 
+/**
+ * A factor's state as the schema promises it: ready, not-ready or removed.
+ * `friendlyState` keeps an enum's last word, which would call
+ * AUTH_FACTOR_STATE_NOT_READY ready.
+ */
+function factorState(value: unknown): string {
+  const raw = str(value);
+  if (raw.endsWith("_NOT_READY")) return "not-ready";
+  return friendlyState(raw);
+}
+
+/**
+ * The authentication factors of one person: the second factors and the
+ * passkeys, which Zitadel keeps on two endpoints, as one list.
+ */
+async function listFactors(
+  globalArgs: Json,
+  userId: string,
+  username: string,
+  timestamp: string,
+): Promise<Record<string, unknown>[]> {
+  const factors: Record<string, unknown>[] = [];
+  const second = await call(globalArgs, {
+    method: "POST",
+    path: v2(`/users/${seg(userId)}/authentication_factors/_search`),
+    body: {},
+  });
+  for (const row of asArray(second.body.result)) {
+    const state = factorState(row.state);
+    const otp = row.otp === undefined ? undefined : obj(row.otp);
+    const u2f = row.u2f === undefined ? undefined : obj(row.u2f);
+    const otpSms = row.otpSms === undefined ? undefined : obj(row.otpSms);
+    const otpEmail = row.otpEmail === undefined ? undefined : obj(row.otpEmail);
+    const type = otp
+      ? "totp"
+      : u2f
+      ? "u2f"
+      : otpSms
+      ? "otp-sms"
+      : otpEmail
+      ? "otp-email"
+      : "unknown";
+    factors.push({
+      userId,
+      username,
+      type,
+      id: optStr((u2f ?? {}).id),
+      name: optStr((u2f ?? {}).name),
+      state,
+      action: "observed",
+      timestamp,
+    });
+  }
+  const passkeys = await call(globalArgs, {
+    method: "POST",
+    path: v2(`/users/${seg(userId)}/passkeys/_search`),
+    body: {},
+  });
+  for (const row of asArray(passkeys.body.result)) {
+    factors.push({
+      userId,
+      username,
+      type: "passkey",
+      id: optStr(row.id),
+      name: optStr(row.name),
+      state: factorState(row.state),
+      action: "observed",
+      timestamp,
+    });
+  }
+  return factors;
+}
+
+/** One person's factors summed up: what kinds are ready, and whether any is. */
+function summarizeFactors(
+  live: Json,
+  factors: readonly Record<string, unknown>[],
+  timestamp: string,
+): Record<string, unknown> {
+  const ready = factors.filter((f) => f.state === "ready");
+  const count = (type: string) => ready.filter((f) => f.type === type).length;
+  const human = obj(live.human);
+  return {
+    userId: str(live.userId ?? live.id),
+    username: optStr(live.username),
+    email: optStr(obj(human.email).email),
+    state: live.state === undefined ? undefined : friendlyState(live.state),
+    totp: count("totp") > 0,
+    u2f: count("u2f"),
+    passkeys: count("passkey"),
+    otpSms: count("otp-sms") > 0,
+    otpEmail: count("otp-email") > 0,
+    factors: ready.length,
+    mfa: ready.length > 0,
+    action: "observed",
+    timestamp,
+  };
+}
+
 /** Users of a Zitadel organization, human and machine. */
 export const model = {
   type: "@dataverket/zitadel/user",
-  version: "2026.11.06.1",
+  version: "2026.11.08.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -313,6 +418,12 @@ export const model = {
       toVersion: "2026.11.06.1",
       description:
         "Released with the settings change of this version (secretGeneratorSet); nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.08.1",
+      description:
+        "authFactorList takes no user to audit every human in one run, and stores an auth-summary per person beside the factors; user became optional, nothing else changed",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -348,6 +459,13 @@ export const model = {
     "auth-factor": {
       description: "One way a person can prove who they are",
       schema: AuthFactor,
+      lifetime: "infinite" as const,
+      garbageCollection: 10,
+    },
+    "auth-summary": {
+      description:
+        "What one person can prove who they are with, summed up: which kinds are ready and whether any is",
+      schema: AuthSummary,
       lifetime: "infinite" as const,
       garbageCollection: 10,
     },
@@ -1526,88 +1644,74 @@ export const model = {
     authFactorList: {
       kind: "list" as const,
       description:
-        "List what a person can prove who they are with — TOTP, U2F, a code by SMS or email, a passkey — and whether each is ready. Read-only, and the audit behind 'who here actually has MFA'.",
+        "List what a person can prove who they are with — TOTP, U2F, a code by SMS or email, a passkey — and whether each is ready, one auth-factor per factor and one auth-summary per person. Without a user, every human in the organization is audited in one run, so the summaries together answer 'who here actually has MFA'. Read-only.",
       arguments: AuthFactorListArgs,
       execute: async (
         args: z.infer<typeof AuthFactorListArgs>,
         context: ModelContext,
       ): Promise<MethodResult> => {
         const globalArgs = context.globalArgs;
-        const live = await resolveUser(globalArgs, args.user);
-        const userId = str(live.userId ?? live.id);
-        const username = str(live.username);
+        const people: Json[] = args.user
+          ? [await resolveUser(globalArgs, args.user)]
+          : await searchAllV2(
+            globalArgs,
+            v2("/users"),
+            {
+              queries: [
+                {
+                  organizationIdQuery: {
+                    organizationId: await resolveOrgId(globalArgs),
+                  },
+                },
+                { typeQuery: { type: "TYPE_HUMAN" } },
+              ],
+            },
+            "query",
+          );
         context.logger.info(
-          "listing the authentication factors of {username}",
-          {
-            username,
-          },
+          args.user
+            ? "listing the authentication factors of {who}"
+            : "listing the authentication factors of every human, {who} in all",
+          { who: args.user ?? String(people.length) },
         );
         const timestamp = nowIso();
         const factors: Record<string, unknown>[] = [];
-
-        const second = await call(globalArgs, {
-          method: "POST",
-          path: v2(`/users/${seg(userId)}/authentication_factors/_search`),
-          body: {},
-        });
-        for (const row of asArray(second.body.result)) {
-          const state = friendlyState(row.state);
-          const otp = row.otp === undefined ? undefined : obj(row.otp);
-          const u2f = row.u2f === undefined ? undefined : obj(row.u2f);
-          const otpSms = row.otpSms === undefined ? undefined : obj(row.otpSms);
-          const otpEmail = row.otpEmail === undefined
-            ? undefined
-            : obj(row.otpEmail);
-          const type = otp
-            ? "totp"
-            : u2f
-            ? "u2f"
-            : otpSms
-            ? "otp-sms"
-            : otpEmail
-            ? "otp-email"
-            : "unknown";
-          factors.push({
+        const summaries: Record<string, unknown>[] = [];
+        for (const live of people) {
+          const userId = str(live.userId ?? live.id);
+          const username = str(live.username);
+          const own = await listFactors(
+            globalArgs,
             userId,
             username,
-            type,
-            id: optStr((u2f ?? {}).id),
-            name: optStr((u2f ?? {}).name),
-            state,
-            action: "observed",
             timestamp,
-          });
+          );
+          factors.push(...own);
+          summaries.push(summarizeFactors(live, own, timestamp));
         }
-
-        const passkeys = await call(globalArgs, {
-          method: "POST",
-          path: v2(`/users/${seg(userId)}/passkeys/_search`),
-          body: {},
-        });
-        for (const row of asArray(passkeys.body.result)) {
-          factors.push({
-            userId,
-            username,
-            type: "passkey",
-            id: optStr(row.id),
-            name: optStr(row.name),
-            state: friendlyState(row.state),
-            action: "observed",
-            timestamp,
-          });
-        }
-
         const handles = await writeAll(
           context,
           "auth-factor",
           "auth-factor",
           factors,
           (factor) =>
-            `${username}-${str(factor.type)}-${str(factor.id) || "one"}`,
+            `${str(factor.username)}-${str(factor.type)}-${
+              str(factor.id) || "one"
+            }`,
         );
-        context.logger.info("stored {count} authentication factors", {
-          count: factors.length,
-        });
+        handles.push(
+          ...await writeAll(
+            context,
+            "auth-summary",
+            "auth-summary",
+            summaries,
+            (summary) => str(summary.username) || str(summary.userId),
+          ),
+        );
+        context.logger.info(
+          "stored {count} authentication factors of {people} people",
+          { count: factors.length, people: people.length },
+        );
         return { dataHandles: handles };
       },
     },

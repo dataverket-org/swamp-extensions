@@ -33,6 +33,14 @@ done
 # Batch H: a model that holds one project and nothing else.
 create "$T/project" lastone --global-arg apiUrl="$api" --global-arg keyJsonFile="$admin"
 
+# Batch Q: the instance read with the owner's key, and the instances kept
+# with the System API key mksystem.sh made before the instance came up.
+system_pem=$keys/system.pem
+[ -s "$system_pem" ] || { echo "no System API key at $system_pem; run mksystem.sh before compose" >&2; exit 1; }
+create "$T/instance" zitadel-instance --global-arg apiUrl="$api" --global-arg keyJsonFile="$admin"
+create "$T/system" zitadel-system --global-arg apiUrl="$api" --global-arg systemUser=operators --global-arg systemKeyFile="$system_pem"
+run_deno "$smoke/mksmtp.ts" "$admin" "$api" "Smoke SMTP" >/dev/null
+
 # Batch E: one model per way of naming a credential, right and wrong.
 swamp vault put testvault zitadel_key_json --yes <"$admin" >/dev/null
 vault="\${{ vault.get('testvault', 'zitadel_key_json') }}"
@@ -74,7 +82,7 @@ sed "s/^id: .*/id: $id/" "$smoke/workflow-zitadel-selftest.yaml" >"$path"
 # Batch P: two keys that may do less, and a definition from an older version.
 run_deno "$smoke/mkscoped.ts" "$admin" "$api" smoke-reader "$PWD/cred/reader.json" viewer >/dev/null
 run_deno "$smoke/mkscoped.ts" "$admin" "$api" smoke-owner "$PWD/cred/owner.json" owner:owned >/dev/null
-for t in org project app user action settings; do
+for t in org project app user action settings instance; do
   create "$T/$t" "ro-$t" --global-arg apiUrl="$api" --global-arg keyJsonFile="$PWD/cred/reader.json"
 done
 for t in project app user; do

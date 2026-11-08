@@ -33,6 +33,9 @@ services:
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_TYPE: "1"
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINEKEY_EXPIRATIONDATE: "2027-01-01T00:00:00Z"
       ZITADEL_FIRSTINSTANCE_MACHINEKEYPATH: /machinekey/swamp-admin.json
+      # The System API user the zitadel-system model signs as; mksystem.sh
+      # makes the key and prints this variable.
+      ZITADEL_SYSTEMAPIUSERS: ${ZITADEL_SYSTEMAPIUSERS:?run eval "$(./mksystem.sh machinekey)" first}
     volumes:
       - ./machinekey:/machinekey:z
     ports:

@@ -445,9 +445,71 @@ Deno.test("authFactorList gathers second factors and passkeys together", async (
   const { context, written } = makeContext();
   try {
     await model.methods.authFactorList.execute({ user: "kari" }, context);
-    assertEquals(written.map((w) => w.data.type), ["totp", "u2f", "passkey"]);
-    assertEquals(written[1].data.name, "Yubikey");
-    assertEquals(written[2].data.state, "ready");
+    const factors = written.filter((w) => w.spec === "auth-factor");
+    assertEquals(factors.map((w) => w.data.type), ["totp", "u2f", "passkey"]);
+    assertEquals(factors[1].data.name, "Yubikey");
+    assertEquals(factors[2].data.state, "ready");
+    const summary = written.find((w) => w.spec === "auth-summary");
+    assertEquals(summary?.name, "auth-summary-kari");
+    assertEquals(summary?.data.totp, true);
+    assertEquals(summary?.data.u2f, 1);
+    assertEquals(summary?.data.passkeys, 1);
+    assertEquals(summary?.data.factors, 3);
+    assertEquals(summary?.data.mfa, true);
+  } finally {
+    fake.restore();
+  }
+});
+
+Deno.test("authFactorList without a user audits every human, and a person with nothing ready has mfa false", async () => {
+  const other = {
+    ...HUMAN_USER,
+    userId: "500000000000000009",
+    username: "ola",
+    human: { email: { email: "ola@example.org" } },
+  };
+  const fake = installFake((call) => {
+    if (line(call) === SEARCH) {
+      const body = call.body as { queries?: Record<string, unknown>[] };
+      const types = (body.queries ?? []).map((q) => JSON.stringify(q));
+      if (!types.some((q) => q.includes("TYPE_HUMAN"))) return undefined;
+      return users([HUMAN_USER, other]);
+    }
+    if (
+      line(call) ===
+        `POST /v2/users/${HUMAN_USER.userId}/authentication_factors/_search`
+    ) {
+      return { result: [{ state: "AUTH_FACTOR_STATE_READY", otp: {} }] };
+    }
+    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/passkeys/_search`) {
+      return { result: [] };
+    }
+    if (
+      line(call) ===
+        `POST /v2/users/${other.userId}/authentication_factors/_search`
+    ) {
+      return {
+        result: [{ state: "AUTH_FACTOR_STATE_NOT_READY", u2f: { id: "u9" } }],
+      };
+    }
+    if (line(call) === `POST /v2/users/${other.userId}/passkeys/_search`) {
+      return { result: [] };
+    }
+    return undefined;
+  });
+  const { context, written } = makeContext();
+  try {
+    await model.methods.authFactorList.execute({ user: undefined }, context);
+    const summaries = written.filter((w) => w.spec === "auth-summary");
+    assertEquals(summaries.map((w) => w.name), [
+      "auth-summary-kari",
+      "auth-summary-ola",
+    ]);
+    assertEquals(summaries[0].data.mfa, true);
+    assertEquals(summaries[1].data.mfa, false);
+    assertEquals(summaries[1].data.factors, 0);
+    assertEquals(summaries[1].data.email, "ola@example.org");
+    assertEquals(written.filter((w) => w.spec === "auth-factor").length, 2);
   } finally {
     fake.restore();
   }

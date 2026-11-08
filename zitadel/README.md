@@ -1,8 +1,8 @@
 # @dataverket/zitadel
 
 [Zitadel](https://zitadel.com) for [swamp](https://github.com/swamp-club/swamp),
-over its API: eight model types, one per resource, each with the whole life
-cycle of that resource.
+over its API: nine model types, one per resource, each with the whole life cycle
+of that resource.
 
 Forked from
 [`@thomas/zitadel`](https://github.com/thomas-elliott/swamp-extensions) (MIT,
@@ -54,20 +54,21 @@ arguments and the same service-user key.
 
 Human and machine users, over the v2 user service.
 
-| Method                                          | What it does                                                                                                                            |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `list`, `get`                                   | Users, optionally only the humans or only the machines                                                                                  |
-| `ensureMachine`                                 | Find or create a service user, converging name, description, token type                                                                 |
-| `ensureHuman`                                   | Find or create a person, converging their name and email                                                                                |
-| `update`                                        | Login name, a human's profile and email, a machine's name and token type                                                                |
-| `setState`                                      | `active`, `inactive` or `locked`; `active` unlocks a locked user                                                                        |
-| `delete`                                        | Guarded delete, `confirm` is the username, `dryRun` only reports                                                                        |
-| `patCreate`, `patList`, `patRevoke`             | Personal access tokens: minted once, listed by id, revoked verify-first                                                                 |
-| `keyCreate`, `keyList`, `keyDelete`             | Private keys, the same way                                                                                                              |
-| `secretGenerate`, `secretRemove`                | A machine user's client secret                                                                                                          |
-| `metadataSet`, `metadataList`, `metadataDelete` | Metadata, base64 on the wire and plain text in the stored resource                                                                      |
-| `passwordResetLinkCreate`                       | A reset code returned once, or a link Zitadel mails                                                                                     |
-| `passkeyRegistrationLinkCreate`                 | A passkey registration code returned once, or a link Zitadel mails; the person registers on the host the link names, without logging in |
+| Method                                          | What it does                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`, `get`                                   | Users, optionally only the humans or only the machines                                                                                             |
+| `ensureMachine`                                 | Find or create a service user, converging name, description, token type                                                                            |
+| `ensureHuman`                                   | Find or create a person, converging their name and email                                                                                           |
+| `update`                                        | Login name, a human's profile and email, a machine's name and token type                                                                           |
+| `setState`                                      | `active`, `inactive` or `locked`; `active` unlocks a locked user                                                                                   |
+| `delete`                                        | Guarded delete, `confirm` is the username, `dryRun` only reports                                                                                   |
+| `patCreate`, `patList`, `patRevoke`             | Personal access tokens: minted once, listed by id, revoked verify-first                                                                            |
+| `keyCreate`, `keyList`, `keyDelete`             | Private keys, the same way                                                                                                                         |
+| `secretGenerate`, `secretRemove`                | A machine user's client secret                                                                                                                     |
+| `metadataSet`, `metadataList`, `metadataDelete` | Metadata, base64 on the wire and plain text in the stored resource                                                                                 |
+| `passwordResetLinkCreate`                       | A reset code returned once, or a link Zitadel mails                                                                                                |
+| `passkeyRegistrationLinkCreate`                 | A passkey registration code returned once, or a link Zitadel mails; the person registers on the host the link names, without logging in            |
+| `authFactorList`                                | One person's factors, or every human's in one run when no user is named, with an `auth-summary` per person: what is ready, and whether anything is |
 
 ### `@dataverket/zitadel/action`
 
@@ -104,10 +105,14 @@ and one lock rather than ten.
 
 The same run stores `oidc-tokens-instance`: how long access, ID and refresh
 tokens live, read from the v1 Admin API, as Zitadel's durations and in seconds;
-and one `secret-generator-<kind>` per kind of one-time code the instance makes
+one `secret-generator-<kind>` per kind of one-time code the instance makes
 (`passwordlessInitCode` is the passkey registration code, `initCode` the
 first-login code, and so on): its length, how long it stays valid, and its
-character set — the shape of the codes, never a code. These are instance-wide,
+character set — the shape of the codes, never a code; one
+`email-provider-<description>` per SMTP or HTTP provider the instance mails
+through — sender, host, user, TLS, never the password — which is how "is mail
+configured, and from what address" is answered; and `notification-instance`,
+whether a person is mailed when their password changes. These are instance-wide,
 so they come with an organization's read as well. A key that may read the
 organization but not the instance gets a warning in the log and no such records,
 and the rest of the run stands.
@@ -134,26 +139,54 @@ user holds on a project, and therefore what a token's role claim says.
 `get`, `list`, `managerList` — read-only. Creating and deleting organizations
 decides who exists on an instance, and stays a deliberate act in the console.
 
+### `@dataverket/zitadel/instance`
+
+The instance as its own administrators see it, with an ordinary service-user key
+or a person's token over the v1 Admin API: what a scheduled audit should hold.
+
+| Method                | What                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `read`                | The instance with its name and version, one resource per domain with `primary` and `generated`, one per trusted domain |
+| `memberList`          | Everyone holding an instance role — `IAM_OWNER`, `IAM_OWNER_VIEWER`, `IAM_ORG_MANAGER` and the rest — with the roles   |
+| `trustedDomainAdd`    | A host the instance accepts as the public origin of a request, such as a login UI on another name; idempotent          |
+| `trustedDomainRemove` | Verify-first: the domain has to be trusted now, `confirm` repeats it, `dryRun` only reports                            |
+
+The reads need `iam.read` and `iam.member.read` (`IAM_OWNER_VIEWER`); the two
+writes need `iam.write` (`IAM_OWNER`).
+
 ### `@dataverket/zitadel/system`
 
-The instance's domain list, which is written by nobody but a System API user:
-adding a custom domain, removing one and choosing the primary all need
-`system.domain.write`, which only the system role `SYSTEM_OWNER` carries. A
-System API user is a key named in Zitadel's configuration (`SystemAPIUsers`),
-not a user in its database, so this type takes `systemKeyFile` and `systemUser`
-instead of a service-user key, and nothing else: the signed assertion is the
-bearer. The scope is four methods although the role could do more.
+The instances a deployment hosts, and each one's domain list, which is written
+by nobody but a System API user: adding a custom domain, removing one and
+choosing the primary all need `system.domain.write`, which only the system role
+`SYSTEM_OWNER` carries. A System API user is a key named in Zitadel's
+configuration (`SystemAPIUsers`), not a user in its database, so this type takes
+`systemKeyFile` and `systemUser` instead of a service-user key, and nothing
+else: the signed assertion is the bearer. The scope is six methods although the
+role could do more.
 
-| Method             | What                                                                                                                         |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `domainList`       | Every domain of the instance, with `primary` and `generated` flags, one resource each                                        |
-| `domainAdd`        | A custom domain added, so requests with that Host are served and tokens issued with it as issuer; idempotent                 |
-| `domainRemove`     | A custom domain removed, verify-first: `confirm` repeats it, a generated or primary domain is refused, `dryRun` only reports |
-| `domainSetPrimary` | The domain Zitadel links to in a mail no request triggered; idempotent                                                       |
+| Method             | What                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `instanceList`     | Every instance the deployment hosts, with name, state and version, one resource each; the one read that spans instances                                                  |
+| `instanceCreate`   | An instance with its first organization and a machine user as owner, whose token or key is emitted once into the sensitive `instance-owner` spec; idempotent on the name |
+| `domainList`       | Every domain of the instance, with `primary` and `generated` flags, one resource each                                                                                    |
+| `domainAdd`        | A custom domain added, so requests with that Host are served and tokens issued with it as issuer; idempotent                                                             |
+| `domainRemove`     | A custom domain removed, verify-first: `confirm` repeats it, a generated or primary domain is refused, `dryRun` only reports                                             |
+| `domainSetPrimary` | The domain Zitadel links to in a mail no request triggered; idempotent                                                                                                   |
 
-The instance is the one the System API lists, or `instanceId` when there are
-several. A generated domain, `<random>.<ExternalDomain>`, is made by setup and
-cannot be removed by anyone; the method says so before Zitadel does.
+The instance a domain method acts on is the one the System API lists, or
+`instanceId` when there are several: one definition per instance, then. A
+generated domain, `<random>.<ExternalDomain>`, is made by setup and cannot be
+removed by anyone; the method says so before Zitadel does.
+
+`instanceCreate` takes a machine owner and never a human one, because a human
+owner needs a password in the request and no password is ever an argument here.
+The owner's personal access token (`ownerCredential: pat`, for
+`accessTokenFile`) or machine key JSON (`key`, for `keyJsonFile`) is what a
+definition of the user, org or instance type then names to act in the new
+instance: make the people, mail them a passkey link, make them members. There is
+no `instanceRemove`: removing an instance removes every organization and user in
+it, and stays a deliberate act with the key in hand.
 
 ## How it authenticates
 
@@ -282,9 +315,10 @@ Users speak the v2 user service (`/v2/users/…`), which is the supported surfac
 on Zitadel v4 and the only one that reaches keys, tokens, metadata and password
 reset. Projects, applications, roles and grants speak the v1 Management API
 (`/management/v1/…`), because their v2 services are still beta at v4. The
-organization `list` is v2, `get` and `managerList` are v1. The system type
-speaks the System API (`/system/v1/…`), which lists instances and keeps their
-domains and is the only surface that may.
+organization `list` is v2, `get` and `managerList` are v1. The instance type and
+the instance-wide half of `settings` speak the v1 Admin API (`/admin/v1/…`). The
+system type speaks the System API (`/system/v1/…`), which lists and creates
+instances and keeps their domains and is the only surface that may.
 
 Three things the v2 service wants that v1 did not, and that the models handle
 for you: the organization id in the body of a create (taken from `orgId`, or
