@@ -228,32 +228,27 @@ Deno.test("pushMirrorDelete removes the mirror to one address and tolerates a mi
   assertEquals(absent.action, "absent");
 });
 
-Deno.test("staleMirrorRecords names stored pushMirror records the audit no longer sees, scoped to the owner or repo", () => {
+Deno.test("staleMirrorRecords picks the stored pushMirror records of the owner or repo the audit no longer sees, by attribute", () => {
+  const rec = (name: string, owner: string, repo: string) => ({
+    name,
+    attributes: { owner, repo },
+  });
   const stored = [
-    {
-      name: "acme:tool:push-mirror:remote_mirror_1",
-      tags: { specName: "pushMirror" },
-    },
-    {
-      name: "acme:gone:push-mirror:remote_mirror_2",
-      tags: { specName: "pushMirror" },
-    },
-    {
-      name: "other:x:push-mirror:remote_mirror_3",
-      tags: { specName: "pushMirror" },
-    },
-    {
-      name: "acme:tool:push-mirror-delete:remote_mirror_9",
-      tags: { specName: "pushMirrorDelete" },
-    },
-    { name: "acme:tool:runner:r1", tags: { specName: "runner" } },
+    rec("push-mirror-acme-tool-remote_mirror_1", "acme", "tool"),
+    rec("push-mirror-acme-gone-remote_mirror_2", "acme", "gone"),
+    rec("push-mirror-other-x-remote_mirror_3", "other", "x"),
+    // another owner whose login starts with this one's
+    rec("push-mirror-acme-corp-x-remote_mirror_4", "acme-corp", "x"),
+    // a record under the pre-2026.11.09.1 name is left alone, like every old record
+    rec("acme:gone:push-mirror:remote_mirror_0", "acme", "gone"),
   ];
-  const observed = new Set(["acme:tool:push-mirror:remote_mirror_1"]);
+  const observed = new Set(["push-mirror-acme-tool-remote_mirror_1"]);
   assertEquals(staleMirrorRecords(stored, "acme", undefined, observed), [
-    "acme:gone:push-mirror:remote_mirror_2",
+    "push-mirror-acme-gone-remote_mirror_2",
   ]);
   assertEquals(staleMirrorRecords(stored, "acme", "tool", observed), []);
   assertEquals(staleMirrorRecords(stored, "acme", "gone", new Set()), [
-    "acme:gone:push-mirror:remote_mirror_2",
+    "push-mirror-acme-gone-remote_mirror_2",
   ]);
+  assertEquals(staleMirrorRecords(stored, "ac", undefined, new Set()), []);
 });

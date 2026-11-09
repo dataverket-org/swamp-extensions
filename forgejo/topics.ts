@@ -19,13 +19,13 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const topicsPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}/topics`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 const TOPIC = /^[a-z0-9][-.a-z0-9]{0,34}$/;
 const MAX_TOPICS = 25;
@@ -149,9 +149,11 @@ export const extension = {
             removed: info.removed.join(","),
           },
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repoTopics",
-          safeName(`${info.owner}:${info.repo}:topics`),
+          dataName("repo-topics", info.owner, info.repo),
+          legacyName(`${info.owner}:${info.repo}:topics`),
           info,
         );
         return { dataHandles: [handle] };

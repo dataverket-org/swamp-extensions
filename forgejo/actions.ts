@@ -16,6 +16,7 @@
 import { z } from "npm:zod@4";
 
 import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { dataName, legacyName, repoName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
@@ -25,7 +26,6 @@ const actionsPath = (owner: string, repo?: string) =>
   repo
     ? `${repoPath(owner, repo)}/actions`
     : `/api/v1/orgs/${enc(owner)}/actions`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 /** Pages of runners to follow; far past any real runner count. */
 const MAX_RUNNER_PAGES = 100;
 const strings = (v: unknown): string[] =>
@@ -397,9 +397,11 @@ export const extension = {
             ? `${r.name}:${r.id}`
             : r.name;
           dataHandles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "runner",
-              safeName(`${r.target}:runner:${key}`),
+              repoName("runner", r.target, key),
+              legacyName(`${r.target}:runner:${key}`),
               r,
             ),
           );
@@ -427,9 +429,11 @@ export const extension = {
             kept: info.kept.length,
           },
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "runnerPrune",
-          safeName(`${info.target}:runner-prune:${a.name}`),
+          repoName("runner-prune", info.target, a.name),
+          legacyName(`${info.target}:runner-prune:${a.name}`),
           info,
         );
         return { dataHandles: [handle] };
@@ -457,9 +461,11 @@ export const extension = {
           name: info.name,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "actionsSecret",
-          safeName(`${info.target}:${info.name}`),
+          repoName("actions-secret", info.target, info.name),
+          legacyName(`${info.target}:${info.name}`),
           info,
         );
         return { dataHandles: [handle] };
@@ -485,9 +491,11 @@ export const extension = {
           to: `${info.owner}/${info.to}`,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repoRename",
-          safeName(`${info.owner}:${info.to}`),
+          dataName("repo-rename", info.owner, info.to),
+          legacyName(`${info.owner}:${info.to}`),
           info,
         );
         return { dataHandles: [handle] };
@@ -511,9 +519,11 @@ export const extension = {
           fetchCaller(context.globalArgs, context.signal),
           a,
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "runnerRegistration",
-          safeName(`${info.target}:runner`),
+          repoName("runner-registration", info.target),
+          legacyName(`${info.target}:runner`),
           info,
         );
         return { dataHandles: [handle] };

@@ -25,13 +25,13 @@ import {
   type GlobalArgs,
   redactToken,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 /** A Go duration such as `8h0m0s`, `10m` or `0s`. */
 const GO_DURATION = /^(\d+h)?(\d+m)?(\d+s)?$/;
@@ -245,9 +245,11 @@ export const extension = {
           action: info.action,
           changed: info.changed.join(","),
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pullMirror",
-          safeName(`${info.owner}:${info.repo}:pull-mirror`),
+          dataName("pull-mirror", info.owner, info.repo),
+          legacyName(`${info.owner}:${info.repo}:pull-mirror`),
           info,
         );
         return { dataHandles: [handle] };

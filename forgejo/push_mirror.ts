@@ -23,11 +23,11 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 /** One push mirror as Forgejo reports it. */
 const PushMirrorInfo = z.object({
@@ -309,14 +309,18 @@ interface Ctx {
     data: Record<string, unknown>,
   ): Promise<{ name: string }>;
   deleteResource?(instanceName: string): Promise<void>;
-  dataRepository?: {
-    findAllForModel(
-      type: string,
-      modelId: string,
-    ): Promise<{ name: string; tags?: Record<string, string> }[]>;
-  };
-  modelType?: string;
-  modelId?: string;
+  /** The behavior's own records with their attributes; swamp supplies it to every method. */
+  readModelData?(
+    modelName: string,
+    specName?: string,
+  ): Promise<StoredRecord[]>;
+  definition?: { name: string };
+}
+
+/** What `staleMirrorRecords` reads of a stored record: its name and who it is about. */
+export interface StoredRecord {
+  name: string;
+  attributes?: Record<string, unknown>;
 }
 
 /**
@@ -324,22 +328,26 @@ interface Ctx {
  * that a fresh audit did not observe: mirrors deleted since the last audit.
  */
 export function staleMirrorRecords(
-  stored: { name: string; tags?: Record<string, string> }[],
+  stored: StoredRecord[],
   owner: string,
   repo: string | undefined,
   observed: Set<string>,
 ): string[] {
-  const prefix = safeName(repo ? `${owner}:${repo}:push-mirror:` : `${owner}:`);
   return stored
-    .filter((d) => d.tags?.specName === "pushMirror")
+    .filter((d) =>
+      d.attributes?.owner === owner &&
+      (repo === undefined || d.attributes?.repo === repo)
+    )
     .map((d) => d.name)
-    .filter((n) =>
-      n.startsWith(prefix) && n.includes(":push-mirror:") && !observed.has(n)
-    );
+    // A record under a pre-2026.11.09.1 name is left alone like every other
+    // old record (README, Data names); only portable names are reconciled.
+    .filter((n) => !n.includes(":") && !observed.has(n));
 }
 
 const instance = (m: PushMirror) =>
-  safeName(`${m.owner}:${m.repo}:push-mirror:${m.remoteName || "new"}`);
+  dataName("push-mirror", m.owner, m.repo, m.remoteName || "new");
+const legacyInstance = (m: PushMirror) =>
+  legacyName(`${m.owner}:${m.repo}:push-mirror:${m.remoteName || "new"}`);
 
 /** Extension adding push mirrors (create, audit, sync now). */
 export const extension = {
@@ -390,9 +398,11 @@ export const extension = {
           remote: info.remoteAddress,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pushMirror",
           instance(info),
+          legacyInstance(info),
           info,
         );
         return { dataHandles: [handle] };
@@ -426,16 +436,22 @@ export const extension = {
         for (const m of mirrors) {
           const name = instance(m);
           observed.add(name);
-          dataHandles.push(await context.writeResource("pushMirror", name, m));
+          dataHandles.push(
+            await writeRecord(
+              context,
+              "pushMirror",
+              name,
+              legacyInstance(m),
+              m,
+            ),
+          );
         }
         if (
-          context.deleteResource && context.dataRepository &&
-          context.modelType &&
-          context.modelId
+          context.deleteResource && context.readModelData && context.definition
         ) {
-          const stored = await context.dataRepository.findAllForModel(
-            context.modelType,
-            context.modelId,
+          const stored = await context.readModelData(
+            context.definition.name,
+            "pushMirror",
           );
           for (
             const name of staleMirrorRecords(stored, a.owner, a.name, observed)
@@ -475,12 +491,19 @@ export const extension = {
         });
         if (info.action === "deleted" && context.deleteResource) {
           await context.deleteResource(
-            safeName(`${a.owner}:${a.name}:push-mirror:${info.remoteName}`),
+            dataName("push-mirror", a.owner, a.name, info.remoteName),
           );
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pushMirrorDelete",
-          safeName(
+          dataName(
+            "push-mirror-delete",
+            a.owner,
+            a.name,
+            info.remoteName || "absent",
+          ),
+          legacyName(
             `${a.owner}:${a.name}:push-mirror-delete:${
               info.remoteName || "absent"
             }`,

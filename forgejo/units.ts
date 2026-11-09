@@ -21,13 +21,13 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 /** The units this method reaches, as the argument name and the forge's field. */
 const UNITS = [
@@ -174,9 +174,11 @@ export const extension = {
             changed: info.changed.join(",") || "none",
           },
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repoUnits",
-          safeName(`${info.owner}:${info.repo}:units`),
+          dataName("repo-units", info.owner, info.repo),
+          legacyName(`${info.owner}:${info.repo}:units`),
           info,
         );
         return { dataHandles: [handle] };

@@ -22,13 +22,13 @@ import {
 } from "./api.ts";
 
 import { labelsForIssues } from "./labels.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const issuesPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}/issues`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 const PAGE = 50;
 const MAX_PAGES = 20;
@@ -323,9 +323,11 @@ async function record(context: Ctx, issues: Issue[]) {
       title: i.title,
     });
     handles.push(
-      await context.writeResource(
+      await writeRecord(
+        context,
         "issue",
-        safeName(`${i.owner}:${i.repo}:issue:${i.number}`),
+        dataName("issue", i.owner, i.repo, i.number),
+        legacyName(`${i.owner}:${i.repo}:issue:${i.number}`),
         i,
       ),
     );
@@ -386,9 +388,11 @@ export const extension = {
             removed: info.removed.join(","),
           },
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "issueLabels",
-          safeName(`${info.owner}:${info.repo}:issue:${info.number}:labels`),
+          dataName("issue-labels", info.owner, info.repo, info.number),
+          legacyName(`${info.owner}:${info.repo}:issue:${info.number}:labels`),
           info,
         );
         return { dataHandles: [handle] };

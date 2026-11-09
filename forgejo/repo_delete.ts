@@ -16,13 +16,13 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const repoPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 /** The outcome of repo_delete: what the repository was, and what was done. */
 const RepoDeleteInfo = z.object({
@@ -135,9 +135,11 @@ export const extension = {
             empty: info.wasEmpty,
           },
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repoDelete",
-          safeName(`${info.owner}:${info.repo}:delete`),
+          dataName("repo-delete", info.owner, info.repo),
+          legacyName(`${info.owner}:${info.repo}:delete`),
           info,
         );
         return { dataHandles: [handle] };

@@ -9,9 +9,9 @@
  */
 import { z } from "npm:zod@4";
 import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { legacyName, repoName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 const repoPath = (owner: string, repo: string) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}`;
 
@@ -190,9 +190,11 @@ export const extension = {
           index: info.index,
           count: info.notes.length,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "prFeedback",
-          safeName(`${info.repo}#${info.index}:feedback`),
+          repoName("pr-feedback", info.repo, info.index),
+          legacyName(`${info.repo}#${info.index}:feedback`),
           info,
         );
         return { dataHandles: [handle] };
@@ -217,9 +219,11 @@ export const extension = {
           index: info.index,
           url: info.url,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "prComment",
-          safeName(`${info.repo}#${info.index}:comment:${info.commentId}`),
+          repoName("pr-comment", info.repo, info.index, info.commentId),
+          legacyName(`${info.repo}#${info.index}:comment:${info.commentId}`),
           info,
         );
         return { dataHandles: [handle] };

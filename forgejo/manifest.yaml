@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.10.27.1"
+version: "2026.11.09.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in one model type, `@dataverket/forgejo`.
@@ -39,6 +39,12 @@ description: >
   marked sensitive, so swamp vaults it and records a reference; a mirror's
   source or remote credential is sent to Forgejo once and never stored; and a
   token the forge echoes back in an error is masked before it becomes data.
+
+  Records are stored under portable data names, `repo-<owner>-<repo>`,
+  `pull-<owner>-<repo>-<index>`, `push-mirror-<owner>-<repo>-<remote>`
+  and so on, so they hold on Windows too; before 2026.11.09.1 the names used
+  `:`, which Windows refuses. Data under an old name is left where it is; the
+  README says how to remove it.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:

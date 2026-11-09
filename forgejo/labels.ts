@@ -18,11 +18,11 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyLabelName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
-const safeName = (s: string) => s.replace(/[\\/\s]+/g, ":");
 const PAGE = 50;
 const MAX_PAGES = 20;
 const COLOR = /^#?[0-9a-fA-F]{6}$/;
@@ -276,9 +276,11 @@ async function record(context: Ctx, labels: LabelRecord[]) {
       action: l.action,
     });
     handles.push(
-      await context.writeResource(
+      await writeRecord(
+        context,
         "label",
-        safeName(`${l.owner}:${l.repo ?? "org"}:label:${l.name}`),
+        dataName("label", l.owner, l.repo ?? "org", l.name),
+        legacyLabelName(`${l.owner}:${l.repo ?? "org"}:label:${l.name}`),
         l,
       ),
     );

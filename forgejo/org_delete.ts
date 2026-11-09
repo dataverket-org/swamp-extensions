@@ -17,13 +17,13 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 /** The transport types, re-exported so a test needs only this module. */
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const orgPath = (org: string) => `/api/v1/orgs/${enc(org)}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 /** Enough to know whether an org is empty, and to name what is in the way. */
 const REPO_PROBE = 10;
 
@@ -128,9 +128,11 @@ export const extension = {
           org: info.org,
           action: info.action,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "orgDelete",
-          safeName(`${info.org}:delete`),
+          dataName("org-delete", info.org),
+          legacyName(`${info.org}:delete`),
           info,
         );
         return { dataHandles: [handle] };

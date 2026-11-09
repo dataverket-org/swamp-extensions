@@ -14,9 +14,9 @@
  */
 import { z } from "npm:zod@4";
 import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { dataName, legacyName, readOrNull, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 const SyncArgs = z.object({
   owner: z.string().min(1).describe("Owning org or user login."),
@@ -296,10 +296,16 @@ export const extension = {
           workItem: a.workItem,
           factory: a.factory,
         });
-        const linkName = safeName(
+        const linkName = dataName("work-item", a.owner, a.name, a.workItem);
+        const legacyLink = legacyName(
           `${a.owner}/${a.name}:workitem:${a.workItem}`,
         );
-        const prev = Link.safeParse(await context.readResource(linkName));
+        // The link decides whether to update an issue or file a new one, so a
+        // link written under the pre-2026.11.09.1 name must still be found.
+        const prev = Link.safeParse(
+          await readOrNull(context, linkName) ??
+            await readOrNull(context, legacyLink),
+        );
         const link = await syncIssue(
           fetchCaller(context.globalArgs, context.signal),
           a,
@@ -312,9 +318,11 @@ export const extension = {
           issue: link.issue,
           stage: link.stage,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "workItemIssue",
           linkName,
+          legacyLink,
           link,
         );
         return { dataHandles: [handle] };

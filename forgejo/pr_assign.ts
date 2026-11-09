@@ -16,13 +16,13 @@ import {
   fetchCaller,
   type GlobalArgs,
 } from "./api.ts";
+import { dataName, legacyName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
 const enc = encodeURIComponent;
 const prPath = (owner: string, repo: string, index: number) =>
   `/api/v1/repos/${enc(owner)}/${enc(repo)}/pulls/${index}`;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 /** A pull request's assignees as Forgejo reports them after the change. */
 const PrAssignmentInfo = z.object({
@@ -198,9 +198,11 @@ export const extension = {
         const dataHandles = [];
         for (const u of found) {
           dataHandles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "userMatch",
-              safeName(`user:${u.login}`),
+              dataName("user-match", u.login),
+              legacyName(`user:${u.login}`),
               { query: a.q, ...u, timestamp },
             ),
           );
@@ -223,9 +225,11 @@ export const extension = {
           fetchCaller(context.globalArgs, context.signal),
           a,
         );
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "prAssignment",
-          safeName(`${a.owner}/${a.name}#${a.index}:assignees`),
+          dataName("pr-assignment", a.owner, a.name, a.index),
+          legacyName(`${a.owner}/${a.name}#${a.index}:assignees`),
           info,
         );
         return { dataHandles: [handle] };

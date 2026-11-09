@@ -8,6 +8,7 @@ import type {
   ModelDefinition,
 } from "jsr:@systeminit/swamp-testing@0.20260521.16";
 import { redactToken } from "./api.ts";
+import { dataName, legacyName, repoName, slug, writeRecord } from "./names.ts";
 
 /**
  * `@dataverket/forgejo` — administration of a Forgejo (or Gitea) server over
@@ -458,15 +459,6 @@ function nowIso(): string {
 
 function asArray(v: unknown): Json[] {
   return Array.isArray(v) ? (v as Json[]) : [];
-}
-
-/**
- * Make a string safe as a swamp data instance name — swamp rejects names
- * containing `/`, `\`, `..`, or null bytes (path-traversal guard), but a repo
- * full name like `owner/name` naturally contains a slash.
- */
-function safeName(s: string): string {
-  return s.replace(/[\\/]/g, ":").replace(/\.\./g, "_").replace(/\0/g, "");
 }
 
 function enc(s: string): string {
@@ -1174,7 +1166,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.10.26.1",
+  version: "2026.11.09.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1193,6 +1185,12 @@ export const model = {
       toVersion: "2026.10.26.1",
       description:
         "pr_comment, pr_feedback, pr_merge_state and work_item_sync join the type; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.09.1",
+      description:
+        "Records are stored under portable data names (repo-<owner>-<repo>, no ':'); no schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1295,7 +1293,7 @@ export const model = {
           handles.push(
             await context.writeResource(
               "org",
-              safeName(String(o.name ?? o.username ?? o.id)),
+              slug(String(o.name ?? o.username ?? o.id)),
               toOrgInfo(o, "observed"),
             ),
           );
@@ -1355,9 +1353,11 @@ export const model = {
         const handles: DataHandle[] = [];
         for (const r of repos) {
           handles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "repo",
-              safeName(String(r.full_name ?? r.id)),
+              repoName("repo", String(r.full_name ?? r.id)),
+              legacyName(String(r.full_name ?? r.id)),
               toRepoInfo(r, "observed"),
             ),
           );
@@ -1382,7 +1382,7 @@ export const model = {
           handles.push(
             await context.writeResource(
               "user",
-              safeName(String(u.login ?? u.id)),
+              slug(String(u.login ?? u.id)),
               {
                 id: Number(u.id ?? 0),
                 login: String(u.login ?? ""),
@@ -1435,9 +1435,14 @@ export const model = {
             path: repoPath(owner, name),
           });
           handles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "mirror",
-              safeName(String(r.body.full_name ?? `${owner}/${name}`)),
+              repoName(
+                "mirror",
+                String(r.body.full_name ?? `${owner}/${name}`),
+              ),
+              legacyName(String(r.body.full_name ?? `${owner}/${name}`)),
               toMirrorInfo(r.body, a.staleFactor, "observed"),
             ),
           );
@@ -1505,9 +1510,11 @@ export const model = {
           for (const h of listItems(res.body)) {
             const info = toWebhookInfo(full, h, a.expectedUrl, "observed");
             handles.push(
-              await context.writeResource(
+              await writeRecord(
+                context,
                 "webhook",
-                safeName(`${full}:${info.id}`),
+                repoName("webhook", full, info.id),
+                legacyName(`${full}:${info.id}`),
                 info,
               ),
             );
@@ -1610,9 +1617,11 @@ export const model = {
 
         return {
           dataHandles: [
-            await context.writeResource(
+            await writeRecord(
+              context,
               "webhook",
-              safeName(`${full}:${Number(hook.id)}`),
+              repoName("webhook", full, Number(hook.id)),
+              legacyName(`${full}:${Number(hook.id)}`),
               toWebhookInfo(full, updated, a.url, action),
             ),
           ],
@@ -1683,7 +1692,7 @@ export const model = {
         }
         const handle = await context.writeResource(
           "org",
-          safeName(a.name),
+          slug(a.name),
           toOrgInfo({ ...org, name: org.name ?? a.name }, action),
         );
         return { dataHandles: [handle] };
@@ -1753,9 +1762,11 @@ export const model = {
             action = "unchanged";
           }
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "repo",
-          safeName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          repoName("repo", String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          legacyName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
           toRepoInfo(repo, action!),
         );
         return { dataHandles: [handle] };
@@ -1807,9 +1818,11 @@ export const model = {
           });
           action = current === "none" ? "created" : "updated";
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "collaborator",
-          safeName(`${full}:${a.user}`),
+          repoName("collaborator", full, a.user),
+          legacyName(`${full}:${a.user}`),
           {
             repo: full,
             user: a.user,
@@ -1874,9 +1887,11 @@ export const model = {
             action = "unchanged";
           }
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "branch_protection",
-          safeName(`${full}:${a.rule}`),
+          repoName("branch-protection", full, a.rule),
+          legacyName(`${full}:${a.rule}`),
           toProtectionInfo(full, rule, action),
         );
         return { dataHandles: [handle] };
@@ -1902,9 +1917,11 @@ export const model = {
         for (const rule of listItems(r.body)) {
           const info = toProtectionInfo(full, rule, "observed");
           handles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "branch_protection",
-              safeName(`${full}:${info.ruleName}`),
+              repoName("branch-protection", full, info.ruleName),
+              legacyName(`${full}:${info.ruleName}`),
               info,
             ),
           );
@@ -2016,9 +2033,11 @@ export const model = {
             action = "unchanged";
           }
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "mirror",
-          safeName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          repoName("mirror", String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          legacyName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
           toMirrorInfo(repo, 2, action),
         );
         return { dataHandles: [handle] };
@@ -2051,9 +2070,11 @@ export const model = {
           method: "POST",
           path: `${repoPath(a.owner, a.name)}/mirror-sync`,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "mirror",
-          safeName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          repoName("mirror", String(repo.full_name ?? `${a.owner}/${a.name}`)),
+          legacyName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
           toMirrorInfo(repo, 2, "triggered"),
         );
         return { dataHandles: [handle] };
@@ -2084,9 +2105,11 @@ export const model = {
         const handles: DataHandle[] = [];
         for (const p of prs) {
           handles.push(
-            await context.writeResource(
+            await writeRecord(
+              context,
               "pull_request",
-              safeName(`${a.owner}/${a.name}#${p.number ?? p.id}`),
+              dataName("pull", a.owner, a.name, String(p.number ?? p.id)),
+              legacyName(`${a.owner}/${a.name}#${p.number ?? p.id}`),
               toPrInfo(p, "observed"),
             ),
           );
@@ -2114,9 +2137,11 @@ export const model = {
         const ciState = sha
           ? await combinedCiState(g, a.owner, a.name, sha)
           : "none";
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pull_request",
-          safeName(`${a.owner}/${a.name}#${a.index}`),
+          dataName("pull", a.owner, a.name, a.index),
+          legacyName(`${a.owner}/${a.name}#${a.index}`),
           toPrInfo(pr, "observed", {
             mergeable: typeof pr.mergeable === "boolean"
               ? pr.mergeable
@@ -2189,9 +2214,11 @@ export const model = {
             action = "unchanged";
           }
         }
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pull_request",
-          safeName(`${a.owner}/${a.name}#${pr.number ?? 0}`),
+          dataName("pull", a.owner, a.name, String(pr.number ?? 0)),
+          legacyName(`${a.owner}/${a.name}#${pr.number ?? 0}`),
           toPrInfo(pr, action),
         );
         return { dataHandles: [handle] };
@@ -2264,9 +2291,11 @@ export const model = {
         // Re-fetch: the merge response carries no body, and the merged PR's
         // recorded state is the point of the data output.
         const after = await getPrOrNull(g, a.owner, a.name, a.index) ?? pr;
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "pull_request",
-          safeName(ref),
+          dataName("pull", a.owner, a.name, a.index),
+          legacyName(ref),
           toPrInfo(after, "merged", { ciState }),
         );
         return { dataHandles: [handle] };
@@ -2324,9 +2353,11 @@ async function setArchived(
     repo = p.body;
     action = archived ? "archived" : "unarchived";
   }
-  const handle = await context.writeResource(
+  const handle = await writeRecord(
+    context,
     "repo",
-    safeName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
+    repoName("repo", String(repo.full_name ?? `${a.owner}/${a.name}`)),
+    legacyName(String(repo.full_name ?? `${a.owner}/${a.name}`)),
     toRepoInfo(repo, action),
   );
   return { dataHandles: [handle] };

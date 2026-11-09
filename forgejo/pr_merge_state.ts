@@ -9,9 +9,9 @@
  */
 import { z } from "npm:zod@4";
 import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { legacyName, repoName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
-const safeName = (s: string) => s.replace(/[\\/]/g, ":");
 
 const PrMergeStateArgs = z.object({
   owner: z.string().min(1).describe("Owning org or user login."),
@@ -133,9 +133,11 @@ export const extension = {
           state: info.state,
           merged: info.merged,
         });
-        const handle = await context.writeResource(
+        const handle = await writeRecord(
+          context,
           "prMergeState",
-          safeName(`${info.repo}#${info.index}:merge`),
+          repoName("pr-merge-state", info.repo, info.index),
+          legacyName(`${info.repo}#${info.index}:merge`),
           info,
         );
         return { dataHandles: [handle] };

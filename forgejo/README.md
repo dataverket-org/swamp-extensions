@@ -373,24 +373,90 @@ swamp data query 'specName == "pushMirror" && isLatest' --json
 swamp data query 'specName == "runner" && isLatest' --json
 ```
 
-| Spec                 | Lifetime | Holds                                                                  |
-| -------------------- | -------- | ---------------------------------------------------------------------- |
-| `actionsSecret`      | infinite | An Actions secret's name and scope. Never the value                    |
-| `runnerRegistration` | infinite | A registration token, vaulted; the record holds a reference            |
-| `runner`             | infinite | A registered runner: name, online/offline status, labels               |
-| `runnerPrune`        | infinite | Offline runners of one name deleted at a scope, and the live ones kept |
-| `repoRename`         | infinite | Old and new name, and the URLs that changed                            |
-| `pushMirror`         | infinite | Remote address, timing, last push and last error                       |
-| `pullMirror`         | infinite | A pull mirror: source, visibility, interval, last sync, what changed   |
-| `repoTopics`         | infinite | A repository's topics, and which were added or removed                 |
-| `pushMirrorDelete`   | infinite | Which remote was removed from which repository                         |
-| `prAssignment`       | infinite | A pull request's assignees, as Forgejo reports them                    |
-| `userMatch`          | 7d       | A user matched by `user_search`: login and full name                   |
-| `repoDelete`         | infinite | What the repository was, and what happened                             |
+| Spec                 | Name                                         | Holds                                                                  |
+| -------------------- | -------------------------------------------- | ---------------------------------------------------------------------- |
+| `server`             | `status`                                     | Version and health, from `health`                                      |
+| `org`                | `<org>`                                      | An organization, from `org_list` and `org_ensure`                      |
+| `repo`               | `repo-<owner>-<repo>`                        | A repository and its settings                                          |
+| `user`               | `<login>`                                    | A user, admin view, never a credential                                 |
+| `mirror`             | `mirror-<owner>-<repo>`                      | A pull mirror's sync health                                            |
+| `webhook`            | `webhook-<owner>-<repo>-<id>`                | A webhook, audited or repointed, never its secret                      |
+| `collaborator`       | `collaborator-<owner>-<repo>-<login>`        | A user's access level on a repository                                  |
+| `branch_protection`  | `branch-protection-<owner>-<repo>-<rule>`    | A branch-protection rule                                               |
+| `pull_request`       | `pull-<owner>-<repo>-<index>`                | A pull request: state, mergeability, head CI                           |
+| `actionsSecret`      | `actions-secret-<target>-<name>`             | An Actions secret's name and scope. Never the value                    |
+| `runnerRegistration` | `runner-registration-<target>`               | A registration token, vaulted; the record holds a reference            |
+| `runner`             | `runner-<target>-<name or id>`               | A registered runner: name, online/offline status, labels               |
+| `runnerPrune`        | `runner-prune-<target>-<name>`               | Offline runners of one name deleted at a scope, and the live ones kept |
+| `repoRename`         | `repo-rename-<owner>-<new name>`             | Old and new name, and the URLs that changed                            |
+| `pushMirror`         | `push-mirror-<owner>-<repo>-<remote>`        | Remote address, timing, last push and last error                       |
+| `pushMirrorDelete`   | `push-mirror-delete-<owner>-<repo>-<remote>` | Which remote was removed from which repository                         |
+| `pullMirror`         | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed   |
+| `repoTopics`         | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                 |
+| `repoUnits`          | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                |
+| `prAssignment`       | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                    |
+| `userMatch`          | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d      |
+| `repoDelete`         | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                             |
+| `orgDelete`          | `org-delete-<org>`                           | What the organization was, and what happened                           |
+| `issue`              | `issue-<owner>-<repo>-<number>`              | An issue filed or found by title                                       |
+| `issueLabels`        | `issue-labels-<owner>-<repo>-<number>`       | The labels set on an issue                                             |
+| `label`              | `label-<owner>-<repo or org>-<name>`         | A label of a repository or an organization                             |
+| `prFeedback`         | `pr-feedback-<owner>-<repo>-<index>`         | A pull request's discussion read back                                  |
+| `prComment`          | `pr-comment-<owner>-<repo>-<index>-<id>`     | A comment posted on a pull request                                     |
+| `prMergeState`       | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                         |
+| `workItemIssue`      | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                         |
+
+Every spec has an infinite lifetime except `userMatch`. `<target>` is an owner
+or `<owner>-<repo>`, the scope of an Actions method.
+
+### Data names
+
+A data name becomes a directory name in a filesystem datastore, so it has to
+hold on Windows too, which refuses `:` and `< > " | ? *` in a file name and a
+trailing dot or space. Each name above is a spec word and then its parts joined
+with `-`, every part reduced to letters, digits, `.`, `_` and `-`: the shape
+`@dataverket/github` kept from upstream, `repo-<repo>` and
+`release-<repo>-<tag>`. The owner stays in the name, unlike in
+`@dataverket/github`, because one forgejo model spans every organization of the
+forge. Parts carry `-` themselves, so two names can coincide, `acme/corp-x` and
+`acme-corp/x` say, as `release-a-b-c` can upstream; the record's `owner` and
+`repo` attributes say which it is, and the push-mirror audit reconciles by those
+attributes, never by name.
+
+Before 2026.11.09.1 a repository's records were named from its full name with
+the slash turned into a colon, `acme:tool`, `acme:tool#12`,
+`acme:tool:push-mirror:github`, and every method writing one failed on Windows
+after its API call had succeeded
+([issue 1](https://github.com/dataverket-org/swamp-extensions/issues/1),
+[swamp-club/swamp#3205](https://swamp-club.com/lab/3568)). `org` and `user`
+records were named by the login alone and are unchanged.
+
+### Upgrading from a version before 2026.11.09.1
+
+Nothing is required and nothing stored is touched. The next run writes under the
+new name; an item under an old name stays where it is, is no longer updated, and
+still counts as a latest record under its own name, so a spec query without a
+run filter returns it beside the new one. The run says so once per record, the
+first time it writes a new name while the old one holds data. An expression that
+reads an old name by name keeps returning the last value stored there and should
+be pointed at the new name. `work_item_sync` still finds a link it wrote under
+the old name, so a mirrored work item is updated rather than filed again.
+
+Every old name of a repository record starts with the owner and `:`, and no new
+name contains `:`, so one prefix delete per owner removes them; the `userMatch`
+records had the prefix `user:`. Preview first; the delete is permanent:
+
+```sh
+swamp data delete forgejo --prefix 'acme:' --dry-run
+swamp data delete forgejo --prefix 'acme:' --yes
+swamp data delete forgejo --prefix 'user:' --yes
+```
 
 `push_mirror_list` is the audit a mirroring workflow asserts on, and it also
-reports stored `pushMirror` records the forge no longer has — a mirror deleted
-out of band shows up as drift rather than going quiet.
+reports stored `pushMirror` records the forge no longer has, found by their
+`owner` and `repo` attributes, and drops them; a mirror deleted out of band
+shows up as drift rather than going quiet. A record under a pre-2026.11.09.1
+name is left alone like every other old record.
 
 ## License
 

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.11.09.1",
+  "reviewedAt": "2026-11-09T11:34:42Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged: the token is sensitive in the schema and api.ts masks a token the forge echoes back. names.ts logs only data names, never a token or a mirror credential."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs on entry and completion with structured placeholders. writeRecord logs once per record, at warning, the first time a portable name is written while the pre-2026.11.09.1 name holds data, with {legacy} and {name} as properties, and points at the README for the removal. Verified live against Forgejo 17.0.1: one notice per old record on the first run, none on the second, none for org and user whose names did not change."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged for every HTTP path: call() throws with method, path, status and the forge's message. readOrNull swallows every error from readResource deliberately: the read-back only decides whether to print the notice, and a name Windows cannot store fails at the path rather than as not-found; the write itself still surfaces its own errors. work_item_sync's fallback read of the old link name goes through the same readOrNull."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "names_test.ts covers slug, dataName, repoName, both legacy transforms and writeRecord (one notice, never twice; quiet without old data, with an unchanged name, without readResource and when the old name cannot be read). push_mirror_test covers the attribute-based stale check, including an owner whose login is a prefix of another's and an old-named record left alone. 123 tests. Still open from earlier releases: the base's 23 upstream methods are tested through their helpers and a mocked fetch, not through execute with a fake context, so the renamed write sites in forgejo.ts are proven by type checking and the live run (repo_ensure, repo_list, org_ensure, repo_topics_ensure, label_ensure, push_mirror_list) rather than by a unit test each."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Unchanged for every method. The name change is non-destructive: nothing deletes, renames or rewrites data under an old name, and push_mirror_list's reconciliation skips any name containing ':' so an old pushMirror record is never dropped as stale. work_item_sync reads its link under the new name and then the old one, so a work item mirrored before the change is updated rather than filed again."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged: no request or response handling changed. push_mirror_list now reads its own stored records through context.readModelData with the behavior's definition name, the documented cross-behavior read, instead of walking the data repository."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged: fetch timeouts are cleared in finally in the shared caller; no files or handles. The two read-backs in writeRecord run concurrently and hold nothing."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Tests and README use acme, tool, example-org and forge.example.com; the issue links point at the public tracker and the Swamp Club lab."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged: no passthrough anywhere; the objects written are the schema types themselves, so schema-write conformance is as before at every renamed site (the data argument of each write is untouched)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged: every spec infinite except userMatch at 7d; the README now says so in one place. An item left under an old name is never expired by GC, which is why the README gives the explicit prefix delete."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Unchanged."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: forgejo-api-url-shape (policy) and forgejo-token-accepted (live)."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated in the README's table, 30 specs: status; <org>; <login>; and for everything about a repository a spec word first, then owner, repo and any further part, joined with '-', each part through slug ([A-Za-z0-9._-], trailing dots trimmed): repo-, mirror-, webhook-, collaborator-, branch-protection-, pull-, actions-secret-, runner-registration-, runner-, runner-prune-, repo-rename-, push-mirror-, push-mirror-delete-, pull-mirror-, repo-topics-, repo-units-, pr-assignment-, user-match-, repo-delete-, org-delete-, issue-, issue-labels-, label-, pr-feedback-, pr-comment-, pr-merge-state-, work-item-. The shape is @dataverket/github's repo-<repo> kept from upstream; the owner stays because one model spans every org. No ':' anywhere (dataverket-org/swamp-extensions#1, swamp-club/swamp#3205); verified live that swamp's portability warning is gone. Accepted, as upstream accepts for release-a-b-c: parts carry '-', so acme/corp-x and acme-corp/x share a name within a spec, and a crafted owner login equal to a spec word (an owner named 'delete') could make repo-<owner>-<repo> meet repo-delete-<owner>-<repo>; the attributes say which record it is, and the only reconciliation that deletes, push_mirror_list's, goes by attributes. Pre-existing and kept: a repository literally named 'org' shares label names with the organization's labels."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "writeRecord reads back the latest record under the new and the old name through context.readResource, both tolerant of failure, only to decide whether to print the one-time notice. push_mirror_list reads its own pushMirror records through readModelData and filters by the owner and repo attributes. work_item_sync reads its previous link under the new name and falls back to the old one. All documented context API; nothing renames, and the only delete is the pre-existing drop of a vanished mirror's record under a portable name. Old data is left in place; the README documents its removal with swamp data delete --prefix per owner plus 'user:', dry run first, verified live to leave the org record alone."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Version 2026.11.09.1 with a no-op upgrades entry after 2026.10.26.1; the global arguments are unchanged, so a definition is stamped and not transformed. forgejo_test.ts checks the chain ends at the model's version. Verified live: an instance created at 2026.10.27.1 reports typeVersion 2026.11.09.1 and staleness current after one run."
+    }
+  ]
+}
