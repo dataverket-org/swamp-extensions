@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/salmon",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:05:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Second review. The earlier blocking finding is closed: issuerUrl with a user or password is refused by both schemas (common.ts withoutUserinfo) and again at the top of every method before anything is logged, spawned, fetched or written (stack.ts refuseUserinfo, token_exchange.ts:274-276), without repeating the URL; pinned by 'an issuer URL with a user or password is refused by the schema, and again by ...' in both method test files and by the live no_definition cases. My earlier probe, run again with a definition that bypasses the schema: 0 fetches, 0 kubectl calls, 0 log lines, 0 writes. token_endpoint is checked (http or https, no userinfo) before a token is minted and its value is not repeated in the refusal. The new record fields were probed: result.error is Salmon's answer after redaction with the sent token word for word and the JWT and key patterns (an echoed JWT, an echoed opaque token, a token under id_token or a nested key, an opaque access_token beside a 401: none reached the error, the log or the record); stack.error is the already redacted message cut to 400 characters (sealing key and a logged token pinned absent from the record). Only a bare fragment of the sent token (its signature part alone) would pass the redaction; a signature without the rest is not a credential. Residual by design: a user-given audience reaches kubectl's argv as it is."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Structured placeholders; the endpoint that is logged is now a checked URL without userinfo; nothing is logged before the userinfo refusal."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "The earlier raw errors are named now (non-JSON discovery document with its size and not its text, a POST that could not be sent with the endpoint, a null, list or empty answer as a failed exchange), each pinned by a test. Small things left: (1) a run cancelled during an HTTP request ends as a plain Error worded 'Salmon issuer is not reachable at ... (start a @dataverket/salmon/stack): cancelled' or 'could not be sent to ...: cancelled' (common.ts fetchWithin, token_exchange.ts:151-156 and :338-348), not as a CliError of kind cancelled like a run cancelled during kubectl, and the hint to start a stack is wrong for it; (2) on the failure paths the record is written before the throw, so a failing write would replace the error it was meant to record (stack.ts orRecord, token_exchange.ts:370 and :381); (3) an OAuth error member that is an object is recorded as '[object Object]:'."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "63 unit tests on strict fakes. Every fix I asked for has a test that I read and that can fail: the planted password (schema and method, calls, logs and writes empty), token_endpoint refusals with no kubectl call, a fetch that never answers on all three requests with shortened limits, the 3600 cap against lib's MAX_TIMEOUT_MS, failure records for ensure, revoke, stop and the exchange, kind on every method. The live suite checks through swamp data query that a record written before a throw is kept (neg-a, neg-b, neg-c with latest); its check counts 17, 22 and 16 match the scripts. Not covered: the record when docker ps itself fails after a failure (probed: running false), and a run cancelled during the stack's discovery probe."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "The three HTTP requests have limits (5, 15 and 30 s, body included, combined with the method's signal), upTimeoutSeconds and startTimeoutSeconds are capped at 3600, and the README now says what a failure and a hit limit leave behind and that stop removes it, with the observed Podman case. Left: when docker ps cannot answer after a failure, orRecord records running: false (stack.ts orRecord, the empty catch), although the README says running is 'as docker ps showed it'; unknown is written as not running. Either say so in the README or leave running as it was last known. By design and documented: nothing is torn down on failure; in a record with an error grants[].revoked is what was asked for; a test that could not be made leaves an older result, which may say passed: true, as the latest."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "The discovery document must be a JSON object with a token_endpoint that is an http or https URL without userinfo, checked before a token is minted; the exchange answer is narrowed to an object before a field is read; expires_in that is not a number is recorded as 0. The limits leave a slow but working Salmon room: 30 s for an exchange that fetches the cluster's keys, 15 s for discovery. fetch follows redirects, so a 307 or 308 from the endpoint would resend the token to a location that was not checked; the discovery document may name any http(s) origin anyway, so this opens nothing new. redirect: 'error' would make it explicit."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Timers and listeners of fetchWithin are cleared in finally; bodies are read to the end under the limit. The README now says that only the started process is signalled and reports what was seen when a compose child outlived it on rootless Podman. The ServiceAccount that test creates is kept and the README says so. An answer body has no size cap, only the time limit."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and fixtures hold only localhost, 127.0.0.1, example names, a planted test password and the public Salmon image and repository. Tests, smoke/ and CLAUDE.md are not in the archive."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "No passthrough. namespace and serviceAccount carry lib's NAMESPACE_NAME and OBJECT_NAME patterns; probed that valid names (kube-system, a 63-character namespace, a dotted ServiceAccount name) and valid issuer URLs (IPv6 host, an @ in the path or query) are still accepted. Record schemas match their writes field for field on the success and the failure paths: stack 11 of 11, result 13 of 13."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "stack: infinite, 10 versions; result: infinite, 20 versions."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "All four methods declare kind: action. A failed method now records the observed running and the reason, and a refused exchange records passed: false, so the two stale-record cases of the first review are closed. Still no read method on stack: running is refreshed only by ensure, revoke or stop, so a container that dies between runs is not seen until one of them runs. Low; a get that only runs docker ps would close it."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "docker-compose-available and kubectl-cli-available, label live, 20 s, pinned including the missing binary; they run before every method since all are actions."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "stack/stack and result/result, fixed and predictable, one shape per name on success and failure paths."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Identity upgrades to 2026.11.10.1 on both types, with descriptions that name the new refusals and record fields; only optional arguments and additive record fields. The README change list now covers what a user of 2026.10.29.2 sees: process and HTTP limits and the 3600 cap, the refusals at definition time and at run time, the token_endpoint check and the dropped fallback to <issuer>/token, the error texts including the multi-line compose up failure, the records written before a failure, the new fields and that older records lack them, the kubectl argument order, the pre-flight checks, kind, the new arguments and the ServiceAccount race."
+    }
+  ]
+}

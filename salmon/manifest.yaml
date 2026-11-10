@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/salmon"
-version: "2026.10.29.2"
+version: "2026.11.10.1"
 description: >
   A throwaway Salmon for end-to-end tests of anything that takes Salmon's
   tokens: database validators, message brokers, services.
@@ -13,6 +13,9 @@ description: >
   mints a Kubernetes ServiceAccount token, exchanges it at Salmon (RFC 8693) for
   a token for one app, and records the token's subject and roles, never the
   token.
+
+  Every docker and kubectl process has a time limit and is stopped at it, and
+  what reaches an error is one shortened line with tokens blanked.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:

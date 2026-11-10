@@ -12,3 +12,6 @@
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 # END swamp managed section
+
+# Scratch files of the smoke suite
+smoke/.work/
