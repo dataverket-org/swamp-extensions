@@ -1,0 +1,9 @@
+# The file name holds a space on purpose: a path reaches kubectl as one
+# argument.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spaced
+  namespace: smoke
+data:
+  by: "@dataverket/kind ensure"

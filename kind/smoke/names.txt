@@ -1,0 +1,14 @@
+--all
+-A
+--name=other
+--kubeconfig=/dev/null
+kind smoke
+smoke --retain
+smoke;id
+$(id)
+`id`
+../smoke
+Smoke
+smoke_x
+smoke.
+-smoke

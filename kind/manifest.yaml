@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/kind"
-version: "2026.10.29.1"
+version: "2026.11.10.1"
 description: >
   One named kind (Kubernetes in Docker) cluster for swamp, created on demand
   for end-to-end tests.
@@ -11,6 +11,11 @@ description: >
   server URL for other models to target. `get` records whether it exists
   without creating it, and `delete` removes it, succeeding when it is already
   gone.
+
+  The optional `kubeconfig` argument keeps the cluster's context in a file of
+  its own, so the default kubeconfig is never touched. kind chooses Docker,
+  Podman or nerdctl itself, from `KIND_EXPERIMENTAL_PROVIDER`; the live suite
+  runs on rootless Podman.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:
@@ -29,4 +34,5 @@ labels:
   - kubernetes
   - e2e
   - testing
+  - podman
 dependencies: []

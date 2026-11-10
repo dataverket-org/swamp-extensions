@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: applied
+  namespace: smoke
+data:
+  by: "@dataverket/kind ensure"

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/kind",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:18:15Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Fourth pass of an independent review; cluster.ts, cluster_test.ts and lib/ are byte-identical to the tree of the third review, only README.md changed, so the code verdicts are carried over. The type takes no credential. Kept stdout is cluster names and the jsonpath server URL. Every error and the record field error go through lib brief and redact; the unit test plants a JWT, a password pair and URL userinfo and looks in the error, the log and the written record. Redaction is by pattern; an opaque value kubectl echoes from a manifest can reach the 400-character error field."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Each method logs before its first command and on completion; the probe, the export and both delete branches are logged with structured placeholders; nothing secret."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A cancelled apply rethrows before the record write; a failed or timed-out kind export keeps the stopped-container question and adds the error of kind; get records and does not throw; a probe failure never replaces the real error (each tested). Note: every failed export gets the stopped-container question, also one that failed on a left-over lock file; the error of kind follows it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "64 unit tests pass on the strict fakes; across the rounds 28 mutations of cluster.ts each failed a test, and runs through swamp with fake binaries confirmed the checks per method and the stored failed-apply record. The reviewer ran no live suite; the file times fit the live run smoke/README.md states for the code, and README.md, text only, was written after it, which smoke/README.md now says. The mode without the kubeconfig argument is unit-tested only, which both READMEs say."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "delete without the kubeconfig argument runs kind delete cluster only when kind lists the cluster, as published, so nothing writes the default kubeconfig for an unlisted cluster; for a listed one kind removes the entries named kind-<name> and unsets current-context when it is that one, as published. With the argument kind delete always runs on that file, after the directory check and before any kind call. kind export runs only with the argument, once. A failed apply is recorded and a rerun converges."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "kind and kubectl commands and flags checked against kind 0.32 source and the strict fakes; exit status decides before stdout is read."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Every spawn has a limit, SIGTERM then SIGKILL then pipes let go, no temp files. A kind create stopped at its limit can leave containers and a killed kind can leave <file>.lock; the README says both."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md read again against the code. The Use section is back (the example definition and the three commands match the arguments and methods), the headings are in order, the lock-file paragraph (delete fails on a left-over lock, as any kind command that writes the file) and the checks bullet (delete needs no kubectl, get none for a cluster that does not exist) match the code. No real address, host or identifier. Outside the archive: smoke/ and lib/ are untracked in git at review time and must be committed for the README link to smoke/README.md to hold; the root README says 4 GiB for a macOS Podman machine, smoke/README.md 2 GiB."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "z.object without passthrough. Every write sets the seven required fields; kubeconfig only with the argument; manifestFailed and error only where documented."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "cluster: lifetime infinite, garbageCollection 10, unchanged."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "ensure, get, delete; a kind cluster is not updated in place."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "kind-cli-available before ensure and delete, kubectl-cli-available before ensure, both from the repository root; matches what each method spawns; confirmed through swamp in a scratch repository."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "One spec, one fixed instance name cluster, at most one write per run."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "upgrades entry to 2026.11.10.1 with an identity upgradeAttributes; every new argument and record field is optional."
+    }
+  ]
+}
