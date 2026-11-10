@@ -28,10 +28,16 @@ What is open in this repository, checked against the code on 2026-11-10.
    the publish sequence. `AGENTS.md` has the rules they build on.
 6. **`lib/`, for its next change** (each moves the hash of every extension that
    imports it):
-   - A data name longer than 255 bytes cannot be stored, and only flux's
-     artifact name is checked today. `<namespace>--<name>` reaches 318 bytes for
-     an object name above about 185 characters; the method acts and then fails
-     to store its record. Check in `dataName`, before anything runs.
+   - `lib/cli.ts` has `encodedName` and `assertDataName` since 2026-11-10, and
+     renovate uses them. The kubectl extensions do not yet:
+     `<namespace>--<name>` reaches 318 bytes for an object name above about 185
+     characters, and the method acts and then fails to store its record. Check
+     in `assertDistinctDataNames`, which gateway-api, cert-manager and cnpg call
+     before their first write, so one long name does not fail a whole list; flux
+     needs the call added.
+   - flux's `instanceName` for an artifact is not injective for characters
+     outside the basic plane (its expression has no `u` flag), and keeps a
+     leading dot and `..`. Moving it to `encodedName` changes published names.
    - A time limit stops the process that was started, not its children. Seen on
      rootless Podman: `podman compose` stopped, its `docker-compose` child ran
      four seconds more (`salmon/README.md`).
@@ -39,6 +45,18 @@ What is open in this repository, checked against the code on 2026-11-10.
      apart from the text itself.
 7. **`http`: `bodyContains` reads the body with no size limit.** `bodyJson`
    stops at 1 MiB.
+
+8. **File a swamp issue: a nested workflow step's inputs are not checked against
+   the called workflow's input schema.** `additionalProperties: false` holds
+   from the command line only, so a mistyped input of a nested call was ignored.
+   The nine signed-images workflows check their own input names in a first step
+   because of it. A two-workflow reproduction with built-in steps exists.
+9. **renovate: a GitHub token.** Without one Renovate skips every lookup on
+   GitHub tags and releases, so a GitHub Action pin is never checked. It would
+   come from a vault reference and reach the container through its environment.
+10. **cosign: the build type of early `actions/attest-build-provenance`
+    releases** is on the allowlist from its document; which releases wrote it is
+    not confirmed.
 
 ## Later
 
