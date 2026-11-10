@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/gateway-api",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:35:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Third review by an independent reviewer. No credential is an argument; the kubeconfig is named by path and reaches no error or record (pinned). No Secret is read; certificateRefs hold group, kind, name and namespace only; header and query matches are counts, filters are type names. Condition messages are redacted before storage and every finding copies the stored condition. Planted-marker tests pass. Stored verbatim: path match values, hostnames, GatewayClass spec.description, selector values."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Info on entry and completion with structured placeholders; one warning for a version other than v1, pinned for all three types. Nothing secret-bearing is logged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Every item is parsed before the first write; a failed call, a malformed list or a cancelled run writes nothing (pinned for all six methods). Unhealthy objects are records, never throws. The README names the three messages that do not start with the kubectl command."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "85 unit tests pass. Both new rules are pinned in both directions (superseded in either order of entries and for the three edit shapes; an old report with no current one still judged; one listener enough per controller and not across controllers, not for a named listener, not for a report without a listener; the accepting listener must resolve references), and I could not break them from a scratch script (28 shapes). Remaining: (1) no unit test mixes reports with and without observedGeneration under the one-listener rule, the author's stated deviation; (2) no run log is kept, so the counts (160) and the 200 ms of f-cancel.sh rest on the README's word; the smoke scripts were read, not run, in this review; (3) smoke/README.md says a Podman machine of 2 GiB, the root README 4 GiB; (4) a stale report of a replaced controller, a controller that reports per listener, SupportedVersion False and a Gateway leftover listener entry are shown by unit tests and suite-written status only, which both READMEs say."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Read-only; a rerun replaces the same data names; one attempt per call. A list interrupted between record writes and the inventory write is repaired by the next run."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Both findings of the second review are fixed and verified by probe. Superseded (httproute.ts superseded): an old report is set aside only when the same controller has a report with current true on every spec parent the old one is about; a current report with no conditions, or with conditions that carry no observedGeneration, or from another controller, does not supersede, and the old report stays a finding (probed). The three edit shapes that were false alarms now read healthy with one leftover, and the README says Envoy Gateway v1.8.2 was run through them (cluster.sh resection). One listener is enough (refusedListener): only for a spec parent without a sectionName, only among one controller's reports that name a listener, never with an old report on either side; the v1 text of ParentReference.sectionName ('successful if at least one section in the parent resource accepts it') is what it implements. I found no status in which a refusal on a parent the route names, or a stale state with no current report, reads healthy. The author's deviation, that reports without observedGeneration take part in the one-listener rule, is the right call: requiring a known generation would make every refusing listener a finding for good on a controller that sets none, on a valid route; the cost is one unreachable-in-practice case (one controller, an accepting listener report without observedGeneration that is really old beside a current refusal with one), and a controller that sets none cannot be checked for staleness anywhere in this extension, which statusCurrent null already says. Inherent to the API's rule and stated in the README: a route named without a listener reads healthy when the listener the user had in mind refuses and another accepts; refusedListenerReports above 0 is the signal, and naming the listener is the remedy. Small, in the false-alarm or cosmetic direction, not worth holding a release: a refusing listener report beside an accepting report that names no listener (one controller mixing both forms) is still a finding; a refused listener's own ResolvedRefs False or missing conditions are not judged; the README could say in one sentence that a report with no observedGeneration counts as not old. kubectl answers are checked for kind and identity; the resource is asked for by full group."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One kubectl process per method, no shell, request timeout 30 s, stopped at 35 s, timers cleared, cancellation through context.signal. No temporary files. lib/ unchanged since the second review."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Examples use example.org and documentation addresses. Envoy Gateway is named only as what the extension was run against; no type source, schema or description holds anything implementation-specific."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "z.object without passthrough. New fields checked against the writes: parents[].judged and notJudgedBecause (an enum of the three kinds, null when judged), summary.refusedListenerReports, leftoverParentReports as not-requested plus superseded (httproute); summary.leftoverListenerReports (gateway). Each is set on every path; 28 probe records parsed with HttpRouteSchema. The README's description of the three not-judged kinds matches the code. The inventory takes its lines from summary.unhealthy and now always names the controller; the two new counts are per record and not in the inventory, which is consistent since they are not findings."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource spec has lifetime infinite and garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Read-only by design: list and get on each type, pinned by a test."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "No mutating method. kubectl-cli-available is registered; the README says swamp does not run it before list or get and how to run it by hand."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Predictable names; an inventory name cannot equal an object's; the '--' collision refuses a list that sees both objects and the cross-list case is documented with its remedy."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "First version, never published; no upgrades entry is due."
+    }
+  ]
+}

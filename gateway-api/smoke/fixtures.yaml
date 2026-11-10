@@ -1,0 +1,295 @@
+# What the live suite reads: one healthy Gateway with an attached route, and
+# one object for every way a Gateway, a route or a class can be not healthy.
+apiVersion: v1
+kind: Namespace
+metadata: { name: gw-smoke }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: apps, labels: { routes: allowed } }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: outside }
+---
+# A ClusterIP Service gives a Gateway an address without a load balancer, and
+# one merged proxy serves every Gateway of the class.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata: { name: smoke, namespace: envoy-gateway-system }
+spec:
+  mergeGateways: true
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService: { type: ClusterIP }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata: { name: smoke }
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: smoke
+    namespace: envoy-gateway-system
+---
+# A class whose parameters do not exist: Accepted False.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata: { name: bad-parameters }
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: no-such-proxy
+    namespace: envoy-gateway-system
+---
+# A class no controller manages: Accepted stays Unknown.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata: { name: nobody }
+spec:
+  controllerName: example.org/no-such-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: healthy, namespace: gw-smoke }
+spec:
+  gatewayClassName: smoke
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      hostname: "*.example.org"
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector: { matchLabels: { routes: allowed } }
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "*.example.org"
+      tls:
+        mode: Terminate
+        certificateRefs: [{ name: wildcard }]
+      allowedRoutes:
+        namespaces: { from: Same }
+---
+# A certificate reference that does not resolve.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: bad-cert, namespace: gw-smoke }
+spec:
+  gatewayClassName: smoke
+  listeners:
+    - name: https
+      port: 8443
+      protocol: HTTPS
+      tls:
+        certificateRefs: [{ name: no-such-secret }]
+---
+# Two listeners on one port with two protocols.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: conflict, namespace: gw-smoke }
+spec:
+  gatewayClassName: smoke
+  listeners:
+    - name: plain
+      port: 8080
+      protocol: HTTP
+    - name: tls
+      port: 8080
+      protocol: HTTPS
+      tls:
+        certificateRefs: [{ name: wildcard }]
+---
+# A Gateway of the class nobody manages: no controller reports on it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: unmanaged, namespace: gw-smoke }
+spec:
+  gatewayClassName: nobody
+  listeners:
+    - { name: http, port: 80, protocol: HTTP }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: echo, namespace: apps }
+spec:
+  selector: { app: echo }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: ok, namespace: apps }
+spec:
+  hostnames: [app.example.org]
+  parentRefs:
+    - { name: healthy, namespace: gw-smoke, sectionName: http }
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /api }
+          method: GET
+      backendRefs: [{ name: echo, port: 80 }]
+---
+# A backend Service that does not exist.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: missing-backend, namespace: apps }
+spec:
+  hostnames: [missing.example.org]
+  parentRefs:
+    - { name: healthy, namespace: gw-smoke, sectionName: http }
+  rules:
+    - backendRefs: [{ name: no-such-service, port: 80 }]
+---
+# A parent Gateway that does not exist.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: ghost-parent, namespace: apps }
+spec:
+  parentRefs:
+    - { name: no-such-gateway, namespace: gw-smoke }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+# A hostname the listener does not serve.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: wrong-host, namespace: apps }
+spec:
+  hostnames: [app.example.net]
+  parentRefs:
+    - { name: healthy, namespace: gw-smoke, sectionName: http }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+# A namespace the listener does not allow routes from.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: not-allowed, namespace: outside }
+spec:
+  hostnames: [outside.example.org]
+  parentRefs:
+    - { name: healthy, namespace: gw-smoke, sectionName: http }
+  rules:
+    - backendRefs: [{ name: echo, namespace: apps, port: 80 }]
+---
+# A listener that cluster.sh rename renames after the route attached to it:
+# the controller leaves its report for the old name behind.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: renamed, namespace: gw-smoke }
+spec:
+  gatewayClassName: smoke
+  listeners:
+    - name: before
+      port: 8090
+      protocol: HTTP
+      allowedRoutes: { namespaces: { from: All } }
+    - name: other
+      port: 8091
+      protocol: HTTP
+      allowedRoutes: { namespaces: { from: All } }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: renamed, namespace: apps }
+spec:
+  hostnames: [renamed.example.org]
+  parentRefs:
+    - { name: renamed, namespace: gw-smoke, sectionName: before }
+    - { name: renamed, namespace: gw-smoke, sectionName: other }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+# Routes of the Gateway nobody manages. No controller writes their status;
+# cluster.sh written-status writes it, in shapes the controller under test
+# does not produce. This one gets the reports of two controllers, one of
+# which stopped at the generation it last saw.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: two-controllers, namespace: apps }
+spec:
+  hostnames: [two.example.org]
+  parentRefs:
+    - { name: unmanaged, namespace: gw-smoke, sectionName: http }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: other-form, namespace: apps }
+spec:
+  parentRefs:
+    - { name: unmanaged, namespace: gw-smoke }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: partially-invalid, namespace: apps }
+spec:
+  parentRefs:
+    - { name: unmanaged, namespace: gw-smoke, sectionName: http }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+# A class nobody manages; cluster.sh written-status marks it accepted on CRDs
+# of a version its controller does not support.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata: { name: unsupported-version }
+spec:
+  controllerName: example.org/no-such-controller
+---
+# Routes whose parent reference is edited after they attached: cluster.sh
+# resection adds a listener name to one and takes it away from the other.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: sections, namespace: gw-smoke }
+spec:
+  gatewayClassName: smoke
+  listeners:
+    - name: a
+      port: 8092
+      protocol: HTTP
+      allowedRoutes: { namespaces: { from: All } }
+    - name: b
+      port: 8093
+      protocol: HTTP
+      allowedRoutes: { namespaces: { from: All } }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: section-added, namespace: apps }
+spec:
+  hostnames: [section-added.example.org]
+  parentRefs:
+    - { name: sections, namespace: gw-smoke }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: section-removed, namespace: apps }
+spec:
+  hostnames: [section-removed.example.org]
+  parentRefs:
+    - { name: sections, namespace: gw-smoke, sectionName: a }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]
+---
+# Written status again: named without a listener, and every listener refuses.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: all-refuse, namespace: apps }
+spec:
+  parentRefs:
+    - { name: unmanaged, namespace: gw-smoke }
+  rules:
+    - backendRefs: [{ name: echo, port: 80 }]

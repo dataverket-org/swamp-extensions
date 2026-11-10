@@ -1,0 +1,52 @@
+manifestVersion: 1
+name: "@dataverket/gateway-api"
+version: "2026.11.10.1"
+description: >
+  The Kubernetes Gateway API, read as swamp data: Gateways, HTTPRoutes and
+  GatewayClasses with their conditions, through kubectl. Read-only.
+
+  Three model types, each with `list` and `get`. `gateway` records a Gateway's
+  class, the addresses it asks for and was given, its Accepted and Programmed
+  conditions, and every listener with hostname, port, protocol, TLS mode and
+  certificate references by name, allowed routes, attached routes, supported
+  kinds and the listener's own conditions. `httproute` records hostnames,
+  parents, rules with matches and backends, and what each controller reported
+  per parent, in whatever form it named the parent. `gatewayclass` records the
+  controller, whether it accepted the class and whether it supports the
+  installed version.
+
+  Every record carries a summary a workflow asserts on without parsing text:
+  `healthy`, `programmed`, `allListenersProgrammed`, `allParentsAccepted`,
+  `allRefsResolved`, and a list naming every listener or parent that is not
+  as it should be, with the controller's reason and message. Each list also
+  writes an inventory of what it saw. An object that is not accepted, not
+  programmed, or whose references do not resolve is recorded, never thrown;
+  only a call that could not be made fails the method, and a cluster without
+  the Gateway API CRDs is named as exactly that. Reads only the standard
+  fields; run against Envoy Gateway v1.8.2.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - gateway.ts
+  - httproute.ts
+  - gatewayclass.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - gateway-api
+  - gateway
+  - httproute
+  - gatewayclass
+  - kubernetes
+  - kubectl
+  - envoy-gateway
+  - ingress
+  - read-only
+dependencies: []
