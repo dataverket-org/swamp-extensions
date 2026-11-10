@@ -14,24 +14,19 @@ What is open in this repository, checked against the code on 2026-11-10.
 2. **New `@dataverket/dns`.** Nordhost DirectAdmin zone records (list, verify,
    delete a retired name), deSEC token mint and rotate, and a plain resolver
    assertion (record type, server, TTL) instead of `dig` by hand.
-3. **File a swamp issue on `@swamp/s3-datastore`.** After a tombstone its
-   cleanup deletes `<name>/<version>/metadata.yaml` twice, fails with
-   `NoSuchKey`, then "Failed to release locks during cleanup". Seen 2026-11-07
-   17:22 UTC on datastore 2026.10.24.2, swamp 20261030.003603.0; no data lost.
-   Check first whether 2026.11.09.1 still does it.
-4. **Ask `@swamp/kubernetes` for a generic custom-resource `list` and `get`.**
+3. **Ask `@swamp/kubernetes` for a generic custom-resource `list` and `get`.**
    It reads one custom resource today, ExternalSecret, written by hand. With a
    generic read, gateway-api, cert-manager and cnpg could drop their plain reads
    and keep the summaries, `trace`, `renew` and the Backup `create`.
-5. **CloudNativePG 1.30.1: one Backup that never finishes seems to hold up the
+4. **CloudNativePG 1.30.1: one Backup that never finishes seems to hold up the
    others.** Seen three times on kind (`cnpg/smoke/README.md`): a Backup of a
    Cluster whose archive never worked stays `running`, and after it a Backup of
    another, healthy Cluster gets no phase for minutes; the operator does not
    restart and reports every Cluster healthy. Not investigated. Reproduce on its
    own, then report it upstream.
-6. **Two skills for agents working here:** a new extension from the pattern, and
+5. **Two skills for agents working here:** a new extension from the pattern, and
    the publish sequence. `AGENTS.md` has the rules they build on.
-7. **`lib/`, for its next change** (each moves the hash of every extension that
+6. **`lib/`, for its next change** (each moves the hash of every extension that
    imports it):
    - A data name longer than 255 bytes cannot be stored, and only flux's
      artifact name is checked today. `<namespace>--<name>` reaches 318 bytes for
@@ -42,7 +37,7 @@ What is open in this repository, checked against the code on 2026-11-10.
      four seconds more (`salmon/README.md`).
    - An x509 error from kubectl is classified `unreachable`; kind tells them
      apart from the text itself.
-8. **`http`: `bodyContains` reads the body with no size limit.** `bodyJson`
+7. **`http`: `bodyContains` reads the body with no size limit.** `bodyJson`
    stops at 1 MiB.
 
 ## Later
