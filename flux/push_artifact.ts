@@ -17,8 +17,15 @@
  *
  * @module
  */
-import { z } from "npm:zod@4";
-import { fluxCliCheck, type FluxContext, runFlux } from "./_helpers.ts";
+import { z } from "npm:zod@4.6.7";
+import { brief } from "../lib/cli.ts";
+import {
+  FLUX_TIMEOUTS,
+  fluxCliCheck,
+  type FluxContext,
+  runFlux,
+  storedUrl,
+} from "./_helpers.ts";
 
 /** `push_artifact`'s arguments. */
 export const PushArtifactArgsSchema = z.object({
@@ -149,16 +156,14 @@ export function parsePushOutput(
     parsed = JSON.parse(text);
   } catch {
     throw new Error(
-      `flux push artifact did not print JSON: ${
-        text.trim().slice(0, 120) || "(empty)"
-      }`,
+      `flux push artifact did not print JSON: ${brief(text, 120) || "(empty)"}`,
     );
   }
   const digest = String(parsed.digest ?? "");
   if (!DIGEST.test(digest)) {
     throw new Error(
       `flux push artifact printed no sha256 digest: ${
-        JSON.stringify(parsed).slice(0, 120)
+        brief(JSON.stringify(parsed), 120)
       }`,
     );
   }
@@ -188,26 +193,76 @@ export function absolute(root: string, path: string): string {
   return `${root.replace(/\/+$/, "")}/${path.replace(/^\.\/+/, "")}`;
 }
 
-/** Copies a directory tree; symbolic links are copied as links. */
-async function copyDir(src: string, dst: string): Promise<void> {
+/**
+ * Copies the regular files and directories of a tree. Anything else, a
+ * symbolic link, a FIFO, a socket or a device, is not copied and its path is
+ * added to `skipped`: `flux push artifact` leaves such entries out of the
+ * artifact itself, and opening a FIFO would wait forever. The copy stops
+ * between two entries when the run is cancelled.
+ */
+/**
+ * What the copy does with one directory entry: only a directory and a
+ * regular file are copied. A FIFO, a socket and a device are none of the
+ * three things Deno names, and a link is not followed.
+ */
+export function copyKind(
+  entry: { isFile: boolean; isDirectory: boolean; isSymlink: boolean },
+): "directory" | "file" | "skip" {
+  if (entry.isSymlink) return "skip";
+  return entry.isDirectory ? "directory" : entry.isFile ? "file" : "skip";
+}
+
+async function copyDir(
+  src: string,
+  dst: string,
+  signal: AbortSignal | undefined,
+  skipped: string[],
+  prefix = "",
+): Promise<void> {
   for await (const entry of Deno.readDir(src)) {
+    if (signal?.aborted) {
+      throw new Error(
+        "push_artifact was cancelled while copying the directory",
+      );
+    }
     const from = `${src}/${entry.name}`;
     const to = `${dst}/${entry.name}`;
-    if (entry.isDirectory) {
+    const kind = copyKind(entry);
+    if (kind === "directory") {
       await Deno.mkdir(to);
-      await copyDir(from, to);
-    } else if (entry.isSymlink) {
-      await Deno.symlink(await Deno.readLink(from), to);
-    } else {
+      await copyDir(from, to, signal, skipped, `${prefix}${entry.name}/`);
+    } else if (kind === "file") {
       await Deno.copyFile(from, to);
+    } else {
+      skipped.push(`${prefix}${entry.name}`);
     }
   }
 }
 
-/** `<repository, sanitized>--<tag>`: one instance per tag, in any repository. */
+/**
+ * The data name of an artifact record: `<repository>:<tag>` with every
+ * character that is not a letter, a digit, `.` or `-` written as `_` and
+ * its two hex digits, so `/` is `_2f`, `:` is `_3a` and `_` is `_5f`. Two
+ * different targets never share a name, and the name is a file name
+ * everywhere.
+ */
 export function instanceName(repository: string, tag: string): string {
-  return `${repository.replace(/[^A-Za-z0-9_.-]+/g, "-")}--${tag}`;
+  return `${repository}:${tag}`.replace(
+    /[^A-Za-z0-9.-]/g,
+    (c) =>
+      [...new TextEncoder().encode(c)].map((b) =>
+        `_${b.toString(16).padStart(2, "0")}`
+      ).join(""),
+  );
 }
+
+/**
+ * The longest data name, in bytes. swamp sets no limit of its own: the name
+ * becomes a directory name in the data store, and a file name holds 255
+ * bytes on the common file systems. A longer name fails when the record is
+ * written, which is after flux has pushed.
+ */
+export const MAX_DATA_NAME_BYTES = 255;
 
 /** The context `push_artifact` reads: the three types' context plus the repository root. */
 export interface PushContext extends FluxContext<ArtifactData> {
@@ -248,6 +303,16 @@ export const extension = {
             throw new Error(`annotation ${JSON.stringify(a)} is not key=value`);
           }
         }
+        // Before anything is copied or pushed: a name the data store cannot
+        // hold would lose the record of a digest that is already uploaded.
+        const dataName = instanceName(target.repository, target.tag);
+        if (dataName.length > MAX_DATA_NAME_BYTES) {
+          throw new Error(
+            `the record of oci://${
+              brief(`${target.repository}:${target.tag}`, 80)
+            } would be stored under a name of ${dataName.length} bytes, more than the ${MAX_DATA_NAME_BYTES} a data name can be; nothing was pushed, use a shorter repository or tag`,
+          );
+        }
         const path = absolute(context.repoDir, args.path);
         let stat: Deno.FileInfo;
         try {
@@ -259,33 +324,45 @@ export const extension = {
 
         let pushed = path;
         let scratch: string | undefined;
-        if (args.metadata !== undefined) {
-          scratch = await Deno.makeTempDir({ prefix: "flux-push-artifact-" });
-          pushed = `${scratch}/artifact`;
-          await Deno.mkdir(pushed);
-          await copyDir(path, pushed);
-          await Deno.writeTextFile(
-            `${pushed}/release.json`,
-            JSON.stringify(args.metadata, null, 2) + "\n",
-          );
-          context.logger.info("release.json written into a copy of {path}", {
-            path,
-          });
-        }
         try {
+          if (args.metadata !== undefined) {
+            // Inside the try: a copy that fails half way is removed too.
+            scratch = await Deno.makeTempDir({ prefix: "flux-push-artifact-" });
+            pushed = `${scratch}/artifact`;
+            await Deno.mkdir(pushed);
+            const skipped: string[] = [];
+            await copyDir(path, pushed, context.signal, skipped);
+            if (skipped.length > 0) {
+              context.logger.info(
+                "Not copied, because they are neither files nor directories; flux leaves them out of an artifact too: {skipped}",
+                { skipped: skipped.sort().join(", ") },
+              );
+            }
+            await Deno.writeTextFile(
+              `${pushed}/release.json`,
+              JSON.stringify(args.metadata, null, 2) + "\n",
+            );
+            context.logger.info("release.json written into a copy of {path}", {
+              path,
+            });
+          }
           context.logger.info("Pushing {path} to oci://{repository}:{tag}", {
             path,
             repository: target.repository,
             tag: target.tag,
           });
-          const out = await runFlux(pushArgs({
-            ...target,
-            path: pushed,
-            source: args.source,
-            revision: args.revision,
-            annotations: args.annotations,
-            insecureRegistry: args.insecureRegistry,
-          }));
+          const out = await runFlux(
+            pushArgs({
+              ...target,
+              path: pushed,
+              source: args.source,
+              revision: args.revision,
+              annotations: args.annotations,
+              insecureRegistry: args.insecureRegistry,
+            }),
+            { signal: context.signal },
+            FLUX_TIMEOUTS.push,
+          );
           const printed = parsePushOutput(out);
           const record: ArtifactData = {
             ref: `${target.repository}@${printed.digest}`,
@@ -295,7 +372,7 @@ export const extension = {
             digest: printed.digest,
             path,
             releaseJson: scratch !== undefined,
-            source: args.source,
+            source: storedUrl(args.source),
             revision: args.revision,
             annotations: annotationRecord(args.annotations),
             reproducible: true,
@@ -303,7 +380,7 @@ export const extension = {
           };
           const handle = await context.writeResource(
             "artifact",
-            instanceName(target.repository, target.tag),
+            dataName,
             record,
           );
           context.logger.info("Pushed {ref}", { ref: record.ref });

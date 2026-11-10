@@ -10,7 +10,18 @@
  *
  * @module
  */
-import { z } from "npm:zod@4";
+import { z } from "npm:zod@4.6.7";
+import {
+  assertDistinctDataNames,
+  dataName,
+  isKubectlError,
+  kubectlCliCheck,
+  kubectlOpts,
+  listArgs,
+  listItems,
+  listNamespace,
+  runKubectl,
+} from "../lib/kubectl.ts";
 import {
   ConditionRaw,
   ConditionSchema,
@@ -18,11 +29,9 @@ import {
   FluxContext,
   FluxGlobalArgsSchema,
   forkUpgrades,
-  kubectlCliCheck,
-  listArgs,
+  listedNames,
   narrowConditions,
-  runKubectl,
-  RunOpts,
+  storedUrl,
 } from "./_helpers.ts";
 
 /** Recognised FluxCD source kinds. */
@@ -100,7 +109,7 @@ export function parseSource(
     readyReason: reason,
     readyMessage: message,
     suspended: (spec.suspend as boolean) ?? false,
-    url: (spec.url as string) ?? "",
+    url: storedUrl((spec.url as string) ?? ""),
     interval: spec.interval as string | undefined,
     ref: spec.ref as Record<string, string> | undefined,
     artifact: artifact
@@ -116,23 +125,24 @@ export function parseSource(
   };
 }
 
-/**
- * Whether a kubectl failure says the CRD is absent. kubectl phrases it two
- * ways depending on how the type was named.
- */
-export function isMissingCrd(message: string): boolean {
-  return message.includes("no matches for kind") ||
-    message.includes("the server doesn't have a resource type");
-}
-
 type Ctx = FluxContext<SourceData>;
 
 /** Swamp model for FluxCD source objects (GitRepository, HelmRepository, OCIRepository). */
 export const model = {
   type: "@dataverket/flux/source",
-  version: "2026.10.05.1",
+  version: "2026.11.10.1",
   globalArguments: FluxGlobalArgsSchema,
-  upgrades: forkUpgrades,
+  upgrades: [
+    ...forkUpgrades,
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "Released with get on the helmrelease type; a namespace that is not a Kubernetes name is refused before kubectl runs; every flux and kubectl call has a time limit; the artifact record is named by its escaped <repository>:<tag>; url, source and condition messages are stored with credentials blanked. No global argument and no stored field changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   checks: {
     // list never runs checks; this one is for `swamp model validate`, and it
     // stays off push_artifact, which pushes to a registry and needs no kubectl.
@@ -165,11 +175,8 @@ export const model = {
         args: { namespace?: string; kind?: SourceKind },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
-        const ns = args.namespace ?? context.globalArgs.namespace;
-        const opts: RunOpts = {
-          kubeconfig: context.globalArgs.kubeconfig,
-          context: context.globalArgs.context,
-        };
+        const ns = listNamespace(args.namespace, context.globalArgs.namespace);
+        const opts = kubectlOpts(context);
         const kindsToQuery = args.kind ? [args.kind] : [...SOURCE_KINDS];
 
         context.logger.info("Listing {kinds} in {namespace}", {
@@ -179,15 +186,12 @@ export const model = {
 
         const handles: unknown[] = [];
         for (const kind of kindsToQuery) {
-          let data: { items?: Record<string, unknown>[] };
+          const call = listArgs(KIND_TO_RESOURCE[kind], ns);
+          let data: unknown;
           try {
-            data = (await runKubectl(
-              listArgs(KIND_TO_RESOURCE[kind], ns),
-              opts,
-            )) as typeof data;
+            data = await runKubectl(call, opts);
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (isMissingCrd(msg)) {
+            if (isKubectlError(err, "missing-crd")) {
               context.logger.info("Skipping {kind}: CRD not installed", {
                 kind,
               });
@@ -195,7 +199,10 @@ export const model = {
             }
             throw err;
           }
-          const items = data.items ?? [];
+          const items = listItems(data, `kubectl ${call.join(" ")}`, kind);
+          // Checked before the first write of this kind: a second record
+          // under one name would silently replace the first.
+          assertDistinctDataNames(kind, listedNames(items, kind));
 
           context.logger.info("Found {count} {kind}", {
             count: String(items.length),
@@ -207,7 +214,7 @@ export const model = {
             handles.push(
               await context.writeResource(
                 "source",
-                `${parsed.kind}--${parsed.namespace}--${parsed.name}`,
+                `${parsed.kind}--${dataName(parsed.namespace, parsed.name)}`,
                 parsed,
               ),
             );

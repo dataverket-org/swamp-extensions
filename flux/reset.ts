@@ -6,15 +6,29 @@
  * workload it created is healthy.
  *
  * Same shape as the base type, and deliberately so: `flux` and `kubectl` are
- * run by name from PATH, exactly as `helmrelease.ts` runs them, so a pinned
- * toolchain is arranged the same way for the base type and for this method.
+ * run by name from PATH through the same runners `helmrelease.ts` uses, so a
+ * pinned toolchain is arranged the same way for the base type and for this
+ * method.
  * The object is read back with kubectl and the outcome recorded. Written as
  * an extension before the base type was forked in, and kept as one: it
  * carries the two CLI pre-flight checks the base type's methods rely on.
  *
  * @module
  */
-import { z } from "npm:zod@4";
+import { z } from "npm:zod@4.6.7";
+import { type CliError, isCliError, pollBudget, redact } from "../lib/cli.ts";
+import {
+  checkName,
+  dataName,
+  getArgs,
+  kubectlCliCheck,
+  kubectlOpts,
+  nonEmpty,
+  obj,
+  requireNamespace,
+  runKubectl,
+} from "../lib/kubectl.ts";
+import { fluxCliCheck, reconcileTimeout, runFlux } from "./_helpers.ts";
 
 const ResetArgsSchema = z.object({
   /** HelmRelease name. */
@@ -43,6 +57,50 @@ interface GlobalArgs {
   namespace?: string;
   kubeconfig?: string;
   context?: string;
+}
+
+const RESOURCE = "helmreleases.helm.toolkit.fluxcd.io";
+
+/**
+ * The data name of a `resetResult` record. The dot keeps it apart from the
+ * `<namespace>--<name>` record of `list`, as `detail.` does for `get`: swamp
+ * keys data by name, and a namespace holds no dot.
+ */
+export function resetName(namespace: string, name: string): string {
+  return `reset.${dataName(namespace, name)}`;
+}
+
+/**
+ * The reset request helm-controller last handled, from
+ * `status.lastHandledResetAt`. `flux reconcile --reset` writes a new
+ * timestamp in the `reconcile.fluxcd.io/resetAt` annotation, and
+ * helm-controller copies it here when it clears the failure counters. A
+ * value that changed over a flux run is the proof that the reset happened.
+ */
+export function handledResetAt(item: Record<string, unknown>): string {
+  return nonEmpty(obj(item.status).lastHandledResetAt) ?? "";
+}
+
+/**
+ * How long, and how often, `status.lastHandledResetAt` is read again after a
+ * flux that ran out of time. helm-controller writes the field to the object
+ * just before it starts the Helm action, so during a long install or upgrade
+ * it is already there; the wait is for a controller that had not got to the
+ * release yet when flux gave up.
+ */
+export const RESET_SETTLE_MS = 30_000;
+export const RESET_POLL_MS = 5_000;
+
+/**
+ * Whether a failed flux ran out of time: stopped at the process limit, or
+ * giving up by itself after its own five minutes. Anything else, a refused
+ * patch or an expired login among it, is an answer and is not waited on.
+ */
+export function ranOutOfTime(err: CliError): boolean {
+  return err.kind === "timeout" ||
+    /context deadline exceeded|timed out waiting/i.test(
+      `${err.message}\n${err.stderr}`,
+    );
 }
 
 /** The exact `flux` argument list; pure so the test can pin it. */
@@ -76,7 +134,7 @@ export function summarize(
     namespace,
     ready: ready?.status === "True",
     readyReason: ready?.reason ?? "",
-    readyMessage: ready?.message ?? "",
+    readyMessage: redact(ready?.message ?? ""),
     deployStatus: history[0]?.status as string | undefined,
     installFailures: Number(status.installFailures ?? 0),
     upgradeFailures: Number(status.upgradeFailures ?? 0),
@@ -84,118 +142,12 @@ export function summarize(
   };
 }
 
-/** One spawned command's outcome. */
-export interface SpawnResult {
-  success: boolean;
-  stdout: string;
-  stderr: string;
-}
-/** Spawns a command; replaceable so checks and methods are testable. */
-export type Spawn = (
-  bin: string,
-  args: string[],
-  signal?: AbortSignal,
-) => Promise<SpawnResult>;
-
-const defaultSpawn: Spawn = async (bin, args, signal) => {
-  // flux and kubectl are the interfaces being driven; see README "Prerequisites".
-  // swamp-quality-ignore deno-command
-  const out = await new Deno.Command(bin, {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-    signal,
-  }).output();
-  return {
-    success: out.success,
-    stdout: new TextDecoder().decode(out.stdout),
-    stderr: new TextDecoder().decode(out.stderr),
-  };
-};
-
-let testSpawn: Spawn | undefined;
-/** Install a fake spawn (tests only); call with no argument to restore. */
-export function __setSpawn(s?: Spawn): void {
-  testSpawn = s;
-}
-
-/**
- * Run `bin` and return stdout, or throw with its stderr. A binary that is
- * not on PATH throws Deno.errors.NotFound from the spawn itself, which is a
- * message naming nothing an operator can act on; the checks below turn that
- * into a named failure before a method ever gets here.
- */
-async function run(
-  bin: string,
-  args: string[],
-  g: GlobalArgs,
-  signal?: AbortSignal,
-): Promise<string> {
-  const full: string[] = [];
-  if (g.kubeconfig) full.push("--kubeconfig", g.kubeconfig);
-  if (g.context) full.push("--context", g.context);
-  full.push(...args);
-  const out = await (testSpawn ?? defaultSpawn)(bin, full, signal);
-  const { stdout, stderr } = out;
-  if (!out.success) {
-    throw new Error(`${bin} ${args[0]} failed: ${(stderr || stdout).trim()}`);
-  }
-  return stdout;
-}
-
-/**
- * Spawn `bin` with a version argument and report why it could not be run.
- * A binary missing from PATH surfaces as Deno.errors.NotFound, whose own
- * message names neither the binary nor what to do, so it is restated here.
- */
-export async function cliProblem(
-  bin: string,
-  args: string[],
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  try {
-    const out = await (testSpawn ?? defaultSpawn)(bin, args, signal);
-    if (!out.success) {
-      return `${bin} ${args.join(" ")} failed: ${
-        (out.stderr || out.stdout).trim()
-      }`;
-    }
-    return undefined;
-  } catch (err) {
-    if (err instanceof Deno.errors.NotFound) {
-      return `${bin} is not on PATH; install it or put it on the PATH this repository runs with`;
-    }
-    return `${bin} could not be run: ${
-      err instanceof Error ? err.message : String(err)
-    }`;
-  }
-}
-
 /** Adds `reset` and the CLI checks to `@dataverket/flux/helmrelease`. */
 export const extension = {
   type: "@dataverket/flux/helmrelease",
   checks: [{
-    "flux-cli-available": {
-      description: "The flux binary runs and reports its version",
-      labels: ["live"],
-      execute: async (context: { signal?: AbortSignal }) => {
-        const problem = await cliProblem("flux", ["--version"], context.signal);
-        return problem ? { pass: false, errors: [problem] } : { pass: true };
-      },
-    },
-    "kubectl-cli-available": {
-      description:
-        "The kubectl binary runs and reports its client version; reset reads the object back with it",
-      labels: ["live"],
-      execute: async (context: { signal?: AbortSignal }) => {
-        const problem = await cliProblem(
-          "kubectl",
-          ["version", "--client"],
-          context.signal,
-        );
-        return problem ? { pass: false, errors: [problem] } : { pass: true };
-      },
-    },
+    "flux-cli-available": fluxCliCheck,
+    "kubectl-cli-available": kubectlCliCheck,
   }],
   resources: {
     resetResult: {
@@ -209,7 +161,7 @@ export const extension = {
   methods: [{
     reset: {
       description:
-        "Reconcile a HelmRelease with --reset: clears its failure counters so helm-controller retries a release stuck at RetriesExceeded. Waits for the attempt and records the result.",
+        "Reconcile a HelmRelease with --reset: clears its failure counters so helm-controller retries a release stuck at RetriesExceeded. Waits for the attempt and records the result. When flux fails and helm-controller did not handle the reset, nothing is recorded and flux's error is thrown.",
       arguments: ResetArgsSchema,
       execute: async (
         args: z.infer<typeof ResetArgsSchema>,
@@ -224,12 +176,13 @@ export const extension = {
           ) => Promise<{ name: string }>;
         },
       ) => {
-        const namespace = args.namespace ?? context.globalArgs.namespace;
-        if (!namespace) {
-          throw new Error(
-            "namespace is required: set it on the model or pass --input namespace=<ns>",
-          );
-        }
+        checkName(args.name);
+        const namespace = requireNamespace(
+          "reset",
+          args.namespace,
+          context.globalArgs.namespace,
+        );
+        const opts = kubectlOpts(context);
         context.logger.info(
           "Resetting and reconciling HelmRelease {name} in {namespace}",
           {
@@ -237,34 +190,62 @@ export const extension = {
             namespace,
           },
         );
+        // Read first: a release that is not there is refused before flux
+        // runs, and this is the value a handled reset must change.
+        const read = async () =>
+          obj(await runKubectl(getArgs(RESOURCE, args.name, namespace), opts));
+        const handledBefore = handledResetAt(await read());
         let attemptError: string | undefined;
+        let outOfTime = false;
         try {
-          await run(
-            "flux",
+          await runFlux(
             resetArgs({
               name: args.name,
               namespace,
               withSource: args.withSource,
             }),
-            context.globalArgs,
-            context.signal,
+            opts,
+            reconcileTimeout("helmrelease", args.withSource),
           );
         } catch (e) {
+          // Only a flux that ran and failed, or ran out of time, is an
+          // attempt. A cancelled run, a missing binary and anything else are
+          // thrown as they are.
+          if (!isCliError(e, "failed", "timeout")) throw e;
           // The attempt itself may fail again; record what the object says rather than hide it.
-          attemptError = e instanceof Error ? e.message : String(e);
+          attemptError = e.message;
+          outOfTime = ranOutOfTime(e);
         }
-        const raw = JSON.parse(
-          await run(
-            "kubectl",
-            ["get", "helmrelease", args.name, "-n", namespace, "-o", "json"],
-            context.globalArgs,
-            context.signal,
-          ),
-        ) as Record<string, unknown>;
+        let raw = await read();
+        if (outOfTime) {
+          // flux stopped waiting, which says nothing about helm-controller:
+          // give the field a short, bounded time to show up.
+          const budget = pollBudget(RESET_SETTLE_MS);
+          while (
+            handledResetAt(raw) === handledBefore &&
+            await budget.wait(RESET_POLL_MS, context.signal)
+          ) raw = await read();
+        }
+        if (
+          attemptError !== undefined && handledResetAt(raw) === handledBefore
+        ) {
+          // flux failed and helm-controller shows no handled reset. After a
+          // refused patch or an expired login nothing was asked for. After
+          // a flux that ran out of time the request may still be waiting.
+          // Either way what the object says is what it said before, so it
+          // is not recorded as the outcome of a reset.
+          throw new Error(
+            outOfTime
+              ? `${attemptError}; the reset was not handled within ${
+                RESET_SETTLE_MS / 1000
+              } more seconds: not yet, or not at all (status.lastHandledResetAt did not change), so nothing was recorded`
+              : `${attemptError}; the reset was not handled (status.lastHandledResetAt did not change), so nothing was recorded`,
+          );
+        }
         const result = summarize(raw, args.name, namespace);
         const handle = await context.writeResource(
           "resetResult",
-          `${namespace}--${args.name}`,
+          resetName(namespace, args.name),
           result,
         );
         context.logger.info("HelmRelease {name}: ready={ready} {reason}", {
@@ -272,7 +253,15 @@ export const extension = {
           ready: String(result.ready),
           reason: result.readyReason,
         });
-        if (attemptError && !result.ready) throw new Error(attemptError);
+        if (attemptError !== undefined) {
+          if (!result.ready) throw new Error(attemptError);
+          // The reset was handled and the release is ready, so the method
+          // succeeds; what flux said is kept in the log.
+          context.logger.info(
+            "flux reported a failure, but the reset was handled and HelmRelease {name} is ready: {error}",
+            { name: args.name, error: attemptError },
+          );
+        }
         return { dataHandles: [handle] };
       },
     },

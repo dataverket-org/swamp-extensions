@@ -5,6 +5,7 @@
  * `suspend` and `resume` act on one release and record what it says
  * afterwards. `reset.ts` adds the reconcile with `--reset` and this type's
  * two CLI pre-flight checks; the other two types carry theirs directly.
+ * `get.ts` adds the read of one release with its whole Helm history.
  *
  * Forked from `@ginger_pappa/flux` 2026.06.09.1 (MIT, copyright ginger_pappa).
  * Method names and the stored shape are upstream's; the spec is read
@@ -13,20 +14,31 @@
  *
  * @module
  */
-import { z } from "npm:zod@4";
+import { z } from "npm:zod@4.6.7";
+import {
+  assertDistinctDataNames,
+  checkName,
+  dataName,
+  getArgs,
+  kubectlOpts,
+  listArgs,
+  listItems,
+  listNamespace,
+  requireNamespace,
+  runKubectl,
+} from "../lib/kubectl.ts";
 import {
   ConditionRaw,
   ConditionSchema,
   extractReadyCondition,
+  FLUX_TIMEOUTS,
   FluxContext,
   FluxGlobalArgsSchema,
   forkUpgrades,
-  listArgs,
+  listedNames,
   narrowConditions,
-  requireNamespace,
+  reconcileTimeout,
   runFlux,
-  runKubectl,
-  RunOpts,
   SourceRefSchema,
 } from "./_helpers.ts";
 
@@ -108,13 +120,6 @@ export function parseHelmRelease(
 
 type Ctx = FluxContext<HelmReleaseData>;
 
-function runOpts(context: Ctx): RunOpts {
-  return {
-    kubeconfig: context.globalArgs.kubeconfig,
-    context: context.globalArgs.context,
-  };
-}
-
 /** Read one release back and record it. */
 async function recordOne(
   context: Ctx,
@@ -122,13 +127,13 @@ async function recordOne(
   ns: string,
 ): Promise<{ parsed: HelmReleaseData; handle: unknown }> {
   const updated = (await runKubectl(
-    ["get", RESOURCE, name, "-n", ns],
-    runOpts(context),
+    getArgs(RESOURCE, name, ns),
+    kubectlOpts(context),
   )) as Record<string, unknown>;
   const parsed = parseHelmRelease(updated);
   const handle = await context.writeResource(
     "helmrelease",
-    `${ns}--${name}`,
+    dataName(ns, name),
     parsed,
   );
   return { parsed, handle };
@@ -144,9 +149,19 @@ const OneArgs = z.object({
 /** Swamp model for FluxCD HelmRelease objects. */
 export const model = {
   type: "@dataverket/flux/helmrelease",
-  version: "2026.10.05.1",
+  version: "2026.11.10.1",
   globalArguments: FluxGlobalArgsSchema,
-  upgrades: forkUpgrades,
+  upgrades: [
+    ...forkUpgrades,
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "get added with its detail record; the resetResult record is named reset.<namespace>--<name>; a name or namespace that is not a Kubernetes name is refused before flux or kubectl runs; every flux and kubectl call has a time limit; condition messages are stored with credentials blanked. No global argument and no stored field changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   resources: {
     helmrelease: {
       description:
@@ -169,17 +184,24 @@ export const model = {
         args: { namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
-        const ns = args.namespace ?? context.globalArgs.namespace;
+        const ns = listNamespace(args.namespace, context.globalArgs.namespace);
 
         context.logger.info("Listing HelmReleases in {namespace}", {
           namespace: ns || "all namespaces",
         });
 
-        const data = (await runKubectl(
-          listArgs(RESOURCE, ns),
-          runOpts(context),
-        )) as { items?: Record<string, unknown>[] };
-        const items = data.items ?? [];
+        const call = listArgs(RESOURCE, ns);
+        const items = listItems(
+          await runKubectl(call, kubectlOpts(context)),
+          `kubectl ${call.join(" ")}`,
+          "HelmRelease",
+        );
+        // Checked before the first write: a second record under one name
+        // would silently replace the first.
+        assertDistinctDataNames(
+          "HelmRelease",
+          listedNames(items, "HelmRelease"),
+        );
 
         context.logger.info("Found {count} HelmReleases", {
           count: String(items.length),
@@ -191,7 +213,7 @@ export const model = {
           handles.push(
             await context.writeResource(
               "helmrelease",
-              `${parsed.namespace}--${parsed.name}`,
+              dataName(parsed.namespace, parsed.name),
               parsed,
             ),
           );
@@ -212,6 +234,7 @@ export const model = {
         args: { name: string; namespace?: string; withSource?: boolean },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "reconcile",
           args.namespace,
@@ -224,7 +247,11 @@ export const model = {
 
         const fluxArgs = ["reconcile", "helmrelease", args.name, "-n", ns];
         if (args.withSource) fluxArgs.push("--with-source");
-        await runFlux(fluxArgs, runOpts(context));
+        await runFlux(
+          fluxArgs,
+          kubectlOpts(context),
+          reconcileTimeout("helmrelease", args.withSource),
+        );
 
         const { parsed, handle } = await recordOne(context, args.name, ns);
         context.logger.info("Reconciliation complete, ready={ready}", {
@@ -242,6 +269,7 @@ export const model = {
         args: { name: string; namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "suspend",
           args.namespace,
@@ -253,9 +281,14 @@ export const model = {
         });
         await runFlux(
           ["suspend", "helmrelease", args.name, "-n", ns],
-          runOpts(context),
+          kubectlOpts(context),
+          FLUX_TIMEOUTS.suspend,
         );
-        const { handle } = await recordOne(context, args.name, ns);
+        const { parsed, handle } = await recordOne(context, args.name, ns);
+        context.logger.info(
+          "Suspended HelmRelease {name}: suspended={suspended}",
+          { name: args.name, suspended: String(parsed.suspended) },
+        );
         return { dataHandles: [handle] };
       },
     },
@@ -268,6 +301,7 @@ export const model = {
         args: { name: string; namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "resume",
           args.namespace,
@@ -279,9 +313,18 @@ export const model = {
         });
         await runFlux(
           ["resume", "helmrelease", args.name, "-n", ns],
-          runOpts(context),
+          kubectlOpts(context),
+          FLUX_TIMEOUTS.resume,
         );
-        const { handle } = await recordOne(context, args.name, ns);
+        const { parsed, handle } = await recordOne(context, args.name, ns);
+        context.logger.info(
+          "Resumed HelmRelease {name}: suspended={suspended}, ready={ready}",
+          {
+            name: args.name,
+            suspended: String(parsed.suspended),
+            ready: String(parsed.ready),
+          },
+        );
         return { dataHandles: [handle] };
       },
     },

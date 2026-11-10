@@ -1,0 +1,102 @@
+{
+  "apiVersion": "helm.toolkit.fluxcd.io/v2",
+  "kind": "HelmRelease",
+  "metadata": {
+    "annotations": {
+      "reconcile.fluxcd.io/requestedAt": "2026-11-10T10:34:03.636320829+01:00"
+    },
+    "creationTimestamp": "2026-11-10T09:32:38Z",
+    "finalizers": [
+      "finalizers.fluxcd.io"
+    ],
+    "generation": 1,
+    "name": "podinfo",
+    "namespace": "apps",
+    "resourceVersion": "1213",
+    "uid": "fb113ac7-278b-4be9-bf94-e36566c124f2"
+  },
+  "spec": {
+    "chartRef": {
+      "kind": "OCIRepository",
+      "name": "podinfo"
+    },
+    "interval": "1h",
+    "values": {
+      "replicaCount": 1
+    }
+  },
+  "status": {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-10T09:34:01Z",
+        "message": "Helm upgrade succeeded for release apps/podinfo.v2 with chart podinfo@6.9.2+971fef0d04d5",
+        "observedGeneration": 1,
+        "reason": "UpgradeSucceeded",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-10T09:34:01Z",
+        "message": "Helm upgrade succeeded for release apps/podinfo.v2 with chart podinfo@6.9.2+971fef0d04d5",
+        "observedGeneration": 1,
+        "reason": "UpgradeSucceeded",
+        "status": "True",
+        "type": "Released"
+      }
+    ],
+    "history": [
+      {
+        "action": "upgrade",
+        "apiVersion": "v2",
+        "appVersion": "6.9.2",
+        "chartName": "podinfo",
+        "chartVersion": "6.9.2+971fef0d04d5",
+        "configDigest": "sha256:5495eb6991f7c134fc9ab2dce6c3a537e06a3f39dd229ee4202343f5e5ddb04c",
+        "digest": "sha256:30f211bbd1259835f5b0d4078ce779e63fc548ed76b36285c8f4851a853ce3f5",
+        "firstDeployed": "2026-11-10T09:32:40Z",
+        "lastDeployed": "2026-11-10T09:33:30Z",
+        "name": "podinfo",
+        "namespace": "apps",
+        "ociDigest": "sha256:971fef0d04d5b3d03d035701dad59411ea0f60e28d16190f02469ddfe5587588",
+        "status": "deployed",
+        "version": 2
+      },
+      {
+        "apiVersion": "v2",
+        "appVersion": "6.9.1",
+        "chartName": "podinfo",
+        "chartVersion": "6.9.1+565d310746f1",
+        "configDigest": "sha256:5495eb6991f7c134fc9ab2dce6c3a537e06a3f39dd229ee4202343f5e5ddb04c",
+        "digest": "sha256:cee8281f1b18b36b658c4a786916b059ae6f8ca20810162f0ddcde6fd3b7b4fa",
+        "firstDeployed": "2026-11-10T09:32:40Z",
+        "lastDeployed": "2026-11-10T09:32:40Z",
+        "name": "podinfo",
+        "namespace": "apps",
+        "ociDigest": "sha256:565d310746f1fa4be7f93ba7965bb393153a2d57a15cfe5befc909b790a73f8a",
+        "status": "superseded",
+        "version": 1
+      }
+    ],
+    "inventory": {
+      "entries": [
+        {
+          "id": "apps_podinfo__Service",
+          "v": "v1"
+        },
+        {
+          "id": "apps_podinfo_apps_Deployment",
+          "v": "v1"
+        }
+      ]
+    },
+    "lastAttemptedConfigDigest": "sha256:5495eb6991f7c134fc9ab2dce6c3a537e06a3f39dd229ee4202343f5e5ddb04c",
+    "lastAttemptedGeneration": 1,
+    "lastAttemptedReleaseAction": "upgrade",
+    "lastAttemptedReleaseActionDuration": "30.250637337s",
+    "lastAttemptedRevision": "6.9.2+971fef0d04d5",
+    "lastAttemptedRevisionDigest": "sha256:971fef0d04d5b3d03d035701dad59411ea0f60e28d16190f02469ddfe5587588",
+    "lastHandledReconcileAt": "2026-11-10T10:34:03.636320829+01:00",
+    "observedGeneration": 1,
+    "storageNamespace": "apps"
+  }
+}

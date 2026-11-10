@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/flux"
-version: "2026.10.29.1"
+version: "2026.11.10.1"
 description: >
   Flux for swamp: HelmReleases, Kustomizations and sources as three model
   types, read with kubectl and driven with the flux CLI; and a directory
@@ -15,6 +15,15 @@ description: >
   applied and attempted revisions; `source` lists GitRepository,
   HelmRepository and OCIRepository objects with URL, reference and artifact
   revision, skipping a kind whose CRD is not installed.
+
+  `get` reads one HelmRelease in full, so a caller no longer parses the Ready
+  message: every Helm history entry Flux keeps with revision number, status,
+  chart and app version, deploy times, digests and test hook results; whether
+  the last action was an install or an upgrade and whether it succeeded, taken
+  from structured status fields and condition reasons; the failure counters;
+  the attempted and the applied revision; and the Jobs labelled for the
+  release with their hook types and results. A failed or never installed
+  release is recorded, not thrown, and missing hook Jobs are a recorded fact.
 
   `reset` is the recovery action the base type lacked: a reconcile with
   `--reset` that clears a HelmRelease's failure counters so helm-controller
@@ -35,8 +44,11 @@ description: >
   Changes from upstream: kubectl output that is not JSON is a named error; a
   HelmRelease declared through `chartRef` reports that as its source; the
   spec is read defensively; every kubectl resource is named by its full
-  group. `flux` and `kubectl` are run by name from PATH and the model's
-  namespace, kubeconfig and context are honoured, as upstream did.
+  group; a name or namespace that is not a Kubernetes name is refused before
+  a command runs; every `flux` and `kubectl` process has a time limit and is
+  stopped when a run is cancelled; error text is one bounded line with
+  credentials blanked. `flux` and `kubectl` are run by name from PATH and the
+  model's namespace, kubeconfig and context are honoured, as upstream did.
 repository: "https://github.com/dataverket-org/swamp-extensions"
 license: "AGPL-3.0-only"
 paths:
@@ -46,6 +58,7 @@ models:
   - kustomization.ts
   - source.ts
   - reset.ts
+  - get.ts
   - push_artifact.ts
 workflows: []
 vaults: []
@@ -59,6 +72,7 @@ labels:
   - fluxcd
   - helm
   - helmrelease
+  - helm-history
   - kustomization
   - gitrepository
   - ocirepository

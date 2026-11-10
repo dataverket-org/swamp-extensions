@@ -1,26 +1,19 @@
-import { assertEquals } from "jsr:@std/assert@1";
-import type { Spawn } from "./_helpers.ts";
+/**
+ * What the tests of this extension share: a HelmRelease as kubectl prints it
+ * and a method context that records writes and log lines. The strict fakes
+ * of `flux` and `kubectl` are the shared ones, `../lib/kubectl_fake.ts`.
+ *
+ * @module
+ */
 
-/** A spawn that answers one scripted call at a time and refuses anything else. */
-export function script(
-  calls: Array<{ bin: string; args: string[]; out: string; fail?: string }>,
-): { spawn: Spawn; done: () => void } {
-  let i = 0;
-  const spawn: Spawn = (bin, args) => {
-    const c = calls[i++];
-    if (!c) throw new Error(`unexpected spawn: ${bin} ${args.join(" ")}`);
-    assertEquals({ bin, args }, { bin: c.bin, args: c.args });
-    return Promise.resolve(
-      c.fail
-        ? { success: false, stdout: "", stderr: c.fail }
-        : { success: true, stdout: c.out, stderr: "" },
-    );
-  };
-  return { spawn, done: () => assertEquals(i, calls.length, "calls left") };
-}
+/** The full resource names the types read. */
+export const HR = "helmreleases.helm.toolkit.fluxcd.io";
+export const KS = "kustomizations.kustomize.toolkit.fluxcd.io";
 
 /** A HelmRelease as kubectl prints it, trimmed to what the parser reads. */
 export const hrItem = {
+  apiVersion: "helm.toolkit.fluxcd.io/v2",
+  kind: "HelmRelease",
   metadata: { name: "kps", namespace: "monitoring" },
   spec: {
     chart: {
@@ -43,8 +36,26 @@ export const hrItem = {
   },
 };
 
+/** A Kustomization as kubectl prints it, trimmed to what the parser reads. */
+export function ksItem(name: string, namespace: string) {
+  return {
+    apiVersion: "kustomize.toolkit.fluxcd.io/v1",
+    kind: "Kustomization",
+    metadata: { name, namespace },
+    spec: {
+      path: "./clusters/prod",
+      prune: true,
+      sourceRef: { kind: "GitRepository", name: "flux-system" },
+    },
+    status: { conditions: [{ type: "Ready", status: "True", reason: "Ok" }] },
+  };
+}
+
 /** A method context that records writes and log lines. */
-export function ctx(globalArgs: { namespace: string; context?: string }) {
+export function ctx(
+  globalArgs: { namespace: string; context?: string; kubeconfig?: string },
+  signal?: AbortSignal,
+) {
   const written: Array<{ spec: string; name: string; data: unknown }> = [];
   const logs: string[] = [];
   return {
@@ -52,6 +63,7 @@ export function ctx(globalArgs: { namespace: string; context?: string }) {
     logs,
     context: {
       globalArgs,
+      signal,
       logger: { info: (m: string) => logs.push(m) },
       writeResource: (spec: string, name: string, data: unknown) => {
         written.push({ spec, name, data });

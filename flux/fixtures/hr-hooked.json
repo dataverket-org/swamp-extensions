@@ -1,0 +1,125 @@
+{
+  "apiVersion": "helm.toolkit.fluxcd.io/v2",
+  "kind": "HelmRelease",
+  "metadata": {
+    "annotations": {},
+    "creationTimestamp": "2026-11-10T09:32:38Z",
+    "finalizers": [
+      "finalizers.fluxcd.io"
+    ],
+    "generation": 2,
+    "name": "hooked",
+    "namespace": "apps",
+    "resourceVersion": "1138",
+    "uid": "3049ca7b-f092-4fde-8a26-e9b28c568842"
+  },
+  "spec": {
+    "chart": {
+      "spec": {
+        "chart": "hooked",
+        "sourceRef": {
+          "kind": "HelmRepository",
+          "name": "local"
+        },
+        "version": "0.2.0"
+      }
+    },
+    "interval": "1h",
+    "test": {
+      "enable": true
+    },
+    "upgrade": {
+      "remediation": {
+        "retries": 0
+      }
+    },
+    "values": {
+      "failUpgradeHook": true
+    }
+  },
+  "status": {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-10T09:33:35Z",
+        "message": "Failed to upgrade after 1 attempt(s)",
+        "observedGeneration": 2,
+        "reason": "RetriesExceeded",
+        "status": "True",
+        "type": "Stalled"
+      },
+      {
+        "lastTransitionTime": "2026-11-10T09:33:34Z",
+        "message": "Helm upgrade failed for release apps/hooked with chart hooked@0.2.0: pre-upgrade hooks failed: failed early due to stalled resources: [Job/apps/hooked-pre-upgrade status: 'Failed']",
+        "observedGeneration": 2,
+        "reason": "UpgradeFailed",
+        "status": "False",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-10T09:33:34Z",
+        "message": "Helm upgrade failed for release apps/hooked with chart hooked@0.2.0: pre-upgrade hooks failed: failed early due to stalled resources: [Job/apps/hooked-pre-upgrade status: 'Failed']",
+        "observedGeneration": 2,
+        "reason": "UpgradeFailed",
+        "status": "False",
+        "type": "Released"
+      }
+    ],
+    "failures": 1,
+    "helmChart": "apps/apps-hooked",
+    "history": [
+      {
+        "action": "upgrade",
+        "apiVersion": "v2",
+        "appVersion": "1.0",
+        "chartName": "hooked",
+        "chartVersion": "0.2.0",
+        "configDigest": "sha256:fd7236fd900a3a0da6bec5df08e377ebeb3252c0ca035c8ebc734de74cc56fae",
+        "digest": "sha256:f2a5e28c807703076e06ce7052c7f07c0b68132162e794aa3ddabb29ec7f73fa",
+        "firstDeployed": "2026-11-10T09:32:42Z",
+        "lastDeployed": "2026-11-10T09:33:29Z",
+        "name": "hooked",
+        "namespace": "apps",
+        "status": "failed",
+        "version": 2
+      },
+      {
+        "action": "install",
+        "apiVersion": "v2",
+        "appVersion": "1.0",
+        "chartName": "hooked",
+        "chartVersion": "0.1.0",
+        "configDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "digest": "sha256:139436c074fb6fae6cc7b999d55377d3ab30a98666b9fd87b45fd65f887a3b3d",
+        "firstDeployed": "2026-11-10T09:32:42Z",
+        "lastDeployed": "2026-11-10T09:32:42Z",
+        "name": "hooked",
+        "namespace": "apps",
+        "status": "deployed",
+        "testHooks": {
+          "hooked-test": {
+            "lastCompleted": "2026-11-10T09:32:57Z",
+            "lastStarted": "2026-11-10T09:32:52Z",
+            "phase": "Succeeded"
+          }
+        },
+        "version": 1
+      }
+    ],
+    "inventory": {
+      "entries": [
+        {
+          "id": "apps_hooked-message__ConfigMap",
+          "v": "v1"
+        }
+      ]
+    },
+    "lastAttemptedConfigDigest": "sha256:fd7236fd900a3a0da6bec5df08e377ebeb3252c0ca035c8ebc734de74cc56fae",
+    "lastAttemptedGeneration": 2,
+    "lastAttemptedReleaseAction": "upgrade",
+    "lastAttemptedReleaseActionDuration": "5.183752782s",
+    "lastAttemptedRevision": "0.2.0",
+    "observedGeneration": 2,
+    "storageNamespace": "apps",
+    "upgradeFailures": 1
+  }
+}

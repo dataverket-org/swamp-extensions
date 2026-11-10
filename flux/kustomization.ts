@@ -10,22 +10,33 @@
  *
  * @module
  */
-import { z } from "npm:zod@4";
+import { z } from "npm:zod@4.6.7";
+import {
+  assertDistinctDataNames,
+  checkName,
+  dataName,
+  getArgs,
+  kubectlCliCheck,
+  kubectlOpts,
+  listArgs,
+  listItems,
+  listNamespace,
+  requireNamespace,
+  runKubectl,
+} from "../lib/kubectl.ts";
 import {
   ConditionRaw,
   ConditionSchema,
   extractReadyCondition,
+  FLUX_TIMEOUTS,
   fluxCliCheck,
   FluxContext,
   FluxGlobalArgsSchema,
   forkUpgrades,
-  kubectlCliCheck,
-  listArgs,
+  listedNames,
   narrowConditions,
-  requireNamespace,
+  reconcileTimeout,
   runFlux,
-  runKubectl,
-  RunOpts,
   SourceRefSchema,
 } from "./_helpers.ts";
 
@@ -95,13 +106,6 @@ export function parseKustomization(
 
 type Ctx = FluxContext<KustomizationData>;
 
-function runOpts(context: Ctx): RunOpts {
-  return {
-    kubeconfig: context.globalArgs.kubeconfig,
-    context: context.globalArgs.context,
-  };
-}
-
 /** Read one Kustomization back and record it. */
 async function recordOne(
   context: Ctx,
@@ -109,13 +113,13 @@ async function recordOne(
   ns: string,
 ): Promise<{ parsed: KustomizationData; handle: unknown }> {
   const updated = (await runKubectl(
-    ["get", RESOURCE, name, "-n", ns],
-    runOpts(context),
+    getArgs(RESOURCE, name, ns),
+    kubectlOpts(context),
   )) as Record<string, unknown>;
   const parsed = parseKustomization(updated);
   const handle = await context.writeResource(
     "kustomization",
-    `${ns}--${name}`,
+    dataName(ns, name),
     parsed,
   );
   return { parsed, handle };
@@ -131,9 +135,19 @@ const OneArgs = z.object({
 /** Swamp model for FluxCD Kustomization objects. */
 export const model = {
   type: "@dataverket/flux/kustomization",
-  version: "2026.10.05.1",
+  version: "2026.11.10.1",
   globalArguments: FluxGlobalArgsSchema,
-  upgrades: forkUpgrades,
+  upgrades: [
+    ...forkUpgrades,
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "A name or namespace that is not a Kubernetes name is refused before flux or kubectl runs; every flux and kubectl call has a time limit; condition messages are stored with credentials blanked. No global argument and no stored field changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   checks: {
     "flux-cli-available": fluxCliCheck,
     "kubectl-cli-available": kubectlCliCheck,
@@ -160,17 +174,24 @@ export const model = {
         args: { namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
-        const ns = args.namespace ?? context.globalArgs.namespace;
+        const ns = listNamespace(args.namespace, context.globalArgs.namespace);
 
         context.logger.info("Listing Kustomizations in {namespace}", {
           namespace: ns || "all namespaces",
         });
 
-        const data = (await runKubectl(
-          listArgs(RESOURCE, ns),
-          runOpts(context),
-        )) as { items?: Record<string, unknown>[] };
-        const items = data.items ?? [];
+        const call = listArgs(RESOURCE, ns);
+        const items = listItems(
+          await runKubectl(call, kubectlOpts(context)),
+          `kubectl ${call.join(" ")}`,
+          "Kustomization",
+        );
+        // Checked before the first write: a second record under one name
+        // would silently replace the first.
+        assertDistinctDataNames(
+          "Kustomization",
+          listedNames(items, "Kustomization"),
+        );
 
         context.logger.info("Found {count} Kustomizations", {
           count: String(items.length),
@@ -182,7 +203,7 @@ export const model = {
           handles.push(
             await context.writeResource(
               "kustomization",
-              `${parsed.namespace}--${parsed.name}`,
+              dataName(parsed.namespace, parsed.name),
               parsed,
             ),
           );
@@ -203,6 +224,7 @@ export const model = {
         args: { name: string; namespace?: string; withSource?: boolean },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "reconcile",
           args.namespace,
@@ -215,7 +237,11 @@ export const model = {
 
         const fluxArgs = ["reconcile", "kustomization", args.name, "-n", ns];
         if (args.withSource) fluxArgs.push("--with-source");
-        await runFlux(fluxArgs, runOpts(context));
+        await runFlux(
+          fluxArgs,
+          kubectlOpts(context),
+          reconcileTimeout("kustomization", args.withSource),
+        );
 
         const { parsed, handle } = await recordOne(context, args.name, ns);
         context.logger.info("Reconciliation complete, ready={ready}", {
@@ -233,6 +259,7 @@ export const model = {
         args: { name: string; namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "suspend",
           args.namespace,
@@ -244,9 +271,14 @@ export const model = {
         });
         await runFlux(
           ["suspend", "kustomization", args.name, "-n", ns],
-          runOpts(context),
+          kubectlOpts(context),
+          FLUX_TIMEOUTS.suspend,
         );
-        const { handle } = await recordOne(context, args.name, ns);
+        const { parsed, handle } = await recordOne(context, args.name, ns);
+        context.logger.info(
+          "Suspended Kustomization {name}: suspended={suspended}",
+          { name: args.name, suspended: String(parsed.suspended) },
+        );
         return { dataHandles: [handle] };
       },
     },
@@ -259,6 +291,7 @@ export const model = {
         args: { name: string; namespace?: string },
         context: Ctx,
       ): Promise<{ dataHandles: unknown[] }> => {
+        checkName(args.name);
         const ns = requireNamespace(
           "resume",
           args.namespace,
@@ -270,9 +303,18 @@ export const model = {
         });
         await runFlux(
           ["resume", "kustomization", args.name, "-n", ns],
-          runOpts(context),
+          kubectlOpts(context),
+          FLUX_TIMEOUTS.resume,
         );
-        const { handle } = await recordOne(context, args.name, ns);
+        const { parsed, handle } = await recordOne(context, args.name, ns);
+        context.logger.info(
+          "Resumed Kustomization {name}: suspended={suspended}, ready={ready}",
+          {
+            name: args.name,
+            suspended: String(parsed.suspended),
+            ready: String(parsed.ready),
+          },
+        );
         return { dataHandles: [handle] };
       },
     },

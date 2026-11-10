@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/flux",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:12:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Third review; unchanged since the second. Condition messages, readyMessage, source url and push source are stored through redact; errors and logs come from lib/cli.ts redacted and bounded; planted-marker tests in helmrelease_test.ts, reset_test.ts, source_test.ts, get_test.ts and push_artifact_test.ts. The README now says redaction can also blank a word after a key word."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Entry and completion lines on every method, structured placeholders, nothing secret; reset logs a flux failure it does not throw."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "reset.ts: a missing release is refused by the first read; a flux failure with status.lastHandledResetAt unchanged throws and writes nothing; after a flux that ran out of time (CliError kind timeout, or flux's own 'context deadline exceeded' / 'timed out waiting') the field is read again every 5 s within a pollBudget of 30 s, and the remaining case says 'not yet, or not at all' instead of claiming nothing happened. A cancelled run ends the wait (sleep rejects with the cancelled error) and the running kubectl. Pinned in reset_test.ts: handled during the poll, never handled (six waits), slow reads counted against the 30 s, cancelled during the wait, refusal immediate. Not verified by this review: that helm-controller writes the field before the Helm action starts (the author's reading of v1.7.1); the poll and the wording hold either way. Accepted residual: the rule compares the field before and after and cannot tell its own reset request from one another operator made in the same minutes; the record is then still the state after a handled reset."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "deno task test: 97 passed, 1 ignored (opt-in FLUX_E2E push). Read the tests that pin the changes of this round: the reset poll (reset_test.ts:175-275) and the 255-byte bound at 255 and above with flux not run (push_artifact_test.ts:203-245). Strict fakes; negatives assert nothing was written."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Limits fit the commands: 60 s suspend, 330 s resume/reconcile/push, 630 s kustomization with source, 930 s helmrelease with source. The reset poll adds at most 30 s and one last read; the README's time limits section says so. push_artifact refuses a name the store cannot hold before it copies or pushes."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged: lists through listItems, get through expectObject, kubectl flags owned by the runner, the push output must hold a sha256 digest. The README's `swamp data delete <model> <name>` matches `swamp help data` (arguments behavior_id_or_name, data_name); it was not run."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged since the second review: the scratch copy is made inside the try that removes it, only regular files and directories are copied, the signal is checked between entries; the name check now comes before the copy."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, manifest, tests and fixtures hold example names, localhost and 127.0.0.1 only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "z.object without passthrough; no schema changed in this round."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All six specs: lifetime infinite, garbageCollection 10, resetResult 20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Reads and drives objects Flux owns; no create, update or delete method."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: two live checks, scoped on the source type."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "Fixed in this round: the artifact name is checked against 255 bytes before anything is copied or pushed (push_artifact.ts:306-315; the escaped name is ASCII, so its length is its byte count), and the upgrade note now says the old artifact record stays, is never written again, what that does to a workflow, and how to delete it. Left, low: the same bound is not applied to the names built from a Kubernetes object. A namespace may be 63 and an object name 253 characters, so `<namespace>--<name>` reaches 318 bytes, `reset.` 324, `detail.` 325 and `<kind>--` 334; any object name above about 185 characters gives a name over 255. For list and get that is only a failed write, but reconcile, suspend, resume and reset run flux first and then cannot store the record. Such names are legal and rare (a Helm release name is at most 53). Fix: the same check, on dataName(namespace, name) with its prefix, before flux runs in the four changing methods. Also documented and not fixed, by choice: two tags that differ only in case share a directory on a case-insensitive file system."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Each of the three types has an entry ending at 2026.11.10.1 with a no-op upgradeAttributes; the README's 'Upgrading' section names both renamed records first, the stale-record hazard, the changed stored values, the refusals, the time limits and the error texts."
+    }
+  ]
+}

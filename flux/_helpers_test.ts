@@ -1,40 +1,48 @@
 import {
+  assert,
   assertEquals,
   assertRejects,
   assertStringIncludes,
   assertThrows,
-} from "jsr:@std/assert@1";
+} from "jsr:@std/assert@1.0.13";
+import { CHECK_TIMEOUT_MS, isCliError, MAX_TIMEOUT_MS } from "../lib/cli.ts";
+import { withCli } from "../lib/cli_fake.ts";
+import { dataName, kubectlCliCheck } from "../lib/kubectl.ts";
 import {
-  __setSpawn,
-  cliArgs,
-  cliProblem,
+  ConditionSchema,
   extractReadyCondition,
+  FLUX_TIMEOUTS,
   fluxCliCheck,
-  listArgs,
-  parseKubectlJson,
-  requireNamespace,
+  FluxGlobalArgsSchema,
+  isFluxProgressLine,
+  listedNames,
+  narrowConditions,
+  reconcileTimeout,
   runFlux,
-  runKubectl,
+  storedUrl,
 } from "./_helpers.ts";
 import { model as helmrelease } from "./helmrelease.ts";
 import { model as kustomization } from "./kustomization.ts";
-import { kubectlCliCheck } from "./_helpers.ts";
 import { model as source } from "./source.ts";
 import { extension as reset } from "./reset.ts";
-import { script } from "./test_support.ts";
 
-const VERSION = "2026.10.05.1";
+const FORK = "2026.10.05.1";
+const VERSION = "2026.11.10.1";
 
-Deno.test("the three types carry the fork's name, version and upgrade", () => {
+Deno.test("the three types carry the fork's name, a version and an upgrade chain ending at it", () => {
   assertEquals(helmrelease.type, "@dataverket/flux/helmrelease");
   assertEquals(kustomization.type, "@dataverket/flux/kustomization");
   assertEquals(source.type, "@dataverket/flux/source");
+  assertEquals(
+    [helmrelease.version, kustomization.version, source.version],
+    [VERSION, VERSION, VERSION],
+  );
   for (const m of [helmrelease, kustomization, source]) {
-    assertEquals(m.version, VERSION);
+    assertEquals(m.upgrades[0].toVersion, FORK);
     assertEquals(m.upgrades.at(-1)!.toVersion, m.version);
-    assertEquals(m.upgrades.at(-1)!.upgradeAttributes({ namespace: "x" }), {
-      namespace: "x",
-    });
+    for (const u of m.upgrades) {
+      assertEquals(u.upgradeAttributes({ namespace: "x" }), { namespace: "x" });
+    }
   }
   assertEquals(reset.type, helmrelease.type);
 });
@@ -56,36 +64,65 @@ Deno.test("the method names are upstream's", () => {
   assertEquals(Object.keys(reset.methods[0]), ["reset"]);
 });
 
-Deno.test("cliArgs puts kubeconfig and context before the command", () => {
-  assertEquals(cliArgs(["get", "x"]), ["get", "x"]);
-  assertEquals(cliArgs(["get", "x"], { kubeconfig: "/k", context: "c" }), [
-    "--kubeconfig",
-    "/k",
-    "--context",
-    "c",
-    "get",
-    "x",
+Deno.test("the global arguments are the three that were published, with the same defaults", () => {
+  for (const m of [helmrelease, kustomization, source]) {
+    assertEquals(m.globalArguments, FluxGlobalArgsSchema);
+  }
+  assertEquals(Object.keys(FluxGlobalArgsSchema.shape).sort(), [
+    "context",
+    "kubeconfig",
+    "namespace",
   ]);
-  assertEquals(cliArgs(["get"], { context: "c" }), ["--context", "c", "get"]);
+  assertEquals(FluxGlobalArgsSchema.parse({}), { namespace: "" });
+  assertEquals(
+    FluxGlobalArgsSchema.parse({
+      namespace: "apps",
+      kubeconfig: "/k",
+      context: "c",
+    }),
+    { namespace: "apps", kubeconfig: "/k", context: "c" },
+  );
+  // Plain strings, as published: a definition that validated before still
+  // does, whatever the value; it is checked when a method uses it.
+  assertEquals(
+    FluxGlobalArgsSchema.safeParse({ namespace: "-A" }).success,
+    true,
+  );
+  assertEquals(FluxGlobalArgsSchema.safeParse({ namespace: 1 }).success, false);
 });
 
-Deno.test("listArgs scopes to one namespace or all", () => {
-  assertEquals(listArgs("r", "ns"), ["get", "r", "-n", "ns"]);
-  assertEquals(listArgs("r", ""), ["get", "r", "-A"]);
+Deno.test("the stored condition keeps its published shape: a field the controller left out is left out", () => {
+  assertEquals(Object.keys(ConditionSchema.shape), [
+    "type",
+    "status",
+    "reason",
+    "message",
+    "lastTransitionTime",
+    "observedGeneration",
+  ]);
+  assertEquals(ConditionSchema.parse({ type: "Ready", status: "True" }), {
+    type: "Ready",
+    status: "True",
+  });
+  // Null is the shared layer's way to say "not written"; it is not this one's.
+  assertEquals(
+    ConditionSchema.safeParse({ type: "Ready", status: "True", reason: null })
+      .success,
+    false,
+  );
 });
 
-Deno.test("parseKubectlJson names the command when the output is not JSON", () => {
-  assertEquals(parseKubectlJson('{"a":1}', ["get"]), { a: 1 });
-  const e = assertThrows(
-    () => parseKubectlJson("Unable to connect", ["get", "hr"]),
-    Error,
-  );
-  assertStringIncludes(e.message, "kubectl get hr did not print JSON");
-  assertStringIncludes(e.message, "Unable to connect");
-  assertStringIncludes(
-    assertThrows(() => parseKubectlJson("", ["get"]), Error).message,
-    "(empty)",
-  );
+Deno.test("the data names are the published ones for every Kubernetes name", () => {
+  for (
+    const [ns, name] of [
+      ["monitoring", "kube-prometheus-stack"],
+      ["a", "b.c-d"],
+      ["flux-system", "flux-system"],
+      ["a--b", "c"],
+    ]
+  ) {
+    assertEquals(dataName(ns, name), `${ns}--${name}`);
+  }
 });
 
 Deno.test("extractReadyCondition reads Ready and nothing else", () => {
@@ -108,84 +145,260 @@ Deno.test("extractReadyCondition reads Ready and nothing else", () => {
   });
 });
 
-Deno.test("requireNamespace prefers the argument and refuses by name", () => {
-  assertEquals(requireNamespace("x", "a", "b"), "a");
-  assertEquals(requireNamespace("x", undefined, "b"), "b");
-  assertStringIncludes(
-    assertThrows(() => requireNamespace("suspend", undefined, ""), Error)
+Deno.test("NEG a condition message that quotes a credential is stored without it; everything else is stored as it was", () => {
+  const leaky = {
+    type: "Ready",
+    status: "False",
+    reason: "GitOperationFailed",
+    message:
+      "failed to clone https://bot:hunter2@git.example.org/team/repo: Authorization: Bearer abc.def.ghi, token=hunter2",
+    lastTransitionTime: "2026-11-10T10:00:00Z",
+    observedGeneration: 3,
+  };
+  const [stored] = narrowConditions([leaky]);
+  assertEquals(stored.message!.includes("hunter2"), false);
+  assertEquals(stored.message!.includes("abc.def.ghi"), false);
+  assert(stored.message!.includes("https://git.example.org/team/repo"));
+  assertEquals({ ...stored, message: "" }, { ...leaky, message: "" });
+  const ready = extractReadyCondition([leaky]);
+  assertEquals(ready.message, stored.message);
+  // An ordinary message is not touched, and a missing one stays missing.
+  const plain =
+    "Helm upgrade succeeded for release apps/podinfo.v2 with chart podinfo@6.9.2+971fef0d04d5";
+  assertEquals(
+    narrowConditions([{ type: "Ready", status: "True", message: plain }])[0]
       .message,
-    "namespace is required for suspend",
+    plain,
+  );
+  assertEquals(
+    narrowConditions([{ type: "Ready", status: "True" }])[0].message,
+    undefined,
+  );
+  assertEquals(
+    storedUrl("https://ghp_s3cret@github.com/org/repo"),
+    "https://github.com/org/repo",
+  );
+  assertEquals(
+    storedUrl("oci://ghcr.io/org/charts/app"),
+    "oci://ghcr.io/org/charts/app",
+  );
+  assertEquals(
+    storedUrl("git@github.com:org/repo.git"),
+    "git@github.com:org/repo.git",
   );
 });
 
-Deno.test("runKubectl appends -o json and names the failure", async () => {
-  const s = script([
-    { bin: "kubectl", args: ["get", "hr", "-A", "-o", "json"], out: "[]" },
-    {
-      bin: "kubectl",
-      args: ["--context", "c", "get", "hr", "-o", "json"],
-      out: "",
-      fail: "forbidden",
-    },
-  ]);
-  __setSpawn(s.spawn);
-  try {
-    assertEquals(await runKubectl(["get", "hr", "-A"]), []);
+Deno.test("listedNames reads namespace and name, and refuses an item that has neither", () => {
+  assertEquals(
+    listedNames([{ metadata: { name: "a", namespace: "b" } }], "HelmRelease"),
+    [{ namespace: "b", name: "a" }],
+  );
+  for (const item of [{}, { metadata: { name: "a" } }, { metadata: 7 }]) {
+    assertThrows(
+      () => listedNames([item], "HelmRelease"),
+      Error,
+      "a HelmRelease without a name or namespace",
+    );
+  }
+});
+
+Deno.test("the flux time limits are the documented ones", () => {
+  assertEquals(FLUX_TIMEOUTS, {
+    suspend: 60_000,
+    resume: 330_000,
+    reconcile: 330_000,
+    reconcileWithSource: 630_000,
+    reconcileHelmReleaseWithSource: 930_000,
+    push: 330_000,
+  });
+  for (const kind of ["helmrelease", "kustomization"] as const) {
+    assertEquals(reconcileTimeout(kind, undefined), 330_000);
+    assertEquals(reconcileTimeout(kind, false), 330_000);
+  }
+  // flux waits for the source and the object; for a HelmRelease also for
+  // the HelmChart between them.
+  assertEquals(reconcileTimeout("kustomization", true), 630_000);
+  assertEquals(reconcileTimeout("helmrelease", true), 930_000);
+  for (const ms of Object.values(FLUX_TIMEOUTS)) assert(ms <= MAX_TIMEOUT_MS);
+});
+
+Deno.test("runFlux puts the cluster flags first, passes its time limit and returns stdout", async () => {
+  await withCli({
+    calls: [
+      {
+        bin: "flux",
+        args: ["reconcile", "x"],
+        out: "ok\n",
+        timeoutMs: 330_000,
+      },
+      {
+        bin: "flux",
+        args: ["--kubeconfig", "/k", "--context", "c", "suspend", "x"],
+        timeoutMs: 60_000,
+      },
+    ],
+  }, async (k) => {
+    assertEquals(await runFlux(["reconcile", "x"], undefined, 330_000), "ok\n");
+    assertEquals(
+      await runFlux(["suspend", "x"], {
+        kubeconfig: "/k",
+        context: "c",
+      }, 60_000),
+      "",
+    );
+    // Nothing of its own in the environment, no input.
+    assertEquals(k.calls.map((c) => [c.env, c.stdin]), [
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
+  });
+});
+
+Deno.test("NEG runFlux needs a time limit above zero", async () => {
+  await withCli({}, async () => {
+    for (const bad of [0, -1, NaN, Infinity, MAX_TIMEOUT_MS + 1]) {
+      await assertRejects(
+        () => runFlux(["reconcile", "x"], undefined, bad),
+        Error,
+        "time limit",
+      );
+    }
+  });
+});
+
+Deno.test("NEG a failing flux says what flux said: the failure line, not the progress lines", async () => {
+  const stderr = "► annotating HelmRelease x in apps namespace\n" +
+    "✔ HelmRelease annotated\n" +
+    "◎ waiting for HelmRelease reconciliation\n" +
+    "✗ helmrelease reconciliation failed: upgrade retries exhausted\n";
+  await withCli({
+    calls: [
+      { bin: "flux", args: ["suspend", "x"], fail: "not found" },
+      { bin: "flux", args: ["reconcile", "x"], fail: stderr },
+      // Nothing on standard error: what flux printed is the next best thing.
+      { bin: "flux", args: ["push", "x"], code: 1, stdout: "bad target\n" },
+      { bin: "flux", args: ["resume", "x"], code: 2 },
+      { bin: "flux", args: ["resume", "x"], fail: "x".repeat(5000) },
+    ],
+  }, async () => {
+    const run = (sub: string) =>
+      assertRejects(() => runFlux([sub, "x"], undefined, 1000), Error);
+    const first = await run("suspend");
+    assertEquals(first.message, "flux suspend failed: not found");
+    assert(isCliError(first, "failed"));
+    assertEquals([first.code, first.bin], [1, "flux"]);
+    assertEquals(
+      (await run("reconcile")).message,
+      "flux reconcile failed: ✗ helmrelease reconciliation failed: upgrade retries exhausted",
+    );
+    assertEquals((await run("push")).message, "flux push failed: bad target");
+    assertEquals(
+      (await run("resume")).message,
+      "flux resume failed: (no error output)",
+    );
+    const long = (await run("resume")).message;
+    assert(long.length < 450, "a long message is bounded");
+  });
+  for (const line of ["► a", "✔ b", "◎ c", "  ► d"]) {
+    assertEquals(isFluxProgressLine(line), true, line);
+  }
+  for (const line of ["✗ failed", "Error: x", "", "a ► b"]) {
+    assertEquals(isFluxProgressLine(line), false, line);
+  }
+});
+
+Deno.test("NEG a flux that does not answer is stopped at its limit, and the error says so", async () => {
+  await withCli({
+    calls: [{ bin: "flux", args: ["reconcile", "x"], hang: true }],
+  }, async () => {
     const e = await assertRejects(
-      () => runKubectl(["get", "hr"], { context: "c" }),
+      () => runFlux(["reconcile", "x"], undefined, FLUX_TIMEOUTS.reconcile),
       Error,
     );
-    assertStringIncludes(e.message, "kubectl get hr failed: forbidden");
-    s.done();
-  } finally {
-    __setSpawn();
-  }
-});
-
-Deno.test("runFlux returns stdout and surfaces stderr on failure", async () => {
-  const s = script([
-    { bin: "flux", args: ["reconcile", "x"], out: "ok\n" },
-    { bin: "flux", args: ["suspend", "x"], out: "", fail: "not found" },
-  ]);
-  __setSpawn(s.spawn);
-  try {
-    assertEquals(await runFlux(["reconcile", "x"]), "ok\n");
-    const e = await assertRejects(() => runFlux(["suspend", "x"]), Error);
-    assertStringIncludes(e.message, "flux suspend failed: not found");
-    s.done();
-  } finally {
-    __setSpawn();
-  }
-});
-
-Deno.test("the shared CLI checks name a missing binary and surface a failing one", async () => {
-  __setSpawn(() => Promise.reject(new Deno.errors.NotFound("nope")));
-  try {
-    const r = await fluxCliCheck.execute();
-    assertEquals(r.pass, false);
-    assertStringIncludes(r.errors![0], "flux is not on PATH");
-  } finally {
-    __setSpawn();
-  }
-  const s = script([
-    { bin: "kubectl", args: ["version", "--client"], out: "", fail: "boom" },
-    { bin: "kubectl", args: ["version", "--client"], out: "v1.31" },
-    { bin: "kubectl", args: ["version", "--client"], out: "v1.31" },
-  ]);
-  __setSpawn(s.spawn);
-  try {
-    const r = await kubectlCliCheck.execute();
-    assertEquals(r.pass, false);
-    assertStringIncludes(r.errors![0], "kubectl version --client failed: boom");
-    assertEquals((await kubectlCliCheck.execute()).pass, true);
     assertEquals(
-      await cliProblem("kubectl", ["version", "--client"]),
-      undefined,
+      e.message,
+      "flux reconcile failed: no answer within 330 seconds; the process was stopped",
     );
-    s.done();
-  } finally {
-    __setSpawn();
-  }
+    assert(isCliError(e, "timeout"));
+  });
+});
+
+Deno.test("NEG a cancelled run stops flux, and is named as cancelled", async () => {
+  const controller = new AbortController();
+  await withCli({
+    calls: [{ bin: "flux", args: ["resume", "x"], hang: "until-cancelled" }],
+  }, async () => {
+    const pending = assertRejects(
+      () =>
+        runFlux(
+          ["resume", "x"],
+          { signal: controller.signal },
+          FLUX_TIMEOUTS.resume,
+        ),
+      Error,
+    );
+    controller.abort();
+    const e = await pending;
+    assertEquals(e.message, "flux resume was cancelled");
+    assert(isCliError(e, "cancelled"));
+  });
+});
+
+Deno.test("NEG nothing shaped like a credential reaches a flux error", async () => {
+  const TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+  await withCli({
+    calls: [{
+      bin: "flux",
+      args: ["push", "x"],
+      fail:
+        `✗ pushing failed: GET https://user:hunter2@registry.example.org/v2/: Authorization: Bearer ${TOKEN} password=hunter2`,
+    }],
+  }, async () => {
+    const e = await assertRejects(
+      () => runFlux(["push", "x"], undefined, FLUX_TIMEOUTS.push),
+      Error,
+    );
+    assert(!e.message.includes(TOKEN));
+    assert(!e.message.includes("hunter2"));
+    assert(isCliError(e) && !e.stderr.includes(TOKEN));
+    assertStringIncludes(e.message, "flux push failed: ✗ pushing failed");
+  });
+});
+
+Deno.test("the CLI checks name a missing binary and surface a failing one", async () => {
+  await withCli({
+    calls: [
+      { bin: "flux", args: ["--version"], notInstalled: true },
+      {
+        bin: "flux",
+        args: ["--version"],
+        out: "flux version 2.10.0",
+        timeoutMs: CHECK_TIMEOUT_MS,
+      },
+      { bin: "kubectl", args: ["version", "--client"], fail: "boom" },
+      {
+        bin: "kubectl",
+        args: ["version", "--client"],
+        out: "v1.37",
+        timeoutMs: CHECK_TIMEOUT_MS,
+      },
+    ],
+  }, async () => {
+    const missing = await fluxCliCheck.execute();
+    assertEquals(missing.pass, false);
+    assertEquals(
+      missing.errors![0],
+      "flux is not on PATH; install it or put it on the PATH this repository runs with",
+    );
+    assertEquals(await fluxCliCheck.execute({}), { pass: true });
+    const failing = await kubectlCliCheck.execute();
+    assertEquals(failing.pass, false);
+    assertEquals(
+      failing.errors![0],
+      "kubectl version --client failed (exit 1): boom",
+    );
+    assertEquals(await kubectlCliCheck.execute(), { pass: true });
+  });
 });
 
 Deno.test("kustomization and source carry the CLI checks; helmrelease gets them from reset", () => {
@@ -194,8 +407,17 @@ Deno.test("kustomization and source carry the CLI checks; helmrelease gets them 
     "kubectl-cli-available",
   ]);
   assertEquals(Object.keys(source.checks), ["kubectl-cli-available"]);
+  assertEquals(source.checks["kubectl-cli-available"].appliesTo, ["list"]);
   assertEquals(Object.keys(reset.checks[0]), [
     "flux-cli-available",
     "kubectl-cli-available",
   ]);
+  for (
+    const check of [
+      ...Object.values(kustomization.checks),
+      ...Object.values(reset.checks[0]),
+    ]
+  ) {
+    assertEquals(check.labels, ["live"]);
+  }
 });

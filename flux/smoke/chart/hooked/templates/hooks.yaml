@@ -1,0 +1,70 @@
+# Kept after it succeeds: the default delete policy only removes it before the next run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-pre-install
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-5"
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hook
+          image: {{ .Values.image }}
+          command: ["true"]
+---
+# Deleted as soon as it succeeds.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-post-install
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hook
+          image: {{ .Values.image }}
+          command: ["true"]
+---
+# Carries no label at all, to see what a reader can still find.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-pre-upgrade
+  annotations:
+    helm.sh/hook: pre-upgrade
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hook
+          image: {{ .Values.image }}
+          command: ["sh", "-c", "exit {{ ternary 1 0 .Values.failUpgradeHook }}"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test
+  annotations:
+    helm.sh/hook: test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test
+      image: {{ .Values.image }}
+      command: ["true"]

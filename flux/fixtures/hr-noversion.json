@@ -1,0 +1,51 @@
+{
+  "apiVersion": "helm.toolkit.fluxcd.io/v2",
+  "kind": "HelmRelease",
+  "metadata": {
+    "annotations": {},
+    "creationTimestamp": "2026-11-10T09:32:38Z",
+    "finalizers": [
+      "finalizers.fluxcd.io"
+    ],
+    "generation": 1,
+    "name": "noversion",
+    "namespace": "apps",
+    "resourceVersion": "1011",
+    "uid": "48442727-35db-4ba0-963f-b1b6163f00ec"
+  },
+  "spec": {
+    "chart": {
+      "spec": {
+        "chart": "hooked",
+        "sourceRef": {
+          "kind": "HelmRepository",
+          "name": "local"
+        },
+        "version": "9.9.9"
+      }
+    },
+    "interval": "1h"
+  },
+  "status": {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-10T09:32:39Z",
+        "message": "Fulfilling prerequisites",
+        "observedGeneration": 1,
+        "reason": "Progressing",
+        "status": "True",
+        "type": "Reconciling"
+      },
+      {
+        "lastTransitionTime": "2026-11-10T09:33:09Z",
+        "message": "HelmChart 'apps/apps-noversion' is not ready: invalid chart reference: failed to get chart version for remote reference: no 'hooked' chart with version matching '9.9.9' found",
+        "observedGeneration": 1,
+        "reason": "SourceNotReady",
+        "status": "False",
+        "type": "Ready"
+      }
+    ],
+    "helmChart": "apps/apps-noversion",
+    "observedGeneration": -1
+  }
+}

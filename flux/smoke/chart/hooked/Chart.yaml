@@ -1,0 +1,5 @@
+apiVersion: v2
+name: hooked
+description: A tiny chart with hook Jobs and a test, for the get smoke run
+version: 0.1.0
+appVersion: "1.0"

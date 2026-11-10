@@ -1,0 +1,191 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "annotations": {
+          "helm.sh/hook": "pre-install",
+          "helm.sh/hook-weight": "-5"
+        },
+        "creationTimestamp": "2026-11-10T09:32:42Z",
+        "generation": 1,
+        "labels": {
+          "app.kubernetes.io/instance": "hooked",
+          "app.kubernetes.io/managed-by": "Helm",
+          "helm.toolkit.fluxcd.io/name": "hooked",
+          "helm.toolkit.fluxcd.io/namespace": "apps"
+        },
+        "name": "hooked-pre-install",
+        "namespace": "apps",
+        "resourceVersion": "898",
+        "uid": "873e56a2-f5ee-4ef6-81aa-01e958d31b13"
+      },
+      "spec": {
+        "backoffLimit": 0,
+        "completionMode": "NonIndexed",
+        "completions": 1,
+        "manualSelector": false,
+        "parallelism": 1,
+        "podReplacementPolicy": "TerminatingOrFailed",
+        "selector": {
+          "matchLabels": {
+            "batch.kubernetes.io/controller-uid": "873e56a2-f5ee-4ef6-81aa-01e958d31b13"
+          }
+        },
+        "suspend": false,
+        "template": {
+          "metadata": {
+            "labels": {
+              "batch.kubernetes.io/controller-uid": "873e56a2-f5ee-4ef6-81aa-01e958d31b13",
+              "batch.kubernetes.io/job-name": "hooked-pre-install",
+              "controller-uid": "873e56a2-f5ee-4ef6-81aa-01e958d31b13",
+              "job-name": "hooked-pre-install"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "command": [
+                  "true"
+                ],
+                "image": "docker.io/library/busybox:1.37",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "hook",
+                "resources": {},
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File"
+              }
+            ],
+            "dnsPolicy": "ClusterFirst",
+            "restartPolicy": "Never",
+            "schedulerName": "default-scheduler",
+            "securityContext": {},
+            "terminationGracePeriodSeconds": 30
+          }
+        }
+      },
+      "status": {
+        "completionTime": "2026-11-10T09:32:45Z",
+        "conditions": [
+          {
+            "lastProbeTime": "2026-11-10T09:32:45Z",
+            "lastTransitionTime": "2026-11-10T09:32:45Z",
+            "message": "Reached expected number of succeeded pods",
+            "reason": "CompletionsReached",
+            "status": "True",
+            "type": "SuccessCriteriaMet"
+          },
+          {
+            "lastProbeTime": "2026-11-10T09:32:45Z",
+            "lastTransitionTime": "2026-11-10T09:32:45Z",
+            "message": "Reached expected number of succeeded pods",
+            "reason": "CompletionsReached",
+            "status": "True",
+            "type": "Complete"
+          }
+        ],
+        "ready": 0,
+        "startTime": "2026-11-10T09:32:42Z",
+        "succeeded": 1,
+        "terminating": 0,
+        "uncountedTerminatedPods": {}
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "annotations": {
+          "helm.sh/hook": "pre-upgrade"
+        },
+        "creationTimestamp": "2026-11-10T09:33:29Z",
+        "generation": 1,
+        "labels": {
+          "helm.toolkit.fluxcd.io/name": "hooked",
+          "helm.toolkit.fluxcd.io/namespace": "apps"
+        },
+        "name": "hooked-pre-upgrade",
+        "namespace": "apps",
+        "resourceVersion": "1122",
+        "uid": "e4a5ba88-741a-4b9c-8435-b3561fbb05db"
+      },
+      "spec": {
+        "backoffLimit": 0,
+        "completionMode": "NonIndexed",
+        "completions": 1,
+        "manualSelector": false,
+        "parallelism": 1,
+        "podReplacementPolicy": "TerminatingOrFailed",
+        "selector": {
+          "matchLabels": {
+            "batch.kubernetes.io/controller-uid": "e4a5ba88-741a-4b9c-8435-b3561fbb05db"
+          }
+        },
+        "suspend": false,
+        "template": {
+          "metadata": {
+            "labels": {
+              "batch.kubernetes.io/controller-uid": "e4a5ba88-741a-4b9c-8435-b3561fbb05db",
+              "batch.kubernetes.io/job-name": "hooked-pre-upgrade",
+              "controller-uid": "e4a5ba88-741a-4b9c-8435-b3561fbb05db",
+              "job-name": "hooked-pre-upgrade"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "command": [
+                  "sh",
+                  "-c",
+                  "exit 1"
+                ],
+                "image": "docker.io/library/busybox:1.37",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "hook",
+                "resources": {},
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File"
+              }
+            ],
+            "dnsPolicy": "ClusterFirst",
+            "restartPolicy": "Never",
+            "schedulerName": "default-scheduler",
+            "securityContext": {},
+            "terminationGracePeriodSeconds": 30
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastProbeTime": "2026-11-10T09:33:32Z",
+            "lastTransitionTime": "2026-11-10T09:33:32Z",
+            "message": "Job has reached the specified backoff limit",
+            "reason": "BackoffLimitExceeded",
+            "status": "True",
+            "type": "FailureTarget"
+          },
+          {
+            "lastProbeTime": "2026-11-10T09:33:32Z",
+            "lastTransitionTime": "2026-11-10T09:33:32Z",
+            "message": "Job has reached the specified backoff limit",
+            "reason": "BackoffLimitExceeded",
+            "status": "True",
+            "type": "Failed"
+          }
+        ],
+        "failed": 1,
+        "ready": 0,
+        "startTime": "2026-11-10T09:33:29Z",
+        "terminating": 0,
+        "uncountedTerminatedPods": {}
+      }
+    }
+  ],
+  "kind": "List",
+  "metadata": {
+    "resourceVersion": ""
+  }
+}

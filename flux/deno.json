@@ -16,7 +16,8 @@
   "fmt": {
     "lineWidth": 80,
     "exclude": [
-      "LICENSE.md"
+      "LICENSE.md",
+      "smoke/chart/"
     ]
   }
 }
