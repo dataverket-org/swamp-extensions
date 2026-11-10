@@ -1,0 +1,78 @@
+{
+  "extension": "@dataverket/http",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T09:50:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Still no credential: a plain GET with Accept and User-Agent. New in this version is body data, which may be sensitive on a wrong endpoint: by default a mismatch records the field path (from the definition), the reason and the two value kinds, nothing from the body; the content type in the error is reduced to a token pair or a fixed phrase; the pointer of a duplicate key, which is body data, is recorded only with bodyJsonShowValues. With bodyJsonShowValues expected and actual are recorded and logged, each cut at 200 characters; the README says to turn it on only for public fields and never when bodyJson itself holds a non-public value. Unit and live tests assert that the body's value is absent from the record, the logs and swamp's output by default."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Unchanged shape: info on entry, info on ok with URL, status and latency, a warning with the record's error when not ok; structured placeholders. The JSON reason travels in that error, so no new log line."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Only a bad definition throws, before any request and before any write: a bodyJson that is not an object, holds a non-JSON value, a non-finite number, is deeper than 32 levels, or names a field __proto__ (the schema refuses it at the top level, where a zod record would drop it without a word and leave an empty assertion that passes; found by the negative tests, confirmed live with a hand-written definition). Every body outcome is a record: content-type, too-large, not-utf8, too-deep, not-json, duplicate-key, not-object, missing, type, value. A body cut short or slower than timeoutMs is reachable false with jsonMatched null, as bodyContains already was."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "38 unit tests pass (10 from before, 28 new, 1 network test stays opt-in behind HTTP_E2E). The new ones run through fetch against a local server that refuses anything but the plain GET the type promises, and a raw TCP server for cut bodies: 6 happy, 20 negative, 2 for the helpers. Nine deliberate mutations of endpoint.ts each fail a test (hasOwn to in, lenient UTF-8, no duplicate check, no depth check, no cap, no type check, verdict ignored in ok, values always echoed, body read despite content type). Live through swamp from a scratch repository loading the source: 32 assertions against the local server, 3 against a public OIDC discovery document over a verified chain. The deno test task now has --allow-net; before it could not run the server tests."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Read-only, one GET per run under one timeout that also covers the body. bodyJson alone reads at most 1 MiB and nothing when the content type is not JSON; depth is checked by an iterative scan before JSON.parse, and comparison recurses only as deep as the definition, which is capped at 32."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "The body is validated before any field is read: content type, size, UTF-8, depth, JSON, duplicate keys, object at the top; fields are read with Object.hasOwn only. Two strict choices a user may meet, both documented and without a switch: JSON served with another content type than application/json or +json is refused (content-type), and a duplicate key anywhere in the body, also in a part not asserted, is refused. A charset parameter is ignored and the body judged as UTF-8, as RFC 8259 requires. Numbers are compared as doubles."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "issue",
+      "note": "bodyJson alone: the reader is cancelled at the first byte past 1 MiB, and the body is cancelled unread when not wanted; the timer and abort listener are cleared on every path as before. Kept from the version before, on purpose so existing definitions behave the same: with bodyContains the whole body is read into memory without a size bound, limited only by timeoutMs, and that holds when bodyJson is set beside it."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, manifest, tests and smoke scripts use example.org, attacker.example and 127.0.0.1 only; public.sh takes the URL and the issuer as inputs and its defaults are id.example.org placeholders that resolve nowhere. No real host is named. smoke/ is not in the archive."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "The health record stays one closed z.object; the three new fields are always written, on the answer path and the unreachable path, and the unit tests parse every written record with the schema in strict mode. jsonMismatches is a closed object with enums for reason and kinds. bodyJson is a record of unknown values by need, checked for JSON-ness by the arguments check and before each run. Its schema is a preprocess around the record, so the registry lists its type as preprocess and the CLI wants bodyJson:json= for an object; the JSON schema swamp shows is still type object."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged: health, lifetime infinite, garbageCollection 10. A record grows by at most 20 mismatches of bounded strings."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "A probe, not a managed resource."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "arguments now also covers bodyJson (JSON values only, depth, no __proto__); the same function runs at the start of health, so a read is guarded without swamp model validate."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "One spec, one instance, health, unchanged, so existing data.latest expressions keep working."
+    },
+    { "id": "data-access", "verdict": "na", "note": "Nothing is read back." },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "upgrades holds a no-op entry to 2026.11.10.1: both new arguments have defaults and no existing argument changed. Live: a hand-written definition of typeVersion 2026.10.29.1 without the new arguments ran as before, recorded jsonMatched null, and was stamped 2026.11.10.1."
+    }
+  ]
+}
