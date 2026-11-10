@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/renovate",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T19:25:52Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Third review, live on rootless Podman 4.9.3 with Renovate 44.226.2. network now takes none or a plain name: host, container, ns, private, bridge, default, slirp4netns and pasta are refused in any case, as is anything with ':', '=', ',' or '/'; a definition made earlier with network host is refused when run. `host.` and `Default.` pass the pattern and Podman reads them as network names that do not exist, not as modes. Planted again at logLevel info and debug: hostRules tokens and passwords, a tracked .npmrc, the npmrc option, user:password in registryUrls, .env and .git/config were found in nothing swamp keeps or prints. passProxy on an engine that is not Podman now logs that nothing is passed (shown with a stand-in binary that reports a Docker version). README says that Renovate repeats a refused configuration value."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Structured placeholders, the container's name before it starts, separate caps for warnings and other lines, and only Renovate's fixed message text is passed on."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A path that is not well-formed Unicode is refused before anything starts (shown through JSON input); names are checked before anything starts; a name of 255 bytes with the prefix is taken and 256 refused with the count. A network name the engine does not know is a recorded state, not a throw: every repository is failed with 'exit 125: ... network not found'."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "89 unit tests pass. The fake now prints the configuration lines captured from real runs (testdata/config_lines.json, 14 forms), and my own live runs of renovate.json, .github/renovate.json5, .renovaterc and package.json agree with them. I did not run smoke/ (rule); its 'Last run' times agree with the file times (last source write 20:14:44, smoke/README.md written 20:21:40 after the stated end 20:21:07)."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Unchanged since the second review, where the time limit, a cancel, and swamp killed with Podman's own --timeout were shown live; no container of the type was left after any run of this round."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "The blocking finding of the second review is fixed: a `renovate` key in package.json gives configRead package.json and status ok (shown live), and one that says enabled false is failed with disabled-by-config. The three proof lines held against forgery, in one Git directory with an untracked renovate.json that Renovate did not read: each of the three lines as a whole JSON line and as bare text in a Dockerfile comment, in dependency names with line breaks, as the name and description of a package.json without a renovate key, and as names of tracked files; the record stayed config-not-read. In the raw debug output of that run the only message carrying repository text was 'npm file package.json has name \"...\"', which the anchored pattern `^Found (\\S+) config file$` cannot match, and no other message of Renovate 44.226.2 has that shape ('Found npm package files', 'Found 5 package file(s)' do not). Two small things README does not say, neither wrong in the record: (1) README 'Configuration' says a configuration Git does not track is not read; that holds for the configuration files, but an untracked package.json with a renovate key in a Git directory is read by Renovate (shown: its enabled false was obeyed) and the record says so truthfully with configRead package.json. (2) README does not say what a network name that does not exist gives: each repository failed with the engine's 'network not found', the method succeeds. One sentence each would do."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged since the second review: configuration files are lstat-checked regular files read to a bound, output is bounded at 32 MiB in the stream, the container is removed after a stopped run."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Placeholders only. Every data name in README carries the new prefix: the table (repo-web, repo-apps_2fweb, repo-_2e._2fweb, repo-my._2erepo) and the CEL example; inventory_all is unchanged. The archive holds local.ts, lib/cli.ts, README.md and LICENSE.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Plain z.object, no passthrough; the records of this round were stored by swamp against the schemas."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Both resources: lifetime infinite, garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "One method that reads and records; it creates, changes and deletes nothing that lasts."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "container-binary-available, label live, appliesTo lookup; lookup is kind action."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Every repository record is `repo-` and the encoded path, so none can be inventory_all or one of swamp's report names: the path report-swamp-method-summary was stored as repo-report-swamp-method-summary and read back as the repository record, beside swamp's own report under its own name. The inventory's items carry the prefixed names. The duplicate check refuses another spelling and a symbolic link to the same directory. The 255-byte bound counts the prefix."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "The method reads back no stored data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "First version, never published: nothing to upgrade from, so the change of every data name in this round breaks no one."
+    }
+  ]
+}

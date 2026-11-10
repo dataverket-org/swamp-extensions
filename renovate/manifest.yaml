@@ -1,0 +1,43 @@
+manifestVersion: 1
+name: "@dataverket/renovate"
+version: "2026.11.10.1"
+description: >
+  What is out of date in the repositories on disk, as swamp data: Renovate run
+  in its local mode, with no forge, no token and no pull request.
+
+  `@dataverket/renovate/local` has one method, `lookup`. It takes one
+  repository directory or a list, starts one container of the Renovate image
+  per directory with the directory mounted read-only, and records the updates
+  Renovate would propose: dependency, datasource, manager, file, current and
+  new version, update type, with counts by type, the lookups that failed, and
+  Renovate's warnings. One record per repository and one inventory per run, so
+  a workflow can assert "no major update pending" and a report can sum over
+  repositories.
+
+  A directory that is missing, has no Renovate configuration, or whose run
+  fails or passes its time limit is a recorded state and does not stop the
+  others; so is one where Renovate looked nothing up or did not read the
+  configuration that is there, and neither is ever called up to date. The
+  host's proxy variables stay out of the container unless asked for. Runs on
+  Podman or Docker; the live suite runs on rootless Podman.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - local.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - renovate
+  - dependencies
+  - updates
+  - containers
+  - podman
+  - docker
+dependencies: []

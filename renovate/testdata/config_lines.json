@@ -1,0 +1,479 @@
+{
+  "renovateVersion": "44.226.2",
+  "note": "What Renovate really logs about the repository configuration, per form, captured from one debug run each in local mode. 'none' is a Git directory whose configuration file Git does not track.",
+  "forms": {
+    "renovate.json": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: renovate.json"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found renovate.json config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": "renovate.json",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    "renovate.jsonc": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: renovate.jsonc"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found renovate.jsonc config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": "renovate.jsonc",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    "renovate.json5": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: renovate.json5"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found renovate.json5 config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": "renovate.json5",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".github/renovate.json": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .github/renovate.json"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .github/renovate.json config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".github/renovate.json",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".github/renovate.jsonc": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .github/renovate.jsonc"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .github/renovate.jsonc config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".github/renovate.jsonc",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".github/renovate.json5": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .github/renovate.json5"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .github/renovate.json5 config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".github/renovate.json5",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".gitlab/renovate.json": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .gitlab/renovate.json"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .gitlab/renovate.json config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".gitlab/renovate.json",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".gitlab/renovate.jsonc": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .gitlab/renovate.jsonc"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .gitlab/renovate.jsonc config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".gitlab/renovate.jsonc",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".gitlab/renovate.json5": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .gitlab/renovate.json5"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .gitlab/renovate.json5 config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".gitlab/renovate.json5",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".renovaterc": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .renovaterc"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .renovaterc config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".renovaterc",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".renovaterc.json": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .renovaterc.json"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .renovaterc.json config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".renovaterc.json",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".renovaterc.jsonc": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .renovaterc.jsonc"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .renovaterc.jsonc config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".renovaterc.jsonc",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    ".renovaterc.json5": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "Config file exists, fileName: .renovaterc.json5"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found .renovaterc.json5 config file"
+      },
+      {
+        "level": 20,
+        "msg": "Repository config",
+        "fileName": ".renovaterc.json5",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ],
+    "package.json": [
+      {
+        "level": 20,
+        "msg": "No config file found on disk - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "No additional config file found specified - skipping"
+      },
+      {
+        "level": 20,
+        "msg": "config file not found"
+      },
+      {
+        "level": 20,
+        "msg": "Repo is onboarded"
+      },
+      {
+        "level": 20,
+        "msg": "Found package.json config file"
+      },
+      {
+        "level": 20,
+        "msg": "package.json>renovate config",
+        "config": {
+          "extends": [
+            "config:recommended"
+          ]
+        }
+      }
+    ]
+  },
+  "none": [
+    {
+      "level": 20,
+      "msg": "No config file found on disk - skipping"
+    },
+    {
+      "level": 20,
+      "msg": "No additional config file found specified - skipping"
+    },
+    {
+      "level": 20,
+      "msg": "config file not found"
+    },
+    {
+      "level": 20,
+      "msg": "Repo is not onboarded"
+    },
+    {
+      "level": 20,
+      "msg": "No renovate config file found"
+    },
+    {
+      "level": 20,
+      "msg": "No renovate config file found"
+    }
+  ]
+}
