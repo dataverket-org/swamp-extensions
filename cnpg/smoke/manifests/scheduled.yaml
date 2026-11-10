@@ -1,0 +1,40 @@
+# nightly: the plugin method; the schedule owns its Backups.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata: { name: nightly, namespace: pg }
+spec:
+  schedule: "0 30 3 * * *"
+  immediate: true
+  backupOwnerReference: self
+  cluster: { name: three }
+  method: plugin
+  pluginConfiguration: { name: barman-cloud.cloudnative-pg.io }
+---
+# plain: the in-tree method; its Backups have no owner, only the label.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata: { name: plain, namespace: pg }
+spec:
+  schedule: "0 45 3 * * *"
+  immediate: true
+  backupOwnerReference: none
+  cluster: { name: one }
+---
+# paused: suspended, so it makes no Backup; the inventory names it.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata: { name: paused, namespace: pg }
+spec:
+  schedule: "0 15 4 * * *"
+  suspend: true
+  cluster: { name: one }
+---
+# doomed: a schedule of the Cluster whose base backups fail at once.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata: { name: doomed, namespace: pg }
+spec:
+  schedule: "0 30 4 * * *"
+  immediate: true
+  backupOwnerReference: self
+  cluster: { name: failing }

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cnpg",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:21:49Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Third review. The parsers are allowlists and read no credential field of a Cluster, ObjectStore or Backup; markers planted in every such field reach no record (cluster_test.ts:124); free text of the operator and of plugins is one bounded, redacted line; URLs lose user and password. create sends its manifest on stdin, passes parameter values of 8 or more characters as secrets on that call, and the README now states that rule, that shorter values are only caught by pattern, and that parameters are never a secret because they are stored in the Backup and in the arguments swamp keeps. The new fields (adopted, hibernationReached, volumeSnapshotTimes) hold a boolean and timestamps."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Entry and completion lines on every method, structured placeholders, free text through brief(); the unconfirmed create and a failed read while waiting are warnings with their reason."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Reads throw before any write with a named failure; every single-object read uses expectObject; an unconfirmed create is read back once and ends in one of four stated ways (taken with a warning, the first error, refused as a different request, or one error that says both failures); a cancelled run is thrown on from the create, the read-back, the wait and a read, and writes nothing (pinned at backup_test.ts:895-1015 and the cancellation tests)."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "124 unit tests pass on the strict fakes. The tests named for this round exist and can fail: parameters as a whole map (backup_test.ts:1852), no take-over of a Backup with more parameters before the create and by the read-back (1912), adopted on every path including list and get (1978-2044), the slowest create with a read-back (2049), hibernation reached or not and fenced as well, a fence annotation that is not a list of strings, snapshot times beside the plugin's archive times (cluster_test.ts:1358). I ran my own probe against the comparison and the health rules and got the documented results. Live: smoke/README.md says what was sent to a real API server and what was not completed; no run log is kept, which it also says."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "The comparison holds against everything I tried: an identical re-run with CRD-defaulted onlineConfiguration is the same request; another cluster, method, target or online value, a parameter map with more, fewer, none or any against none, a number against a string and a null value are all a different request; absent parameters equal an empty map; key order does not matter. The read-back cannot take over a Backup with a different request, and the record's `adopted` says when the Backup was found rather than seen created (true also when this run's own unconfirmed create made it, as the README says: 'it may be another caller's'). Still by design and documented: a top-level field the request leaves out (target, online) is not compared, and an old Backup of that name with the same request is returned as this request, now with adopted true. Wait arithmetic: at most four calls of 39 s before the wait, body within 170 s."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "The health rules now follow the operator's own signals: hibernated in the inventory needs the annotation on, the condition cnpg.io/hibernation True and no fence; an absent, False or Unknown condition gives an unhealthy line that says the hibernation is not reached and what the condition says, so an operator that never sets the condition errs toward 'needs a look'; any fencedInstances value that is not a list of strings fences everything; volumeSnapshotTimes is read from the by-method maps whatever archive.source is. The author's choice to keep archiveFailing false for any Cluster with the hibernation annotation is sound: summary.archiving is forced false there, so the flag would otherwise be raised for every hibernating Cluster with an archiver, and one that does not reach hibernation is unhealthy in the inventory by its own reason. Two small documentation weaknesses, neither blocks: (1) in one inventory item `hibernated` means 'annotation on, condition True, not fenced' (cluster.ts:726-740) while the description of archiveFailing in the same schema says 'the Cluster is not hibernated' and means the annotation alone; say 'has no hibernation annotation' there. (2) README 'The Backup record and create': the sentences 'If it is not there, the method fails with the first error. A refusal that has a name ... fails at once.' now stand after the paragraph about `adopted` ('list and get write null'), where 'it' has lost its subject; they belong at the end of the paragraph before. Not verified without a cluster: whether a True condition can be left from an earlier hibernation when the annotation is set to on again."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One process at a time through lib/cli.ts, killed at its limit, timers and listeners cleared; lib/ unchanged since the second review; the pre-flight check is outside the 170 s and the README says so."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Placeholders only in README, manifest, fixtures and smoke; additional files are README.md and LICENSE.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "z.object without passthrough; adopted (boolean or null), hibernationReached, volumeSnapshotTimes and the inventory's hibernated are in the schemas and written on every path (parseBackup writes adopted null, create overrides it on every record it builds); tests parse records with .strict()."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every resource spec, inventories included: lifetime infinite, garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Read-only types plus one on-demand action on an immutable object; deletes and Cluster changes are out of scope and the README says so."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "kubectl-cli-available, labelled live, on all three types; create verifies the Cluster and the name inside the method before it writes."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "<namespace>--<name> for objects, inventory_all / inventory_ns_<namespace> for inventories; no collision possible; a list with two objects under one data name writes nothing; create, get and list write one schema under one name (adopted is null from list and get)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "First publication of the three types at 2026.11.10.1."
+    }
+  ]
+}

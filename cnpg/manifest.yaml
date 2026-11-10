@@ -1,0 +1,61 @@
+manifestVersion: 1
+name: "@dataverket/cnpg"
+version: "2026.11.10.1"
+description: >
+  CloudNativePG for swamp: PostgreSQL Clusters, ScheduledBackups and Backups
+  (postgresql.cnpg.io/v1) as three model types, read with plain kubectl, and
+  an on-demand Backup you can wait for. No kubectl plugin is needed.
+
+  `cluster` lists and reads Clusters: phase, instances wanted and ready, the
+  current and the target primary, each instance's state and timeline, image
+  and PostgreSQL version, storage, every condition, the recovery window, the
+  backup configuration by reference, and a summary of four booleans to assert
+  on: healthy, archiving, primaryChanging, instancesReady. The recovery window
+  is read from the Cluster's status for the in-tree methods and from the
+  Barman Cloud plugin's ObjectStore for the plugin, and the record says which.
+
+  `scheduledbackup` lists and reads ScheduledBackups with the newest Backup
+  each schedule made and its result, so "did last night's backup work" is one
+  record. `backup` lists and reads Backups, with phase, times, WAL and LSN
+  range, id, destination and error, and `create` makes an on-demand Backup
+  with the barmanObjectStore, plugin or volumeSnapshot method: it first checks
+  that the Cluster exists and is configured for the method, treats a Backup of
+  the same name and request as already made, waits a bounded time, and records
+  the Backup as it stands.
+
+  Every list also writes an inventory record of what it saw, with one line
+  for each Cluster that is not healthy, each failed Backup and each schedule
+  that is suspended or failing. Every call to the cluster has a time limit,
+  and the body of `create` ends within 170 seconds whatever the cluster does.
+  A fenced or hibernated Cluster is recorded as such, and a Backup that does
+  not end is named in the inventory once it is older than a limit you set.
+
+  A Cluster that is failing over and a Backup that failed are records, not
+  errors; a method fails only when the call could not be made. No credential
+  is read or stored: no Secret name, no key, and no user or password inside a
+  URL. Of a Cluster's plugin parameters only the names are stored, and the
+  values of barmanObjectName and serverName, which say where backups go.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - cluster.ts
+  - scheduledbackup.ts
+  - backup.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - cloudnative-pg
+  - cnpg
+  - postgresql
+  - postgres
+  - backup
+  - kubernetes
+  - database
+dependencies: []

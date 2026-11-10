@@ -1,0 +1,47 @@
+# A single-pod S3 gateway (versitygw, posix backend on an emptyDir) for the
+# smoke runs. Buckets are directories, made by the init container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3
+  namespace: pg
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: s3 }
+  template:
+    metadata:
+      labels: { app: s3 }
+    spec:
+      initContainers:
+        - name: buckets
+          image: docker.io/versity/versitygw:v1.8.0
+          command: ["sh", "-c", "mkdir -p /data/one /data/three"]
+          volumeMounts: [{ name: data, mountPath: /data }]
+      containers:
+        - name: versitygw
+          image: docker.io/versity/versitygw:v1.8.0
+          args: ["--port", ":7070", "posix", "/data"]
+          env:
+            - name: ROOT_ACCESS_KEY
+              valueFrom: {
+                secretKeyRef: { name: s3-creds, key: ACCESS_KEY_ID },
+              }
+            - name: ROOT_SECRET_KEY
+              valueFrom: {
+                secretKeyRef: { name: s3-creds, key: SECRET_ACCESS_KEY },
+              }
+          ports: [{ containerPort: 7070 }]
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3
+  namespace: pg
+spec:
+  selector: { app: s3 }
+  ports: [{ port: 7070, targetPort: 7070 }]

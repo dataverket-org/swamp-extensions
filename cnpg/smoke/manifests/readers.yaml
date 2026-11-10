@@ -1,0 +1,31 @@
+# Two ServiceAccounts for the negative suite: `reader` may read every object
+# the extension reads and nothing else; `blind` may do nothing at all.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: reader, namespace: pg }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: blind, namespace: pg }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: cnpg-smoke-reader }
+rules:
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters, backups, scheduledbackups]
+    verbs: [get, list]
+  - apiGroups: [barmancloud.cnpg.io]
+    resources: [objectstores]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: cnpg-smoke-reader }
+roleRef: {
+  apiGroup: rbac.authorization.k8s.io,
+  kind: ClusterRole,
+  name: cnpg-smoke-reader,
+}
+subjects:
+  - { kind: ServiceAccount, name: reader, namespace: pg }

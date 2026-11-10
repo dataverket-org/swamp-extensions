@@ -1,0 +1,81 @@
+# one: one instance, the in-tree barmanObjectStore method.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: one, namespace: pg }
+spec:
+  instances: 1
+  storage: { size: 1Gi }
+  backup:
+    retentionPolicy: 7d
+    barmanObjectStore:
+      destinationPath: s3://one/
+      endpointURL: http://s3.pg.svc:7070
+      s3Credentials:
+        accessKeyId: { name: s3-creds, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: s3-creds, key: SECRET_ACCESS_KEY }
+---
+# three: three instances, the Barman Cloud plugin and an ObjectStore.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata: { name: store, namespace: pg }
+spec:
+  retentionPolicy: 7d
+  configuration:
+    destinationPath: s3://three/
+    endpointURL: http://s3.pg.svc:7070
+    s3Credentials:
+      accessKeyId: { name: s3-creds, key: ACCESS_KEY_ID }
+      secretAccessKey: { name: s3-creds, key: SECRET_ACCESS_KEY }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: three, namespace: pg }
+spec:
+  instances: 3
+  storage: { size: 1Gi }
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: store
+---
+# nobackup: no backup configuration at all; create must be refused.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: nobackup, namespace: pg }
+spec:
+  instances: 1
+  storage: { size: 1Gi }
+---
+# bad: a bucket that does not exist and a key the gateway does not know.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: bad, namespace: pg }
+spec:
+  instances: 1
+  storage: { size: 1Gi }
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://no-such-bucket/
+      endpointURL: http://s3.pg.svc:7070
+      s3Credentials:
+        accessKeyId: { name: s3-wrong, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: s3-wrong, key: SECRET_ACCESS_KEY }
+---
+# failing: archives WAL fine, but every base backup fails at once, because
+# the backup command is given an option it does not have.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: failing, namespace: pg }
+spec:
+  instances: 1
+  storage: { size: 1Gi }
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://failing/
+      endpointURL: http://s3.pg.svc:7070
+      data:
+        additionalCommandArgs: ["--no-such-option"]
+      s3Credentials:
+        accessKeyId: { name: s3-creds, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: s3-creds, key: SECRET_ACCESS_KEY }
