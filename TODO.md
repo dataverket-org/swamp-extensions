@@ -2,23 +2,13 @@
 
 What is open in this repository, checked against the code on 2026-11-10.
 
-## Written on 2026-11-10, to commit and publish
+## Published on 2026-11-10
 
-Each is at 2026.11.10.1 with its tests, live suite and review; none is in the
-registry yet.
-
-- `@dataverket/http`: `bodyJson`, exact JSON fields beside `bodyContains`.
-- `@dataverket/flux`: helmrelease `get` with the Helm history, last action and
-  hook Jobs; names checked in every method.
-- New `@dataverket/gateway-api`, `@dataverket/cert-manager`, `@dataverket/cnpg`.
-- `@dataverket/kind` and `@dataverket/salmon`, moved onto `lib/`.
-- `lib/`, the shared process and kubectl layer (README "Shared code"). Flux,
-  gateway-api, cert-manager, cnpg, kind and salmon import it.
-
-After the first extension that imports `lib/` is published, pull it into an
-empty swamp repository and run one method before publishing the others: a push
-dry run and a load from source both work, and a pulled copy has not been tried.
-gateway-api is the one to start with, new and read-only.
+`@dataverket/http`, `flux`, `kind`, `salmon` and the new `gateway-api`,
+`cert-manager` and `cnpg` are in the registry at 2026.11.10.1. The six that run
+a command import `lib/` (README "Shared code"). gateway-api was pulled into an
+empty swamp repository after its publish and run from there: `lib/` arrives
+beside the models and the imports resolve.
 
 ## Open
 
@@ -67,11 +57,13 @@ gateway-api is the one to start with, new and read-only.
 
 ## fabrikk-infra, not here
 
-- Pull the 2026.11.10.1 versions once published. `bodyJson` with the issuer on
-  `zitadel-oidc-id` and `zitadel-oidc-id-osl1`, with `bodyJsonShowValues: true`
-  since the document is public.
+- Pull the 2026.11.10.1 versions (flux and http are installed there at
+  2026.10.29.1; the flux upgrade note names two renamed records). `bodyJson`
+  with the issuer on `zitadel-oidc-id` and `zitadel-oidc-id-osl1`, with
+  `bodyJsonShowValues: true` since the document is public.
 - Definitions for gateway-api and cert-manager with the readers context; for
-  cnpg after the readers group may read CloudNativePG objects.
+  cnpg too: the readers group reads CloudNativePG objects and ClusterIssuers
+  since 2026-11-10.
 - `dataverket-prod-helm` and `dataverket-prod-kustomizations` read with the
   admin context; a second definition with the readers context would keep the
   lists off it.
