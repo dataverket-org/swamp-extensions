@@ -1,0 +1,124 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pki
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: root-ca
+  namespace: pki
+spec:
+  isCA: true
+  commonName: smoke-root-ca
+  secretName: root-ca
+  duration: 2160h
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: selfsigned, kind: ClusterIssuer }
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ca
+  namespace: pki
+spec:
+  ca:
+    secretName: root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: leaf
+  namespace: pki
+spec:
+  secretName: leaf-tls
+  dnsNames: [leaf.example.test, www.leaf.example.test]
+  commonName: leaf.example.test
+  duration: 24h
+  renewBefore: 8h
+  issuerRef: { name: ca, kind: Issuer }
+---
+# An Issuer that does not exist is referred to: the request stays Pending.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: no-issuer
+  namespace: pki
+spec:
+  secretName: no-issuer-tls
+  dnsNames: [no-issuer.example.test]
+  issuerRef: { name: missing, kind: Issuer }
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: pebble-http01
+spec:
+  acme:
+    server: https://pebble:14000/dir
+    caBundle: PEBBLE_CA_BUNDLE
+    privateKeySecretRef: { name: pebble-http01-account }
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: none
+            podTemplate:
+              metadata: { labels: { smoke-solver: answers } }
+---
+# HTTP-01 whose answer nobody hears: the name of its one Certificate resolves
+# to a server that answers every path with something else, so cert-manager's
+# own check of the challenge fails and its reason quotes the key it expected.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: pebble-http01-unheard
+spec:
+  acme:
+    server: https://pebble:14000/dir
+    caBundle: PEBBLE_CA_BUNDLE
+    privateKeySecretRef: { name: pebble-http01-unheard-account }
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: none
+            podTemplate:
+              metadata: { labels: { smoke-solver: unheard } }
+---
+# DNS-01 through a webhook solver that is not installed: the challenge can
+# never be presented, which is how a broken DNS-01 solver looks.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: pebble-dns01
+spec:
+  acme:
+    server: https://pebble:14000/dir
+    caBundle: PEBBLE_CA_BUNDLE
+    privateKeySecretRef: { name: pebble-dns01-account }
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.example.test
+            solverName: absent
+            config: { note: never-stored }
+---
+# An ACME directory nothing listens on: the issuer never becomes Ready.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: acme-unreachable
+spec:
+  acme:
+    server: https://pebble:14999/dir
+    skipTLSVerify: true
+    privateKeySecretRef: { name: acme-unreachable-account }
+    solvers:
+      - http01:
+          ingress: { ingressClassName: none }

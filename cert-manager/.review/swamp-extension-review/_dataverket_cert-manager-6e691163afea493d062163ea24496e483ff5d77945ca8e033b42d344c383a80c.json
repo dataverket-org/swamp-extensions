@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cert-manager",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T12:12:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "issue",
+      "note": "Second review. The blocking leak of the first review is closed: a Challenge's spec.token and spec.key and an Order's authorization tokens are blanked by value (`acmeSecrets`), trace names them for every level and seals the summary and the whole trace, and other objects are covered by shape (`keyAuthorizations`). Shown by running the parsers on cert-manager v1.20's two self-check texts and 25 variants. Read upstream at v1.20.0: acmeorders/sync.go never copies a Challenge reason or a problem document into an Order's reason, so the only verified road is the Challenge itself, which is blanked by value; Pebble v2.10.1 quotes the expected key authorization only for HTTP-01 and no DNS-01 digest. Not blocking, what is left: (1) the shape finder in `_helpers.ts` lines 75-76 misses a key authorization that is directly followed by a dot and a letter (`<key>.Retry`), directly preceded by a dot, cut short, or broken by a line break, and the URL finder misses a percent-encoded path; the README names the bare token and the DNS-01 value as limits but not these. None is a text cert-manager v1.20 is known to write. (2) `seal` leaves a fixed list of identity fields and blanks every other text, so a value an ACME server chooses can blank a field a workflow compares: a spec.key of `processing` turns the Challenge's `state` into `[redacted]`, and a token of `challenge` would turn a trace's `stage` into a value its schema refuses. It needs a hostile ACME server; sealing only message fields (reason, message, summary, readyMessage, issuingMessage, error, pollError) would end it. (3) README 'What is never stored' says 'no ACME URL': true for fields, but a message may quote one (an HTTP-01 challenge URL is kept with its token blanked). Unchanged and checked again: no CSR, certificate or CA body, solver configuration or account detail is copied; no Secret is read; the patch body is on standard input only."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Entry and completion at info with structured placeholders. The trace summary that is logged is built from sealed levels and sealed again; a unit test and smoke batch C look for the key authorization in it."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The three points of the first review are fixed: a Certificate deleted during the poll is outcome `deleted` with only the renewal record; a patch with no usable answer says the renewal may have been triggered; a missing object is told by kind not-found. Cutting a patch error at the first `{` keeps the server's sentence for every refusal checked (Forbidden, Conflict, NotFound, Unauthorized, invalid field paths, unknown flag); only the quoted value after it is lost. Notes: a connection that was refused is also reported as 'may have been triggered', which is cautious, not wrong; a run cancelled while the patch is out ends as a plain Error, not as a cancelled kind; `patchSaid` blanks every text of 8 or more characters the patch held, so a condition reason that is also a word of kubectl's sentence would be blanked there."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "84 unit tests pass; the fake now really repeats the patch body, and the key authorization has fixtures for both self-check texts, a trace, the inventory lines and a live case (`acme-test/wrong`, batches B, C, G). Left: (1) that the API server refuses a merge patch with a stale metadata.resourceVersion on the status subresource is still shown on the fake only. The README and smoke/README now say so, but a direct `kubectl patch --subresource=status` with an old resourceVersion in batch D would show the server's side without any hook. (2) No test holds the shapes the finder misses (see credentials). (3) The self-check text that quotes the challenge URL is a unit fixture only; smoke shows the `expected \"...\"` text. smoke/README says no log of the run is kept, so the live results cannot be checked by a reader."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "As in the first review: read, refuse a True Issuing condition, patch bound to the resourceVersion read, answer checked; a second run after an unknown outcome is refused as already issuing. A Certificate without a status gets conditions [Issuing] only."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "The condition matches cmctl renew; the outcome follows what cert-manager does with Issuing on success and failure. Lists and single objects are checked for kind, name and namespace. lastTransitionTime is the operator machine's clock, as with cmctl."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Every kubectl call has a request timeout and is stopped 5 s later; the poll is bounded by waitSeconds (at most 120) and counts read time. The new upper bound on a time limit in lib/cli.ts does not touch any call here (35 s)."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Placeholder names and example.org / example.test only. The README states the limits of the blanking, the data-name collision and what is shown on the fake only. One wording: 'no ACME URL' holds for fields, not for quoted messages."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Plain z.object, no passthrough; a test pins that every record has exactly its schema's fields. The new outcome `deleted` is in the enum and its description. Minor, as before: Date.parse accepts more than RFC 3339. See credentials (2) for the one way a sealed value can leave an enum."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Every spec has both; unchanged."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Read-only types plus one action; nothing is created or deleted."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "kubectl-cli-available, labelled live, on all five types; renew's own checks run before the write."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Both points of the first review are answered: an issuer list narrowed to one kind writes no inventory (tested), and the README says that get, trace and renew cannot see a second object of the same data name when a name or namespace holds `--`."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "First version, never published."
+    }
+  ]
+}

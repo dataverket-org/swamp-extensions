@@ -1,0 +1,165 @@
+# Pebble, the Let's Encrypt test ACME server, with its challenge test server
+# as the only DNS it and cert-manager's self-checks ask. Every name resolves
+# to the http01-solvers Service below, which sends port 80 to the HTTP-01
+# solver pod of the pebble-http01 issuer. setup.sh gives one name,
+# wrong.example.test, the address of the wrong-answer Service instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pebble
+  namespace: cert-manager
+data:
+  pebble-config.json: |
+    {
+      "pebble": {
+        "listenAddress": "0.0.0.0:14000",
+        "managementListenAddress": "0.0.0.0:15000",
+        "certificate": "/test/certs/localhost/cert.pem",
+        "privateKey": "/test/certs/localhost/key.pem",
+        "httpPort": 80,
+        "tlsPort": 443,
+        "ocspResponderURL": "",
+        "externalAccountBindingRequired": false,
+        "retryAfter": { "authz": 3, "order": 5 },
+        "keyAlgorithm": "ecdsa",
+        "profiles": {
+          "default": { "description": "default", "validityPeriod": 7776000 }
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pebble
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pebble }
+  template:
+    metadata:
+      labels: { app: pebble }
+    spec:
+      containers:
+        - name: pebble
+          image: ghcr.io/letsencrypt/pebble:2.10.1
+          args:
+            - -config
+            - /config/pebble-config.json
+            - -dnsserver
+            - 10.96.100.53:8053
+          env:
+            - { name: PEBBLE_WFE_NONCEREJECT, value: "0" }
+            - { name: PEBBLE_AUTHZREUSE, value: "0" }
+            - { name: PEBBLE_VA_NOSLEEP, value: "1" }
+          ports:
+            - containerPort: 14000
+          volumeMounts:
+            - { name: config, mountPath: /config }
+      volumes:
+        - name: config
+          configMap: { name: pebble }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pebble
+  namespace: cert-manager
+spec:
+  selector: { app: pebble }
+  ports:
+    - { name: acme, port: 14000, targetPort: 14000 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: challtestsrv
+  namespace: cert-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: challtestsrv }
+  template:
+    metadata:
+      labels: { app: challtestsrv }
+    spec:
+      containers:
+        - name: challtestsrv
+          image: ghcr.io/letsencrypt/pebble-challtestsrv:2.10.1
+          args:
+            - -defaultIPv4
+            - 10.96.100.80
+            - -defaultIPv6
+            - ""
+            - -http01
+            - ""
+            - -https01
+            - ""
+            - -tlsalpn01
+            - ""
+            - -doh
+            - ""
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: challtestsrv
+  namespace: cert-manager
+spec:
+  clusterIP: 10.96.100.53
+  selector: { app: challtestsrv }
+  ports:
+    - { name: dns-udp, port: 8053, targetPort: 8053, protocol: UDP }
+    - { name: dns-tcp, port: 8053, targetPort: 8053, protocol: TCP }
+    - { name: mgmt, port: 8055, targetPort: 8055, protocol: TCP }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-test
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: http01-solvers
+  namespace: acme-test
+spec:
+  clusterIP: 10.96.100.80
+  selector:
+    acme.cert-manager.io/http01-solver: "true"
+    smoke-solver: answers
+  ports:
+    - { name: http, port: 80, targetPort: 8089 }
+---
+# Answers every path with 200 and its own host name: never a challenge key.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wrong-answer
+  namespace: acme-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: wrong-answer }
+  template:
+    metadata:
+      labels: { app: wrong-answer }
+    spec:
+      containers:
+        - name: serve-hostname
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: [serve-hostname, --port=8080]
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wrong-answer
+  namespace: acme-test
+spec:
+  clusterIP: 10.96.100.81
+  selector: { app: wrong-answer }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }

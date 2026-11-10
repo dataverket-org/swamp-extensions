@@ -1,0 +1,41 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: web
+  namespace: acme-test
+spec:
+  secretName: web-tls
+  dnsNames: [web.example.test]
+  issuerRef: { name: pebble-http01, kind: ClusterIssuer }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: hanging
+  namespace: acme-test
+spec:
+  secretName: hanging-tls
+  dnsNames: ["*.hang.example.test", hang.example.test]
+  issuerRef: { name: pebble-dns01, kind: ClusterIssuer }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: unreachable
+  namespace: acme-test
+spec:
+  secretName: unreachable-tls
+  dnsNames: [unreachable.example.test]
+  issuerRef: { name: acme-unreachable, kind: ClusterIssuer }
+---
+# HTTP-01 that cert-manager's own check never sees answered: the challenge
+# stays pending and its reason quotes the key authorization it expected.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wrong
+  namespace: acme-test
+spec:
+  secretName: wrong-tls
+  dnsNames: [wrong.example.test]
+  issuerRef: { name: pebble-http01-unheard, kind: ClusterIssuer }

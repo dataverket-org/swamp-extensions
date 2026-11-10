@@ -1,0 +1,56 @@
+manifestVersion: 1
+name: "@dataverket/cert-manager"
+version: "2026.11.10.1"
+description: >
+  cert-manager for swamp: Certificates, CertificateRequests, ACME Orders and
+  Challenges and issuers as five model types, read with kubectl, and a forced
+  renewal.
+
+  `certificate` lists and reads Certificates with their Ready and Issuing
+  conditions, validity window, seconds until expiry, names, issuer, revision
+  and failed issuance attempts. `trace` walks from one Certificate to its
+  issuer, its current CertificateRequest, the ACME Order and its Challenges
+  in one run, and names the level where issuance stands with its state and
+  reason: the question to ask when a DNS-01 issuance hangs. `renew` does what
+  `cmctl renew` does, without cmctl: it sets the Issuing condition to True on
+  the status subresource, refuses when the Certificate is missing or already
+  issuing, changes only what it read, polls briefly and records the revision
+  before and the state after.
+
+  `certificaterequest`, `order`, `challenge` and `issuer` list and read the
+  other objects of the chain. Every list also records one inventory of what it
+  saw and how many objects are not in their good state, for a workflow to
+  assert on. An unhealthy object is a record, never a failed method.
+
+  Nothing secret is stored: no CSR, no certificate body, no ACME token or
+  key, no solver configuration, and no Secret is ever read. `kubectl` is run
+  by name from PATH and the definition's namespace, kubeconfig and context
+  are honoured.
+repository: "https://github.com/dataverket-org/swamp-extensions"
+license: "AGPL-3.0-only"
+paths:
+  base: manifest
+models:
+  - certificate.ts
+  - certificaterequest.ts
+  - order.ts
+  - challenge.ts
+  - issuer.ts
+workflows: []
+vaults: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE.md
+labels:
+  - cert-manager
+  - certificate
+  - tls
+  - acme
+  - letsencrypt
+  - dns01
+  - renewal
+  - kubernetes
+  - kubectl
+dependencies: []
