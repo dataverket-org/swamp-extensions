@@ -1,6 +1,6 @@
 # @dataverket/signed-images
 
-Eight [swamp](https://github.com/swamp-club/swamp) workflows that compose
+Nine [swamp](https://github.com/swamp-club/swamp) workflows that compose
 [`@dataverket/ko`](../ko), [`@dataverket/cosign`](../cosign),
 [`@dataverket/flux`](../flux) and [`@dataverket/crane`](../crane): Go images
 built by [ko](https://ko.build), signed by digest with
@@ -8,20 +8,22 @@ built by [ko](https://ko.build), signed by digest with
 verified, released as one OCI artifact pushed by [flux](https://fluxcd.io), that
 release verified, promoted by retag and mirrored with
 [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md),
-and the base image they build on quarantined, verified and mirrored; each in one
-run that fails unless all of it happened for all of them. A skill,
-`signed-images`, says which to run for what.
+the base image they build on quarantined, verified and mirrored, and any
+upstream image's signature verified keyless, with its provenance when asked;
+each in one run that fails unless all of what it was asked happened for all of
+them. A skill, `signed-images`, says which to run for what.
 
-| Workflow                            | Does                                                                                                                                                                                                                                       | Models                                                                                            |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `@dataverket/ko-signed-images`      | A signed build: every command of one Go module built and pushed, every image signed, every signature verified; the base image from a `pinned-base-image` record when asked                                                                 | `ko-signed-images-ko`, `ko-signed-images-cosign`                                                  |
-| `@dataverket/ko-signed-manifests`   | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                                | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`                                            |
-| `@dataverket/verified-manifests`    | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                                | `verified-manifests-ko`, `verified-manifests-cosign`                                              |
-| `@dataverket/signed-release`        | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified          | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign`                               |
-| `@dataverket/verify-release`        | The gate: the artifact's tag pinned to its digest, its signature and attestation verified, `release.json` read out of it, every image it lists verified; read-only                                                                         | `verify-release-crane`, `verify-release-cosign`                                                   |
-| `@dataverket/promote-release`       | `verify-release`, then the channel tag such as `current` pointed at the verified digest and read back; the digest it held before recorded, for a rollback                                                                                  | `promote-release-crane`, and `verify-release`'s                                                   |
-| `@dataverket/mirror-release-images` | `verify-release`, then every image it lists copied by digest into another registry with its signature tag, and verified there                                                                                                              | `mirror-release-images-crane`, `mirror-release-images-cosign`, and `verify-release`'s             |
-| `@dataverket/pinned-base-image`     | A base image resolved to its digest, held in quarantine until that digest has been the tag's for `minimumAgeDays`, verified keyless against the publisher's identity, copied into our registry by digest, signed with our key and verified | `base-image-watch`, `pinned-base-image-upstream`, `pinned-base-image`, `pinned-base-image-cosign` |
+| Workflow                              | Does                                                                                                                                                                                                                                                                                | Models                                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `@dataverket/ko-signed-images`        | A signed build: every command of one Go module built and pushed, every image signed, every signature verified; the base image from a `pinned-base-image` record when asked                                                                                                          | `ko-signed-images-ko`, `ko-signed-images-cosign`                                                  |
+| `@dataverket/ko-signed-manifests`     | Signed manifests: `ko resolve` renders them with every `ko://` image built, pushed and pinned; each image is signed, the rendered manifests attested onto it, both verified                                                                                                         | `ko-signed-manifests-ko`, `ko-signed-manifests-cosign`                                            |
+| `@dataverket/verified-manifests`      | Every image a rendered manifest file names verified against a public key; read-only, a gate before a deploy                                                                                                                                                                         | `verified-manifests-ko`, `verified-manifests-cosign`                                              |
+| `@dataverket/signed-release`          | A signed release: a directory of rendered manifests pushed as one OCI artifact tagged with the commit, `release.json` listing every image by digest inside it; the artifact signed, the manifests attested onto it, both verified                                                   | `signed-release-ko`, `signed-release-flux`, `signed-release-cosign`                               |
+| `@dataverket/verify-release`          | The gate: the artifact's tag pinned to its digest, its signature and attestation verified, `release.json` read out of it, every image it lists verified; read-only                                                                                                                  | `verify-release-crane`, `verify-release-cosign`                                                   |
+| `@dataverket/promote-release`         | `verify-release`, then the channel tag such as `current` pointed at the verified digest and read back; the digest it held before recorded, for a rollback                                                                                                                           | `promote-release-crane`, and `verify-release`'s                                                   |
+| `@dataverket/mirror-release-images`   | `verify-release`, then every image it lists copied by digest into another registry with its signature tag, and verified there                                                                                                                                                       | `mirror-release-images-crane`, `mirror-release-images-cosign`, and `verify-release`'s             |
+| `@dataverket/pinned-base-image`       | A base image resolved to its digest, held in quarantine until that digest has been the tag's for `minimumAgeDays`, verified keyless against the publisher's identity, copied into our registry by digest, signed with our key and verified                                          | `base-image-watch`, `pinned-base-image-upstream`, `pinned-base-image`, `pinned-base-image-cosign` |
+| `@dataverket/verified-upstream-image` | An upstream image resolved to its digest and its signature verified keyless against the publisher's identity; when asked, also its attestation of a type, and the source repository and commit of its provenance held to what was given; read-only, a gate before the image is used | `verified-upstream-image-crane`, `verified-upstream-image-cosign`                                 |
 
 What makes them signed builds rather than steps in a row:
 
@@ -42,12 +44,13 @@ run one module at a time.
 
 ## `ko-signed-images`: a signed build
 
-| Job        | Does                                                                                                             |
-| ---------- | ---------------------------------------------------------------------------------------------------------------- |
-| `describe` | `describe` on `@dataverket/ko/module`: module path, Go and ko versions, base image in effect. Read-only          |
-| `build`    | `build`: one ko build per command, pushed to `repo`, each recorded as an image record with its digest            |
-| `sign`     | `sign` on `@dataverket/cosign/signer`: every image this run built, by `repository@digest` from its image records |
-| `verify`   | `verify` of the same images against the key's public half, then one assertion over the three counts              |
+| Job        | Does                                                                                                                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`   | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails |
+| `describe` | `describe` on `@dataverket/ko/module`: module path, Go and ko versions, base image in effect. Read-only                                                          |
+| `build`    | `build`: one ko build per command, pushed to `repo`, each recorded as an image record with its digest                                                            |
+| `sign`     | `sign` on `@dataverket/cosign/signer`: every image this run built, by `repository@digest` from its image records                                                 |
+| `verify`   | `verify` of the same images against the key's public half, then one assertion over the three counts                                                              |
 
 Inputs: ko's, as in `@dataverket/ko-images`: `dir`, `repo` (required), `tags`,
 `importPaths`, `naming`, `platforms`, `sbom`, `baseImage`, `cache`,
@@ -110,12 +113,13 @@ The `module` record of `ko-signed-images-ko` says which base was in effect:
 
 ## `ko-signed-manifests`: signed manifests
 
-| Job       | Does                                                                                                                                    |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolve` | `resolve` on `@dataverket/ko/module`: every `ko://` reference in `files` built, pushed and pinned; the rendered manifests become a file |
-| `sign`    | `sign` of every image the resolution marks `builtHere`, by `repository@digest`                                                          |
-| `attest`  | `attest` of the rendered manifests file onto each of them, predicate type `custom`                                                      |
-| `verify`  | `verify` and `verifyAttestation` of the same images, then one assertion over the five counts                                            |
+| Job       | Does                                                                                                                                                             |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`  | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails |
+| `resolve` | `resolve` on `@dataverket/ko/module`: every `ko://` reference in `files` built, pushed and pinned; the rendered manifests become a file                          |
+| `sign`    | `sign` of every image the resolution marks `builtHere`, by `repository@digest`                                                                                   |
+| `attest`  | `attest` of the rendered manifests file onto each of them, predicate type `custom`                                                                               |
+| `verify`  | `verify` and `verifyAttestation` of the same images, then one assertion over the five counts                                                                     |
 
 Inputs: ko's, as in `@dataverket/ko-manifests`: `dir`, `repo` and `files`
 (required), `recursive`, `selector`, `tags`, `naming`, `platforms`, `sbom`,
@@ -143,10 +147,11 @@ manifests may pin it later, but `verified-manifests` does.
 
 ## `verified-manifests`: a gate
 
-| Job       | Does                                                                                                                                              |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolve` | `resolve` on `@dataverket/ko/module` over `files`, pushing nothing: every image pinned by digest in them becomes the resolution record            |
-| `verify`  | `verify` of every one of them, built here or not, against `publicKey`, then an assertion: every image pinned, one verification each, all verified |
+| Job       | Does                                                                                                                                                             |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`  | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails |
+| `resolve` | `resolve` on `@dataverket/ko/module` over `files`, pushing nothing: every image pinned by digest in them becomes the resolution record                           |
+| `verify`  | `verify` of every one of them, built here or not, against `publicKey`, then an assertion: every image pinned, one verification each, all verified                |
 
 Inputs: `files` and `publicKey` (required; a PEM or a file, nothing secret),
 `dir` (a Go module for ko to run in, default `.`), `repo`, `annotations`,
@@ -182,6 +187,7 @@ inputs:
 
 | Job       | Does                                                                                                                                                                                                                                                 |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`  | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails                                                                                     |
 | `resolve` | `resolve` on `@dataverket/ko/module` over the directory, pushing nothing: every image pinned by digest in it becomes the resolution record; then an assertion, before anything is pushed: every image pinned, at least one, none built here          |
 | `push`    | `push_artifact` on `@dataverket/flux/source`: the directory pushed as `oci://<repository>:<tag>`, reproducibly, with `release.json` built from the resolution record written into the pushed copy; the artifact record holds the digest flux printed |
 | `sign`    | `sign` of the artifact by `repository@digest` from that record, then `attest` of the rendered manifests this run's resolve wrote onto it, as a `custom` predicate                                                                                    |
@@ -272,6 +278,7 @@ flux pull artifact oci://registry.example.org/team/release/prod:abc123 --output 
 
 | Job               | Does                                                                                                                                                                                                |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`          | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails                                    |
 | `resolve`         | `digest` on `@dataverket/crane/registry`, model `base-image-watch`: the upstream tag's digest, with `firstSeenAt` carried forward while the digest is unchanged. Read-only                          |
 | `quarantine`      | An assertion: the digest has been the tag's for at least `minimumAgeDays`, from `firstSeenAt` to this run's start; it fails naming when the digest was first seen and when it may be mirrored       |
 | `verify-upstream` | `verify` on `@dataverket/cosign/signer`, model `pinned-base-image-upstream`: keyless, the certificate identity and OIDC issuer of the upstream's release workflow, through the public log; asserted |
@@ -336,6 +343,7 @@ mirror lands at the upstream's registry and whole path under the namespace,
 
 | Job        | Does                                                                                                                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`   | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails                                        |
 | `pin`      | `digest` on `@dataverket/crane/registry`: the artifact's tag resolved to its digest; every step after names that digest. Read-only                                                                      |
 | `artifact` | `verify` and `verifyAttestation` (type `custom`) of the artifact against `publicKey`, an assertion that both verified, then `blob` reads `release.json` out of the artifact's layer as a record         |
 | `images`   | `verify` of every image `release.json` lists, `repository@digest`, against the same key, then one assertion: one artifact, verified, attested, read, at least one image, every image verified, none not |
@@ -367,6 +375,7 @@ reason.
 
 | Job       | Does                                                                                                                                                                                          |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`  | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails                              |
 | `verify`  | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                             |
 | `promote` | `tag` on `@dataverket/crane/registry`: the channel tag pointed at the digest the nested run verified; `digest` reads the channel back; an assertion that it holds exactly the verified digest |
 
@@ -400,6 +409,7 @@ swamp data query 'modelName == "promote-release-crane" && specName == "tagging"'
 
 | Job             | Does                                                                                                                                                                                                                                                                       |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`        | One assertion, `known-inputs`: every input given is one this workflow has; it is what holds a step of another workflow to the inputs. Nothing runs when it fails                                                                                                           |
 | `verify`        | `@dataverket/verify-release` as a nested workflow, with the inputs passed through                                                                                                                                                                                          |
 | `copy`          | `copy` on `@dataverket/crane/registry`: every image `release.json` lists, by digest, into `<registry>/<namespace>/<source registry>/<path>:<tag>`; then, with `signatureTags`, `digest` of each image's `sha256-<hex>` tag at the source and `copy` of it beside the image |
 | `verify-mirror` | `verify` of every mirrored image at its new location, from this run's mirror records, then one assertion over the counts: every listed image mirrored by its digest, every signature tag too when asked, every mirrored image verified                                     |
@@ -442,6 +452,184 @@ in place of the bundles, so the target did not verify. The run then reports what
 it finds: an image whose signatures did not arrive fails the assertion by name
 with `no signatures found`.
 
+## `verified-upstream-image`: a gate for an image someone else built
+
+None of the other workflows verifies an upstream image keyless without also
+mirroring or signing it. This one only reads. What it checks is what its inputs
+ask for, and with `attestationType` empty that is the signature alone:
+
+| Given                                          | A pass proves                                                                                                                                                                 |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attestationType` empty                        | The digest the reference names now was signed by that identity, vouched for by that issuer (`oidcIssuer`, GitHub's unless you say otherwise), and the signature is in the log |
+| an `attestationType`                           | Also: that identity signed an attestation of that type whose subject is this digest. Nothing yet about what the attestation says                                              |
+| and `sourceRepository`, `sourceCommit` or both | Also: that attestation is provenance of a known build type, and it names exactly that repository and commit as the source                                                     |
+
+`attestationType` has no default and must be given, as a type or as empty, so
+that a run says which of these it is; many images carry no provenance, so the
+workflow cannot ask for it on its own. No pass says that the source is good, or
+that anything runs this digest: a workload that pulls by tag can get another
+one. Run it when a pinned upstream tag changes, before the image is used.
+
+| Job       | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputs`  | Six assertions over the inputs alone. First `known-inputs`: every input given is one this workflow has, `ref` and `attestationType` are given, and every input is text. Then, once it holds: exactly one of `certificateIdentity` and `certificateIdentityRegexp`; an expression that starts with `^` and ends with `$`; no source without an `attestationType`; an `attestationType` that is not the one cosign stores the signature under; a `sourceRepository` with an expression and SLSA provenance. Nothing is read when one fails |
+| `resolve` | `digest` on `@dataverket/crane/registry`, model `verified-upstream-image-crane`: the reference resolved to its digest, then an assertion that this run recorded exactly one, of that reference. A tag that does not exist fails here                                                                                                                                                                                                                                                                                                     |
+| `verify`  | `verify` on `@dataverket/cosign/signer`, model `verified-upstream-image-cosign`, keyless, of `repository@digest` from this run's record; an assertion that the cosign extension is new enough; an assertion that it verified. Then, unless `attestationType` is empty, `verifyAttestation`; asserted                                                                                                                                                                                                                                     |
+
+Inputs: `ref` (required), the image with its registry, as `<repository>:<tag>`,
+`<repository>@sha256:<digest>` or both, `<repository>:<tag>@sha256:<digest>`,
+the form a pin is written in; with both, the digest is what is read and
+verified, and the tag is not compared with it: the digest record of the run
+repeats the input's tag in `tag` and `pinned`, which says what was asked, not
+that the registry has that tag at that digest. `certificateIdentity` or
+`certificateIdentityRegexp`, exactly one, the identity in the signing
+certificate. `oidcIssuer` (default GitHub's issuer,
+`https://token.actions.githubusercontent.com`). `attestationType` (required;
+empty skips the attestation steps), such as `slsaprovenance1`,
+`slsaprovenance02` or `spdxjson`. `sourceRepository` and `sourceCommit` (default
+empty), which the provenance must then name exactly. An input the workflow does
+not have is refused, so a mistyped name cannot switch a check off: from the
+command line by the input schema, before the run starts, and from a step of
+another workflow by the first assertion, `known-inputs`, since swamp does not
+hold a nested step's inputs to the child's schema. That assertion also refuses a
+nested step that leaves out `ref` or `attestationType`, or gives any of the
+seven inputs as something that is not text, such as `null`, `false` or a list.
+One `attestationType` is refused by name: `https://sigstore.dev/cosign/sign/v1`,
+the type cosign 3 stores the signature itself under. Every signed image has one,
+so it would pass with nothing attested and read as more than the signature.
+
+An expression must start with `^` and end with `$`. An unanchored one matches
+any identity that contains it: `.*` with GitHub's issuer accepts a signature
+from any workflow in any repository on GitHub. The assertion catches a forgotten
+anchor and nothing more: `^.*$` and `^a$|.*$` start and end as asked and match
+everything. What the expression matches is yours to see to: write the whole
+identity, escape the dots, and put alternatives in one group between the
+anchors.
+
+No vault and no credential of its own: crane and cosign read the registry with
+the container config of the user running swamp. A public image needs no login. A
+login stored for that registry is used when there is one, and a stale one can
+make the read of a public image fail.
+
+```sh
+swamp workflow run @dataverket/verified-upstream-image \
+  --input ref=ghcr.io/<owner>/<image>:<tag> \
+  --input certificateIdentity=https://github.com/<owner>/<repository>/.github/workflows/<workflow>.yml@refs/heads/main \
+  --input attestationType=slsaprovenance1 \
+  --input sourceRepository=https://github.com/<owner>/<repository> \
+  --input sourceCommit=<40 hex>
+```
+
+`@dataverket/cosign` must be at 2026.11.10.1 or later in the repository that
+runs this workflow; `swamp extension pull @dataverket/cosign` brings it once
+that version is published. That version's `verifyAttestation` counts only an
+attestation whose subject is the digest verified, records the source its
+provenance names, takes `sourceRepository` and `sourceCommit`, and writes into
+every verification record the identity and issuer it was checked against. With
+an older cosign extension the run fails at `cosign-version`, after the signature
+step and before anything is asserted from its record, with
+`This workflow needs @dataverket/cosign 2026.11.10.1 or later: ...`.
+
+Every step after `resolve` names the digest this run resolved, never the tag
+again and never an older record. The assertions hold each record to what this
+run gave: the verification must carry this run's identity and issuer, and the
+attestation verification also this run's type, `sourceRepository` and
+`sourceCommit` as what it was asked (`expectedSourceRepository`,
+`expectedSourceCommit`), so a source that was asked for is checked by the method
+and again by the workflow, and a run cannot pass on a record made with another
+run's arguments.
+
+A run that fails says where and why: at `digest` for a tag that is not in the
+registry; at `signed-by-identity` with
+`<ref> is <digest>, and that digest has no signature from <identity> vouched for
+by <issuer>. Do not use this image. cosign said: ...`;
+at `attested-by-identity` with the record's reason, such as
+`1 attestation verified by cosign, none counted: sourceCommit is "<found>", not "<expected>"`.
+
+### Runs for one reference must not overlap
+
+The models are shared by every run in a repository, and a record is named after
+the image, so two runs of the same reference write the same records. A run whose
+record another run replaced finds none of its own and fails with
+`This run's record of <ref> is not there: another run of the same reference in
+this repository replaced it. Runs for one reference in one repository must not
+overlap; run again.`
+It never passes on the other run's record. Runs that give different identities
+also share the signer's arguments; a run whose verification was made with
+another run's identity fails saying so. Run them one after the other, or in
+separate repositories.
+
+### Provenance signed by another identity
+
+One identity serves both checks. Some publishers do not sign their provenance
+with the workflow that signs the image: with the `slsa-github-generator`, the
+repository's release workflow signs the image and the generator's reusable
+workflow signs the provenance. Such an image fails at `attested-by-identity`
+against the image's identity, and the message says so.
+
+The generator signs provenance for any repository on GitHub that calls it. Its
+identity therefore says nothing about whose build it was; only the provenance
+does. To verify such an image, give an expression for exactly the two
+identities, and you must give `sourceRepository`: without it, provenance of any
+repository's build would count. The workflow refuses an expression with a SLSA
+provenance type and no `sourceRepository` for that reason, also when the
+expression names one identity, since it cannot tell. A SLSA provenance type is
+an `attestationType` that starts with `slsaprovenance` (`slsaprovenance`,
+`slsaprovenance02`, `slsaprovenance1`) or with `https://slsa.dev/provenance/`.
+The consequence: with an expression, SLSA provenance from a builder for which
+`@dataverket/cosign` derives no source cannot pass, since the `sourceRepository`
+the workflow requires can never be met; name one identity with
+`certificateIdentity` there. The alternatives go in one group between the
+anchors, with the dots escaped:
+
+```sh
+--input 'certificateIdentityRegexp=^https://github\.com/(<owner>/<repository>/\.github/workflows/release\.yml|slsa-framework/slsa-github-generator/\.github/workflows/generator_container_slsa3\.yml)@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+--input attestationType=slsaprovenance \
+--input sourceRepository=https://github.com/<owner>/<repository>
+```
+
+With such an expression the image's signature may come from either identity too,
+so the generator's identity would also pass as the image's signer; the
+`sourceRepository` is what ties the result to the publisher. A source is derived
+for SLSA v1 of GitHub's workflow build type and for v0.2 of the generator's
+build types (`@dataverket/cosign`'s README lists them); for any other predicate
+the summary is empty, and a `sourceRepository` or `sourceCommit` then fails the
+run.
+
+### As a step of another workflow
+
+```yaml
+- name: upstream
+  task:
+    type: workflow
+    workflowIdOrName: "@dataverket/verified-upstream-image"
+    inputs:
+      ref: ${{ inputs.ref }}
+      certificateIdentity: https://github.com/<owner>/<repository>/.github/workflows/<workflow>.yml@refs/heads/main
+      attestationType: slsaprovenance1
+      sourceRepository: https://github.com/<owner>/<repository>
+      sourceCommit: ${{ inputs.sourceCommit }}
+```
+
+The outer step fails with the inner assertion's message.
+
+## Changed since 2026.10.29.2
+
+- A ninth workflow, `@dataverket/verified-upstream-image`.
+- Every workflow now refuses an input it does not have. A caller that passes an
+  input name the workflow never declared, which was ignored before, gets
+  `Input validation failed: <name> is not a valid input property` from the
+  command line, where the input schema is closed. A step of another workflow is
+  not held to that schema by swamp, so each workflow has a new first job,
+  `inputs`, with one assertion, `known-inputs`, that fails with
+  `Not inputs of this workflow: <names>`; the workflow's other jobs wait for it.
+- A run of one of the other eight that failed under 2026.10.29.2 cannot be
+  resumed after the upgrade: swamp refuses to resume a run of a workflow that
+  has gained a job. Start a new run. The reason: a mistyped `annotations`,
+  `tlog`, `digest` or `certificateIdentityRegexp` silently ran with the default,
+  which verifies less than was asked. No input was added to, removed from or
+  renamed in the other eight.
+
 ## The key
 
 The passphrase always comes from a vault; a key without one has an empty
@@ -473,6 +661,7 @@ swamp data query 'modelName == "base-image-watch" && specName == "digest"' --jso
 swamp data query 'modelName == "verify-release-crane" && specName == "blob"' --select content
 swamp data query 'modelName == "promote-release-crane" && specName == "tagging"' --json
 swamp data query 'modelName == "mirror-release-images-crane" && specName == "mirror"' --json
+swamp data query 'modelName == "verified-upstream-image-cosign" && specName == "attestationVerification"' --json
 ```
 
 The next step of a release reads them through CEL, for instance the build record
@@ -507,6 +696,22 @@ both images and their signature tags into a second `registry:2` and verified
 them there, found them unchanged on a second run, and with
 `signatureTags: false` into another namespace failed the assertion naming both
 images.
+
+`verified-upstream-image` has a live suite, run through swamp from a scratch
+repository against two public images: what passes, what fails and at which step,
+what is refused before the registry is read, a publisher whose provenance is
+signed by another identity than its image, the workflow as a nested step, three
+runs started together, and an older cosign extension. It is not part of the
+published extension; it is in the repository, under
+[`signed-images/smoke`](https://github.com/dataverket-org/swamp-extensions/tree/main/signed-images/smoke),
+with a README that says how to run it and what it ran on. For this version the
+other eight workflows were validated, and one refusal of a mistyped input was
+run, here. An independent review ran each of the eight once to a successful end
+against local throwaway registries with a throwaway key on 2026-11-10:
+`ko-signed-images`, `ko-signed-manifests`, `verified-manifests`,
+`signed-release`, `verify-release`, `promote-release`, `mirror-release-images`,
+and `pinned-base-image` with `minimumAgeDays=0`. Not run then: multi-platform
+builds, `tlog: true`, `signatureTags: false`, and a registry that needs a login.
 
 ## License
 

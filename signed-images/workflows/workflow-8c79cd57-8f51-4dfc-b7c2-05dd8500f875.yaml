@@ -1,0 +1,329 @@
+id: 8c79cd57-8f51-4dfc-b7c2-05dd8500f875
+name: "@dataverket/verified-upstream-image"
+description: >-
+  Is this upstream image signed by its publisher's CI, and, when asked, attested by it and built from this
+  source? Read-only, a gate before an image someone else built is used. What a run checks is what its inputs
+  ask for, and attestationType must be given, a type or empty: with attestationType empty only the signature is
+  verified. The tag or digest in ref is resolved to its digest once, with crane; everything after that names the
+  digest this run resolved, never the tag again and never an older record. cosign verifies the signature of that
+  digest keyless, against the certificate identity and OIDC issuer given, through the public Sigstore log, and
+  an assertion fails the run unless it verified, against exactly that identity and issuer. With an
+  attestationType, cosign then verifies the attestations of that type on the same digest, the same way, and
+  records what each says; an attestation counts only when its subject is that digest and, when sourceRepository
+  or sourceCommit is given, its provenance names exactly that source; an assertion fails the run unless one
+  counted and the record was asked for exactly that source. Refused before the registry is read: both or neither
+  of certificateIdentity and certificateIdentityRegexp, an expression that does not start with ^ and end with $
+  (a check for a forgotten anchor, no more: what the expression matches is the caller's to see to), a source
+  without an attestationType, an expression with a SLSA provenance type and no sourceRepository, the type cosign
+  stores the signature itself under, and an input the workflow does not have: from the command line by the input
+  schema, from a step of another workflow, whose inputs swamp does not hold to that schema, by the first
+  assertion. Nothing is written anywhere but swamp's own records: digest, verification and
+  attestationVerification. No vault: crane and cosign read the registry with the container config of the user
+  running swamp, so a public image needs no login. Runs for one reference in one repository must not overlap.
+  Its models are created on first use as verified-upstream-image-crane and
+  verified-upstream-image-cosign. Needs @dataverket/cosign 2026.11.10.1 or later, and says so when it is older.
+version: 1
+inputs:
+  additionalProperties: false
+  properties:
+    ref:
+      type: string
+      description: >-
+        The image, with its registry, by tag, by digest, or by both as a pin is written: <repository>:<tag>,
+        <repository>@sha256:<digest> or <repository>:<tag>@sha256:<digest>, such as
+        ghcr.io/<owner>/<image>:1.2.3. With both, the digest is what is read and verified; the tag is not
+        compared with it
+    certificateIdentity:
+      type: string
+      default: ""
+      description: >-
+        The exact identity the signing certificate must name, such as
+        https://github.com/<owner>/<repository>/.github/workflows/release.yml@refs/heads/main; give this or
+        certificateIdentityRegexp, not both
+    certificateIdentityRegexp:
+      type: string
+      default: ""
+      description: >-
+        A regular expression the certificate's identity must match, instead of certificateIdentity. It must
+        start with ^ and end with $: an unanchored expression matches any identity that contains it, and .*
+        with GitHub's issuer is any workflow in any repository. Escape the dots, and put alternatives in one
+        group between the anchors
+    oidcIssuer:
+      type: string
+      default: "https://token.actions.githubusercontent.com"
+      description: The OIDC issuer that vouched for that identity; the default is GitHub Actions
+    attestationType:
+      type: string
+      description: >-
+        Required, so that a run says what it verifies: the predicate type an attestation must have, such as
+        slsaprovenance1, slsaprovenance02, spdxjson or a URI; or empty, which skips the attestation steps, and
+        then only the signature is verified
+    sourceRepository:
+      type: string
+      default: ""
+      description: >-
+        When set, the source repository the provenance must name, exactly, such as
+        https://github.com/<owner>/<repository>; needs an attestationType with provenance, and is required
+        with certificateIdentityRegexp and SLSA provenance
+    sourceCommit:
+      type: string
+      default: ""
+      description: >-
+        When set, the source commit the provenance must name, exactly, the full hash in lower case; needs an
+        attestationType with provenance
+  required:
+    - ref
+    - attestationType
+jobs:
+  - name: inputs
+    steps:
+      - name: known-inputs
+        description: >-
+          Every input given is one this workflow has, ref and attestationType are given, and every input is text. From the command
+          line the input schema already refuses the rest; a step of another workflow is held to it here.
+        task:
+          type: assert
+          expr: >-
+            inputs.all(k, k in ["ref", "certificateIdentity", "certificateIdentityRegexp", "oidcIssuer", "attestationType", "sourceRepository", "sourceCommit"]) && has(inputs.ref) && type(inputs.ref) == string && inputs.ref != "" && has(inputs.attestationType) && type(inputs.attestationType) == string && type(inputs.certificateIdentity) == string && type(inputs.certificateIdentityRegexp) == string && type(inputs.oidcIssuer) == string && type(inputs.sourceRepository) == string && type(inputs.sourceCommit) == string
+          message: >-
+            ${{ !inputs.all(k, k in ["ref", "certificateIdentity", "certificateIdentityRegexp", "oidcIssuer", "attestationType", "sourceRepository", "sourceCommit"]) ? "Not inputs of this workflow: " + inputs.filter(k, !(k in ["ref", "certificateIdentity", "certificateIdentityRegexp", "oidcIssuer", "attestationType", "sourceRepository", "sourceCommit"])).join(", ") + ". It has ref, certificateIdentity, certificateIdentityRegexp, oidcIssuer, attestationType, sourceRepository and sourceCommit, spelled so; a mistyped name would leave that input at its default and check less than was asked." : (!(has(inputs.ref) && type(inputs.ref) == string && inputs.ref != "") ? "ref must be given, as text: the image with its registry, by tag, by digest or both." : (!(has(inputs.attestationType) && type(inputs.attestationType) == string) ? "attestationType must be given, as text: a predicate type such as slsaprovenance1, or \"\" to verify the signature only." : "certificateIdentity, certificateIdentityRegexp, oidcIssuer, sourceRepository and sourceCommit must each be text when given; leave one out, or give \"\", to ask nothing of it.")) }} Nothing was read.
+          severity: high
+      - name: one-identity
+        description: Exactly one of certificateIdentity and certificateIdentityRegexp is given.
+        dependsOn:
+          - step: known-inputs
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            (inputs.certificateIdentity == "") != (inputs.certificateIdentityRegexp == "")
+          message: >-
+            Give exactly one of certificateIdentity and certificateIdentityRegexp: a keyless signature is checked
+            against the identity in its certificate, named exactly or matched by an expression, and without one
+            there is nothing to check ${{ inputs.?ref.orValue("") }} against. Nothing was read.
+          severity: high
+      - name: expression-anchored
+        description: certificateIdentityRegexp, when given, starts with ^ and ends with $.
+        dependsOn:
+          - step: known-inputs
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            inputs.certificateIdentityRegexp == "" || (inputs.certificateIdentityRegexp.startsWith("^") && inputs.certificateIdentityRegexp.endsWith("$"))
+          message: >-
+            certificateIdentityRegexp must start with ^ and end with $: an expression that is not anchored
+            matches any identity that contains it, so .* with GitHub's issuer accepts a signature from any
+            workflow in any repository. Write the whole identity between the anchors. Nothing was read.
+          severity: high
+      - name: source-needs-attestation
+        description: sourceRepository and sourceCommit are only given with an attestationType, since the provenance is where a source is named.
+        dependsOn:
+          - step: known-inputs
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            inputs.?attestationType.orValue("") != "" || (inputs.sourceRepository == "" && inputs.sourceCommit == "")
+          message: >-
+            sourceRepository or sourceCommit is given with attestationType empty: the source is named in the
+            provenance, and with no attestationType the attestation steps are skipped, so nothing would check it.
+            Give an attestationType such as slsaprovenance1. Nothing was read.
+          severity: high
+      - name: attestation-type-is-not-the-signature
+        description: >-
+          attestationType is not the type cosign stores a signature under: every signed image has one of those, so
+          it would pass with nothing attested.
+        dependsOn:
+          - step: known-inputs
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            inputs.?attestationType.orValue("") != "https://sigstore.dev/cosign/sign/v1"
+          message: >-
+            attestationType https://sigstore.dev/cosign/sign/v1 is the type cosign 3 stores the signature itself
+            under, so every signed image has one and a pass would say nothing more than the signature does. Give
+            the type of an attestation the publisher makes, such as slsaprovenance1, or "" to verify the
+            signature only. Nothing was read.
+          severity: high
+      - name: expression-with-provenance-needs-source
+        description: >-
+          With certificateIdentityRegexp and a SLSA provenance type, sourceRepository is given: an expression can
+          match a signer that attests for any repository, and then only the provenance says whose build it was.
+        dependsOn:
+          - step: known-inputs
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            inputs.certificateIdentityRegexp == "" || !(inputs.?attestationType.orValue("").startsWith("slsaprovenance") || inputs.?attestationType.orValue("").startsWith("https://slsa.dev/provenance/")) || inputs.sourceRepository != ""
+          message: >-
+            certificateIdentityRegexp with attestationType ${{ inputs.?attestationType.orValue("") }} needs sourceRepository:
+            an expression may match more than one signer, and a shared provenance workflow such as the
+            slsa-github-generator signs for any repository that calls it, so without sourceRepository the
+            provenance of any repository's build would count. Give the repository the image is built from, or
+            name one identity with certificateIdentity. Nothing was read.
+          severity: high
+  - name: resolve
+    dependsOn:
+      - job: inputs
+        condition:
+          type: succeeded
+    steps:
+      - name: digest
+        description: >-
+          crane digest of the reference; one digest record with repository and digest. Read-only. A tag that is
+          not in the registry fails here.
+        task:
+          type: model_method
+          modelType: "@dataverket/crane/registry"
+          modelName: verified-upstream-image-crane
+          methodName: digest
+          globalArgs:
+            insecure: false
+          inputs:
+            refs:
+              - ${{ inputs.?ref.orValue("") }}
+      - name: one-digest
+        description: >-
+          This run recorded exactly one digest, and it is of the reference asked for: the record's reference is
+          the input, or the input is that repository with a tag and exactly this digest.
+        dependsOn:
+          - step: digest
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).all(d, d.attributes.digest.matches("^sha256:[0-9a-f]{64}$") && (d.attributes.ref == inputs.?ref.orValue("") || (inputs.?ref.orValue("").startsWith(d.attributes.repository + ":") && inputs.?ref.orValue("").endsWith("@" + d.attributes.digest))))
+          message: >-
+            ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 0 ? "This run's record of " + inputs.?ref.orValue("") + " is not there: another run of the same reference in this repository replaced it. Runs for one reference in one repository must not overlap; run again." : "The registry gave no single digest for " + inputs.?ref.orValue("") + ". Write the reference with its registry, as <repository>:<tag>, <repository>@sha256:<digest> or <repository>:<tag>@sha256:<digest>, and check that it exists: crane digest " + inputs.?ref.orValue("") + ". This run recorded:" }}
+            ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.ref + " as " + d.attributes.digest) }}
+          severity: high
+  - name: verify
+    dependsOn:
+      - job: resolve
+        condition:
+          type: succeeded
+    steps:
+      - name: this-runs-digest
+        description: The digest record of this run is still there; another run of the same reference would have replaced it.
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+          message: >-
+            This run's record of ${{ inputs.?ref.orValue("") }} is not there: another run of the same reference in this
+            repository replaced it. Runs for one reference in one repository must not overlap; run again.
+          severity: high
+      - name: signature
+        description: >-
+          cosign verify of the digest this run resolved, keyless: the signing certificate's identity must be
+          certificateIdentity, or match certificateIdentityRegexp, and come from oidcIssuer, and the signature
+          must be in the public log. One verification record, verified or not.
+        dependsOn:
+          - step: this-runs-digest
+            condition:
+              type: succeeded
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verified-upstream-image-cosign
+          methodName: verify
+          globalArgs:
+            key: ""
+            password: ""
+            certificateIdentity: ${{ inputs.certificateIdentity }}
+            certificateIdentityRegexp: ${{ inputs.certificateIdentityRegexp }}
+            oidcIssuer: ${{ inputs.oidcIssuer }}
+            tlog: true
+          inputs:
+            refs: ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest) }}
+      - name: cosign-version
+        description: >-
+          The verification record has the fields @dataverket/cosign 2026.11.10.1 writes. An older version does not
+          record the identity it checked, counts an attestation whatever its subject, and ignores
+          sourceRepository and sourceCommit.
+        dependsOn:
+          - step: signature
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verified-upstream-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).all(v, has(v.attributes.verifyMode))
+          message: >-
+            This workflow needs @dataverket/cosign 2026.11.10.1 or later: the verification record of this run has
+            no verifyMode, so an older version wrote it, one that does not record the identity it checked
+            against, does not hold an attestation to the digest and ignores sourceRepository and sourceCommit.
+            Nothing about ${{ inputs.?ref.orValue("") }} is decided. Upgrade: swamp extension pull @dataverket/cosign
+          severity: high
+      - name: signed-by-identity
+        description: >-
+          This run recorded one verification, of the digest this run resolved, made against the identity and
+          issuer this run gave, and it verified.
+        dependsOn:
+          - step: cosign-version
+            condition:
+              type: succeeded
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("verified-upstream-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).filter(v, v.attributes.verified == true && v.attributes.verifyMode == "keyless" && v.attributes.certificateIdentity == inputs.certificateIdentity && v.attributes.certificateIdentityRegexp == inputs.certificateIdentityRegexp && v.attributes.oidcIssuer == inputs.oidcIssuer && data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).exists(d, d.attributes.digest == v.attributes.digest)).size() == 1
+          message: >-
+            ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() != 1 || data.findBySpec("verified-upstream-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).size() != 1 ? "This run's record of " + inputs.?ref.orValue("") + " is not there: another run of the same reference in this repository replaced it. Runs for one reference in one repository must not overlap; run again." : (!data.findBySpec("verified-upstream-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id).all(v, v.attributes.verifyMode == "keyless" && v.attributes.certificateIdentity == inputs.certificateIdentity && v.attributes.certificateIdentityRegexp == inputs.certificateIdentityRegexp && v.attributes.oidcIssuer == inputs.oidcIssuer) ? "This run's verification was made with other arguments than this run gave: another run set the shared model verified-upstream-image-cosign in between. Runs in one repository must not overlap; run again." : inputs.?ref.orValue("") + " is " + data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest + ", and that digest has no signature from " + inputs.certificateIdentity + inputs.certificateIdentityRegexp + " vouched for by " + inputs.oidcIssuer + ". Do not use this image. cosign said: " + data.findBySpec("verified-upstream-image-cosign", "verification").filter(v, v.tags.?workflowRunId.orValue("") == run.id)[0].attributes.error) }}
+          severity: high
+      - name: attestation
+        description: >-
+          cosign verify-attestation of the same digest, of attestationType, against the same identity; one
+          attestationVerification record with what each attestation says, and with sourceRepository and
+          sourceCommit held to it when given. Skipped when attestationType is empty.
+        dependsOn:
+          - step: signed-by-identity
+            condition:
+              type: succeeded
+        guard: ${{ inputs.?attestationType.orValue("") == "" }}
+        task:
+          type: model_method
+          modelType: "@dataverket/cosign/signer"
+          modelName: verified-upstream-image-cosign
+          methodName: verifyAttestation
+          globalArgs:
+            key: ""
+            password: ""
+            certificateIdentity: ${{ inputs.certificateIdentity }}
+            certificateIdentityRegexp: ${{ inputs.certificateIdentityRegexp }}
+            oidcIssuer: ${{ inputs.oidcIssuer }}
+            tlog: true
+          inputs:
+            refs: ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).map(d, d.attributes.repository + "@" + d.attributes.digest) }}
+            type: ${{ inputs.?attestationType.orValue("") }}
+            sourceRepository: ${{ inputs.sourceRepository }}
+            sourceCommit: ${{ inputs.sourceCommit }}
+      - name: attested-by-identity
+        description: >-
+          This run recorded one attestation verification, of the digest this run resolved, made against the
+          identity and issuer this run gave, of the type and for the source this run asked, and it verified; when
+          sourceRepository or sourceCommit is given, the record's own summary names exactly that. Skipped when
+          attestationType is empty.
+        dependsOn:
+          - step: attestation
+            condition:
+              type: succeeded
+        guard: ${{ inputs.?attestationType.orValue("") == "" }}
+        task:
+          type: assert
+          expr: >-
+            data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() == 1
+            && data.findBySpec("verified-upstream-image-cosign", "attestationVerification").filter(a, a.tags.?workflowRunId.orValue("") == run.id).filter(a, a.attributes.verified == true && a.attributes.verifyMode == "keyless" && a.attributes.certificateIdentity == inputs.certificateIdentity && a.attributes.certificateIdentityRegexp == inputs.certificateIdentityRegexp && a.attributes.oidcIssuer == inputs.oidcIssuer && a.attributes.type == inputs.?attestationType.orValue("") && a.attributes.expectedSourceRepository == inputs.sourceRepository && a.attributes.expectedSourceCommit == inputs.sourceCommit && data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).exists(d, d.attributes.digest == a.attributes.digest) && (inputs.sourceRepository == "" || a.attributes.sourceRepository == inputs.sourceRepository) && (inputs.sourceCommit == "" || a.attributes.sourceCommit == inputs.sourceCommit)).size() == 1
+          message: >-
+            ${{ data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id).size() != 1 || data.findBySpec("verified-upstream-image-cosign", "attestationVerification").filter(a, a.tags.?workflowRunId.orValue("") == run.id).size() != 1 ? "This run's record of " + inputs.?ref.orValue("") + " is not there: another run of the same reference in this repository replaced it. Runs for one reference in one repository must not overlap; run again." : (!data.findBySpec("verified-upstream-image-cosign", "attestationVerification").filter(a, a.tags.?workflowRunId.orValue("") == run.id).all(a, a.attributes.verifyMode == "keyless" && a.attributes.certificateIdentity == inputs.certificateIdentity && a.attributes.certificateIdentityRegexp == inputs.certificateIdentityRegexp && a.attributes.oidcIssuer == inputs.oidcIssuer && a.attributes.type == inputs.?attestationType.orValue("") && a.attributes.expectedSourceRepository == inputs.sourceRepository && a.attributes.expectedSourceCommit == inputs.sourceCommit) ? "This run's attestation verification was made with other arguments than this run gave: another run set the shared model verified-upstream-image-cosign in between. Runs in one repository must not overlap; run again." : inputs.?ref.orValue("") + " is " + data.findBySpec("verified-upstream-image-crane", "digest").filter(d, d.tags.?workflowRunId.orValue("") == run.id)[0].attributes.digest + ", which is signed, but has no " + inputs.?attestationType.orValue("") + " attestation from that identity that counts. Do not use this image. The record said: " + data.findBySpec("verified-upstream-image-cosign", "attestationVerification").filter(a, a.tags.?workflowRunId.orValue("") == run.id)[0].attributes.error + (data.findBySpec("verified-upstream-image-cosign", "attestationVerification").filter(a, a.tags.?workflowRunId.orValue("") == run.id)[0].attributes.error.contains("none of the expected identities matched") ? ". The attestation is signed by another identity than the image. A publisher whose provenance comes from a shared workflow, such as the slsa-github-generator, signs it with that workflow's identity: see the README, 'Provenance signed by another identity'." : "")) }}
+          severity: high

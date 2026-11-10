@@ -17,6 +17,7 @@ description: >-
   pinned-base-image-upstream (cosign, keyless) and pinned-base-image-cosign (cosign, our key).
 version: 1
 inputs:
+  additionalProperties: false
   properties:
     ref:
       type: string
@@ -89,7 +90,26 @@ inputs:
     - keyKey
     - passphraseKey
 jobs:
+  - name: inputs
+    steps:
+      - name: known-inputs
+        description: >-
+          Every input given is one this workflow has. From the command line the input schema already refuses
+          the rest; a step of another workflow is held to it here.
+        task:
+          type: assert
+          expr: >-
+            inputs.all(k, k in ["ref", "registry", "namespace", "vault", "usernameKey", "passwordKey", "certificateIdentityRegexp", "oidcIssuer", "keyVault", "keyKey", "passphraseVault", "passphraseKey", "minimumAgeDays", "tlog", "insecureRegistry"])
+          message: >-
+            Not inputs of this workflow: ${{ inputs.filter(k, !(k in ["ref", "registry", "namespace", "vault", "usernameKey", "passwordKey", "certificateIdentityRegexp", "oidcIssuer", "keyVault", "keyKey", "passphraseVault", "passphraseKey", "minimumAgeDays", "tlog", "insecureRegistry"])).join(", ") }}.
+            It has ref, registry, namespace, vault, usernameKey, passwordKey, certificateIdentityRegexp, oidcIssuer, keyVault, keyKey, passphraseVault, passphraseKey, minimumAgeDays, tlog, insecureRegistry, spelled so; a mistyped name would leave that input at its default and
+            do or check less than was asked. Nothing was run.
+          severity: high
   - name: resolve
+    dependsOn:
+      - job: inputs
+        condition:
+          type: succeeded
     steps:
       - name: digest
         description: >-

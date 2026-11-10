@@ -1,8 +1,8 @@
 manifestVersion: 1
 name: "@dataverket/signed-images"
-version: "2026.10.29.2"
+version: "2026.11.10.1"
 description: >
-  Eight workflows composing @dataverket/ko, @dataverket/cosign,
+  Nine workflows composing @dataverket/ko, @dataverket/cosign,
   @dataverket/flux and @dataverket/crane. `@dataverket/ko-signed-images`: a signed build, every
   command of one Go module built into an image by ko and pushed, every image
   signed by digest with cosign using a key held in a vault, every signature
@@ -29,8 +29,19 @@ description: >
   and read back, the digest it held before recorded for a rollback.
   `@dataverket/mirror-release-images`: verify-release, then every image the
   release lists copied by digest into another registry with its sha256-<hex>
-  signature tag, and verified there. Each run fails unless all of it happened
-  for all of the images.
+  signature tag, and verified there. `@dataverket/verified-upstream-image`:
+  read-only, an upstream image by tag, digest or both resolved to its digest
+  with crane and its signature verified keyless against the certificate
+  identity and OIDC issuer of its publisher; only when an attestationType is
+  given, also its attestation of that type, where an attestation counts only
+  when its subject is that digest and, when asked, its provenance names
+  exactly the source repository and commit given; with attestationType empty,
+  which the caller must say, a pass is about the signature alone; no vault,
+  nothing written but records; it needs @dataverket/cosign 2026.11.10.1 or
+  later. Each run fails unless all of what it was asked happened for all of
+  the images. Every workflow refuses an input it does not have, so a mistyped
+  name cannot switch a check off: from the command line by its input schema,
+  from a step of another workflow by its first assertion.
 
   cosign signs the digests this run's records carry, the image records of a
   build, the images a resolution built, or the artifact flux pushed, never a
@@ -57,6 +68,7 @@ workflows:
   - workflow-721d7910-1e2b-45c6-9935-5a6201623258.yaml
   - workflow-f890223b-2998-4e64-a00e-99666c471a5d.yaml
   - workflow-00999cd6-0187-4b5a-a1cd-646160f1c6c1.yaml
+  - workflow-8c79cd57-8f51-4dfc-b7c2-05dd8500f875.yaml
 skills:
   - signed-images
 vaults: []
@@ -82,6 +94,8 @@ labels:
   - promotion
   - mirror
   - crane
+  - keyless
+  - provenance
 dependencies:
   - "@dataverket/ko"
   - "@dataverket/cosign"
