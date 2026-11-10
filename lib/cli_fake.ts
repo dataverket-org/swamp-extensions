@@ -45,6 +45,13 @@ export interface Answer {
   hang?: boolean | "until-cancelled";
   /** The binary is not there. */
   notInstalled?: boolean;
+  /**
+   * The process wrote more than the call's output bound and was stopped.
+   * Set it to script that without a fixture of that size; an answer whose
+   * output is in fact longer than the bound of the call is cut and marked
+   * the same way by the fake itself.
+   */
+  tooLarge?: boolean;
 }
 
 /** One scripted call: what is expected, and the answer. */
@@ -68,6 +75,8 @@ export interface Expected extends Answer {
   cwd?: string;
   /** When given, the time limit must be this. */
   timeoutMs?: number;
+  /** When given, the output bound must be this. */
+  maxOutputBytes?: number;
 }
 
 /** A call as it was spawned. */
@@ -79,6 +88,7 @@ export interface SpawnedCall {
   clearEnv?: boolean;
   cwd?: string;
   timeoutMs: number;
+  maxOutputBytes?: number;
 }
 
 /**
@@ -145,7 +155,26 @@ function toBytes(out: unknown): Uint8Array {
   );
 }
 
-function answer(a: Answer, signal?: AbortSignal): Promise<SpawnResult> {
+/** Cut an answer to the output bound of its call, as the real spawn does. */
+function bounded(r: SpawnResult, a: Answer, max = Infinity): SpawnResult {
+  const err = new TextEncoder().encode(r.stderr);
+  if (!a.tooLarge && r.stdout.length + err.length <= max) return r;
+  const out = r.stdout.slice(0, Math.min(r.stdout.length, max));
+  return {
+    code: null,
+    stdout: out,
+    stderr: new TextDecoder().decode(
+      err.slice(0, Math.max(0, Math.min(err.length, max - out.length))),
+    ),
+    tooLarge: true,
+  };
+}
+
+function answer(
+  a: Answer,
+  signal?: AbortSignal,
+  max?: number,
+): Promise<SpawnResult> {
   const none = { code: null, stdout: new Uint8Array(), stderr: "" };
   if (a.notInstalled) {
     return Promise.reject(new Deno.errors.NotFound("No such file"));
@@ -163,13 +192,15 @@ function answer(a: Answer, signal?: AbortSignal): Promise<SpawnResult> {
   }
   if (a.hang) return Promise.resolve({ ...none, timedOut: true });
   if (a.fail !== undefined || a.code !== undefined) {
-    return Promise.resolve({
-      code: a.code ?? 1,
-      stdout: toBytes(a.stdout),
-      stderr: a.fail ?? "",
-    });
+    return Promise.resolve(bounded(
+      { code: a.code ?? 1, stdout: toBytes(a.stdout), stderr: a.fail ?? "" },
+      a,
+      max,
+    ));
   }
-  return Promise.resolve({ code: 0, stdout: toBytes(a.out), stderr: "" });
+  return Promise.resolve(
+    bounded({ code: 0, stdout: toBytes(a.out), stderr: "" }, a, max),
+  );
 }
 
 function sameArgs(script: string[], got: string[]): boolean {
@@ -196,6 +227,7 @@ export function fakeCli(o: FakeCliOptions = {}): FakeCli {
       clearEnv: opts.clearEnv,
       cwd: opts.cwd,
       timeoutMs: opts.timeoutMs,
+      maxOutputBytes: opts.maxOutputBytes,
     };
     const matchArgs = o.grammar?.[bin]?.(call) ?? args;
     const e = script[next];
@@ -230,13 +262,16 @@ export function fakeCli(o: FakeCliOptions = {}): FakeCli {
       if (e.timeoutMs !== undefined) {
         assertEquals(opts.timeoutMs, e.timeoutMs, "time limit");
       }
+      if (e.maxOutputBytes !== undefined) {
+        assertEquals(opts.maxOutputBytes, e.maxOutputBytes, "output bound");
+      }
       calls.push(call);
-      return answer(e, opts.signal);
+      return answer(e, opts.signal, opts.maxOutputBytes);
     }
     const handled = o.handler?.(call, matchArgs);
     if (handled !== undefined) {
       calls.push(call);
-      return answer(handled, opts.signal);
+      return answer(handled, opts.signal, opts.maxOutputBytes);
     }
     if (e === undefined) {
       throw new Error(

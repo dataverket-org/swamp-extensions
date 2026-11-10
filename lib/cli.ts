@@ -42,6 +42,13 @@ export interface SpawnOptions {
   clearEnv?: boolean;
   /** Working directory. */
   cwd?: string;
+  /**
+   * The most bytes of standard output and standard error together that are
+   * read. When the process writes more it is stopped as at its time limit,
+   * what was read up to the bound is kept, and the result says `tooLarge`.
+   * Without it everything the process writes is held in memory.
+   */
+  maxOutputBytes?: number;
 }
 
 /** One spawned command's outcome. */
@@ -55,6 +62,8 @@ export interface SpawnResult {
   timedOut?: boolean;
   /** The process was stopped because the run was cancelled. */
   cancelled?: boolean;
+  /** The process was stopped because it wrote more than `maxOutputBytes`. */
+  tooLarge?: boolean;
 }
 
 /** Spawns a command; replaceable so everything built on it is testable. */
@@ -67,8 +76,15 @@ export type Spawn = (
 /** How long a process gets to end after SIGTERM before it is killed. */
 export const KILL_GRACE_MS = 2000;
 
-/** Read a stream to its end, or until told to stop waiting for it. */
-function collect(stream: ReadableStream<Uint8Array>): {
+/**
+ * Read a stream to its end, or until told to stop waiting for it. `take`
+ * says how many bytes of a chunk may still be kept; when it gives fewer
+ * than the chunk holds, the rest is dropped and nothing more is read.
+ */
+function collect(
+  stream: ReadableStream<Uint8Array>,
+  take: (wanted: number) => number,
+): {
   done: Promise<void>;
   cancel: () => void;
   bytes: () => Uint8Array;
@@ -80,7 +96,13 @@ function collect(stream: ReadableStream<Uint8Array>): {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        chunks.push(chunk.value);
+        const kept = take(chunk.value.length);
+        if (kept >= chunk.value.length) {
+          chunks.push(chunk.value);
+          continue;
+        }
+        if (kept > 0) chunks.push(chunk.value.slice(0, kept));
+        break;
       }
     } catch {
       // The stream was closed under the reader; what was read is kept.
@@ -108,7 +130,10 @@ function collect(stream: ReadableStream<Uint8Array>): {
  * the signal aborts, it gets SIGTERM, then SIGKILL after `graceMs`, and after
  * one more `graceMs` its output is no longer waited for, so neither a process
  * that ignores SIGTERM nor a child of it that keeps the pipes open can hold
- * the caller. A binary that is not found throws `Deno.errors.NotFound`.
+ * the caller. The same happens when it writes more than `maxOutputBytes`:
+ * the bound is on what is held in memory, so a process that prints without
+ * end is stopped and not collected. A binary that is not found throws
+ * `Deno.errors.NotFound`.
  */
 export async function spawnProcess(
   bin: string,
@@ -135,12 +160,27 @@ export async function spawnProcess(
     stdout: "piped",
     stderr: "piped",
   }).spawn();
-  const out = collect(child.stdout);
-  const err = collect(child.stderr);
   const timers: ReturnType<typeof setTimeout>[] = [];
   let timedOut = false;
   let cancelled = false;
+  let tooLarge = false;
   let stopping = false;
+  // One budget for both streams. The chunk that crosses the bound is cut,
+  // and the process is stopped: nothing past the bound is ever held.
+  let left = opts.maxOutputBytes ?? Infinity;
+  const take = (wanted: number): number => {
+    const kept = Math.max(0, Math.min(wanted, left));
+    left -= kept;
+    if (kept < wanted) {
+      if (!stopping) tooLarge = true;
+      stop();
+      out.cancel();
+      err.cancel();
+    }
+    return kept;
+  };
+  const out = collect(child.stdout, take);
+  const err = collect(child.stderr, take);
   const kill = (sig: Deno.Signal) => {
     try {
       child.kill(sig);
@@ -148,7 +188,7 @@ export async function spawnProcess(
       // The process has already ended.
     }
   };
-  const stop = () => {
+  function stop(): void {
     if (stopping) return;
     stopping = true;
     kill("SIGTERM");
@@ -159,7 +199,7 @@ export async function spawnProcess(
         err.cancel();
       }, grace));
     }, grace));
-  };
+  }
   const onCancel = () => {
     if (!stopping) cancelled = true;
     stop();
@@ -187,6 +227,7 @@ export async function spawnProcess(
       stderr: new TextDecoder().decode(err.bytes()),
       timedOut,
       cancelled,
+      ...(tooLarge ? { tooLarge } : {}),
     };
   } finally {
     for (const t of timers) clearTimeout(t);
@@ -256,6 +297,15 @@ export function __setClock(c?: () => number): void {
 
 function clock(): number {
   return (testClock ?? Date.now)();
+}
+
+/**
+ * The time in milliseconds, from the clock a test controls with
+ * `__setClock` (and `withCli`'s `advance`): `Date.now()` outside a test.
+ * For timing a run; a poll loop uses `pollBudget`.
+ */
+export function now(): number {
+  return clock();
 }
 
 /** The time budget of one poll loop. */
@@ -437,6 +487,68 @@ export function valueArg(value: unknown, what: string): string {
   return value;
 }
 
+// ---------------------------------------------------------------------------
+// Data names
+// ---------------------------------------------------------------------------
+
+/**
+ * `text` as a data name that no other text shares: letters, digits, `-` and
+ * `.` stand for themselves, and every other character is written as `_` and
+ * two lower-case hex digits for each of its UTF-8 bytes, so `/` is `_2f`,
+ * `:` is `_3a` and `_` itself is `_5f`. A `.` that would start the name or
+ * stand right after another `.` in it is written `_2e`, so the name never
+ * starts with a dot and never holds `..` (`..` is `_2e.`, `a..b` is
+ * `a._2eb`). The result holds only `[A-Za-z0-9._-]`: no `/`, no
+ * `\`, no NUL, a file name everywhere. A lone surrogate, which has no
+ * UTF-8 bytes of its own, is written `_u` and its four hex digits.
+ *
+ * The length is not bounded here; check it with `assertDataName`.
+ */
+export function encodedName(text: string): string {
+  let name = "";
+  for (const ch of text) {
+    if (/^[A-Za-z0-9-]$/.test(ch)) {
+      name += ch;
+    } else if (ch === "." && name !== "" && !name.endsWith(".")) {
+      name += ch;
+    } else if (ch.length === 1 && ch >= "\ud800" && ch <= "\udfff") {
+      name += `_u${ch.charCodeAt(0).toString(16)}`;
+    } else {
+      for (const b of new TextEncoder().encode(ch)) {
+        name += `_${b.toString(16).padStart(2, "0")}`;
+      }
+    }
+  }
+  return name;
+}
+
+/**
+ * The longest data name, in bytes. The name becomes a directory name in the
+ * data store, and a file name holds 255 bytes on the common file systems.
+ */
+export const MAX_DATA_NAME_BYTES = 255;
+
+/**
+ * Throw unless `name` can be a data name: not empty, not `.`, at most
+ * `MAX_DATA_NAME_BYTES` bytes, and without `..`, `/`, `\` or a NUL, which
+ * swamp refuses. Call it before the work a record would be the only trace
+ * of, not when the record is written. `what` names the thing in the error.
+ */
+export function assertDataName(name: string, what: string): void {
+  const refuse = (why: string): never => {
+    throw new Error(`${what} ${shown(name)} cannot be a data name: ${why}`);
+  };
+  if (typeof name !== "string" || name === "") refuse("it is empty");
+  const bytes = new TextEncoder().encode(name).length;
+  if (bytes > MAX_DATA_NAME_BYTES) {
+    refuse(
+      `it is ${bytes} bytes, more than the ${MAX_DATA_NAME_BYTES} a data name can be`,
+    );
+  }
+  if (name === "." || name.includes("..")) refuse("it holds '..' or is '.'");
+  if (/[\/\\\0]/.test(name)) refuse("it holds '/', '\\' or a NUL");
+}
+
 /** The arguments as they are named in a message: redacted and bounded. */
 export function describeArgs(args: string[], secrets?: string[]): string {
   return brief(args.join(" "), 200, secrets);
@@ -457,7 +569,9 @@ export type CliFailure =
   /** The process exited non-zero. */
   | "failed"
   /** The process exited zero and printed something that is not JSON. */
-  | "not-json";
+  | "not-json"
+  /** The process wrote more than its output bound and was stopped. */
+  | "too-large";
 
 /** A failed command: `kind` says which failure, the message says more. */
 export class CliError extends Error {
@@ -544,7 +658,22 @@ export interface CliOpts {
    * tool that prints secrets, standard output must never reach an error.
    */
   stdoutInError?: boolean;
+  /**
+   * The most bytes of standard output and standard error together that are
+   * read; a process that writes more is stopped and the call fails with
+   * kind `too-large`. Defaults to `DEFAULT_MAX_OUTPUT_BYTES` (64 MiB).
+   * `Infinity` reads without a bound, for a caller that knows the size.
+   */
+  maxOutputBytes?: number;
 }
+
+/**
+ * The output bound of a call that sets none: 64 MiB. No honest answer of a
+ * command line tool that is read into memory comes near it, and without a
+ * bound a tool that prints without end takes the memory of the process
+ * that waits for it.
+ */
+export const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /** One command's outcome, with its standard error made safe. */
 export interface CliResult {
@@ -559,6 +688,8 @@ export interface CliResult {
   stderr: string;
   timedOut: boolean;
   cancelled: boolean;
+  /** The process wrote more than the output bound and was stopped. */
+  tooLarge?: boolean;
 }
 
 function seconds(ms: number): string {
@@ -594,10 +725,15 @@ export async function tryCli(
       throw new Error(`${bin} was given an argument that is not text`);
     }
   }
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  if (!(typeof maxOutputBytes === "number" && maxOutputBytes > 0)) {
+    throw new Error(`${bin} needs an output bound above zero`);
+  }
   let result: SpawnResult;
   try {
     result = await (testSpawn ?? spawnProcess)(bin, args, {
       timeoutMs,
+      maxOutputBytes,
       signal: opts.signal,
       stdin: opts.stdin,
       env: opts.env,
@@ -620,8 +756,10 @@ export async function tryCli(
   }
   const timedOut = result.timedOut === true;
   const cancelled = result.cancelled === true;
+  const tooLarge = result.tooLarge === true;
   return {
-    success: result.code === 0 && !timedOut && !cancelled,
+    ...(tooLarge ? { tooLarge } : {}),
+    success: result.code === 0 && !timedOut && !cancelled && !tooLarge,
     code: result.code,
     stdout: new TextDecoder().decode(result.stdout),
     stdoutBytes: result.stdout,
@@ -652,6 +790,15 @@ export function cliError(
       `${what} failed: no answer within ${
         seconds(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
       } seconds; the process was stopped`,
+      detail,
+    );
+  }
+  if (result.tooLarge) {
+    return new CliError(
+      "too-large",
+      `${what} failed: more than ${
+        opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+      } bytes of output; the process was stopped`,
       detail,
     );
   }
@@ -740,6 +887,8 @@ export interface CheckResult {
 export interface CliCheck {
   description: string;
   labels: string[];
+  /** The methods the check runs before; every method when left out. */
+  appliesTo?: string[];
   execute: (
     context?: { globalArgs?: unknown; signal?: AbortSignal },
   ) => Promise<CheckResult>;
@@ -755,10 +904,17 @@ export function cliCheck(spec: {
   args: string[];
   description: string;
   installHint?: string;
+  /**
+   * The methods the check runs before, by name. Left out, the check object
+   * has no `appliesTo` and swamp runs it before every method that runs
+   * checks.
+   */
+  appliesTo?: string[];
 }): CliCheck {
   return {
     description: spec.description,
     labels: ["live"],
+    ...(spec.appliesTo === undefined ? {} : { appliesTo: [...spec.appliesTo] }),
     execute: async (context) => {
       const bin = typeof spec.bin === "string"
         ? spec.bin

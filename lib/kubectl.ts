@@ -31,6 +31,7 @@ import {
   cliCheck,
   CliError,
   type CliResult,
+  DEFAULT_MAX_OUTPUT_BYTES,
   KILL_GRACE_MS,
   redact,
   shown,
@@ -467,6 +468,12 @@ async function kubectl(
         killAfterMs / 1000
       } seconds; kubectl was stopped`,
       result.stderr,
+    );
+  }
+  if (result.tooLarge) {
+    throw new KubectlError(
+      "other",
+      `${what} failed: more than ${DEFAULT_MAX_OUTPUT_BYTES} bytes of output; kubectl was stopped`,
     );
   }
   // The exit status decides, before standard output is looked at.

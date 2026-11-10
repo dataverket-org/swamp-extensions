@@ -4,8 +4,9 @@
  * tests survive means the property is not pinned. The files here are never
  * changed; every mutation is made in a temporary copy.
  *
- * Run: `deno task mutations` (all), or with `cli` or `kubectl` to run the
- * mutations of one file.
+ * Run: `deno task mutations` (all), or with `cli`, `kubectl` or
+ * `kubectl_fake` to run the mutations of one file, and with two numbers
+ * after that to run a part of them: `deno task mutations cli 1 14`.
  */
 
 /** One safety property and the edit that switches it off. */
@@ -93,7 +94,7 @@ const MUTATIONS: Mutation[] = [
   {
     file: "cli.ts",
     property: "exit code decides success",
-    find: `success: result.code === 0 && !timedOut && !cancelled,`,
+    find: `success: result.code === 0 && !timedOut && !cancelled && !tooLarge,`,
     replace: `success: true,`,
   },
   {
@@ -309,6 +310,85 @@ const MUTATIONS: Mutation[] = [
       "  want.push(rest[want.length] ?? `--request-timeout=${seconds}s`);",
   },
   {
+    file: "cli.ts",
+    property: "a process past its output bound is stopped",
+    find: `      if (!stopping) tooLarge = true;
+      stop();`,
+    replace: `      if (!stopping) tooLarge = true;`,
+  },
+  {
+    file: "cli.ts",
+    property: "nothing past the output bound is kept",
+    find: `if (kept > 0) chunks.push(chunk.value.slice(0, kept));`,
+    replace: `chunks.push(chunk.value);`,
+  },
+  {
+    file: "cli.ts",
+    property: "one output bound for both streams",
+    find: `    left -= kept;`,
+    replace: ``,
+  },
+  {
+    file: "cli.ts",
+    property: "an output past the bound is named too-large",
+    find: `  if (result.tooLarge) {
+    return new CliError(`,
+    replace: `  if (result.tooLarge && result.cancelled) {
+    return new CliError(`,
+  },
+  {
+    file: "cli.ts",
+    property: "a call that sets no output bound gets the default",
+    find: `opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  if (!(typeof`,
+    replace: `opts.maxOutputBytes ?? Infinity;
+  if (!(typeof`,
+  },
+  {
+    file: "cli.ts",
+    property: "encodedName escapes the escape character",
+    find: "if (/^[A-Za-z0-9-]$/.test(ch)) {",
+    replace: "if (/^[A-Za-z0-9_-]$/.test(ch)) {",
+  },
+  {
+    file: "cli.ts",
+    property: "encodedName writes no leading dot and no double dot",
+    find: `} else if (ch === "." && name !== "" && !name.endsWith(".")) {`,
+    replace: `} else if (ch === ".") {`,
+  },
+  {
+    file: "cli.ts",
+    property: "encodedName keeps a lone surrogate apart",
+    find: "      name += `_u${ch.charCodeAt(0).toString(16)}`;",
+    replace: "      name += `_ef_bf_bd`;",
+  },
+  {
+    file: "cli.ts",
+    property: "assertDataName bounds the length",
+    find: `  if (bytes > MAX_DATA_NAME_BYTES) {`,
+    replace: `  if (bytes > 1e9) {`,
+  },
+  {
+    file: "cli.ts",
+    property: "assertDataName refuses a double dot",
+    find: `if (name === "." || name.includes("..")) refuse`,
+    replace: `if (name === ".") refuse`,
+  },
+  {
+    file: "cli.ts",
+    property: "assertDataName refuses a path separator and a NUL",
+    find: "if (/[\\/\\\\\\0]/.test(name)) refuse",
+    replace: "if (/[\\0]/.test(name)) refuse",
+  },
+  {
+    file: "kubectl.ts",
+    property: "a kubectl output past the bound is a named failure",
+    find: `  if (result.tooLarge) {
+    throw new KubectlError(`,
+    replace: `  if (result.tooLarge && result.cancelled) {
+    throw new KubectlError(`,
+  },
+  {
     file: "kubectl.ts",
     property: "condition messages redacted",
     find: `message: message === null ? null : redact(message),`,
@@ -318,9 +398,13 @@ const MUTATIONS: Mutation[] = [
 
 const here = new URL(".", import.meta.url).pathname;
 const only = Deno.args[0];
+// A second argument takes a part of them, to keep one run short: `cli 1 14`
+// runs the first to the fourteenth mutation of cli.ts.
+const first = Number(Deno.args[1] ?? 1);
+const last = Number(Deno.args[2] ?? Infinity);
 const chosen = MUTATIONS.filter((m) =>
   only === undefined || m.file === `${only}.ts`
-);
+).filter((_, i) => i + 1 >= first && i + 1 <= last);
 const files: string[] = [];
 for await (const entry of Deno.readDir(here)) {
   if (entry.isFile && /\.(ts|json|lock)$/.test(entry.name)) {

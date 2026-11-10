@@ -1854,3 +1854,23 @@ Deno.test("only the server's own refusal, or kubectl's own sentence, is forbidde
     assertEquals(classifyStderr(no), "other", no);
   }
 });
+
+Deno.test("a kubectl that prints more than the output bound is a named failure, and its output is not kept in the error", async () => {
+  const e = await failing({ out: `{"big":"${PASSWORD}"}`, tooLarge: true });
+  assertEquals(e.kind, "other");
+  assertStringIncludes(
+    e.message,
+    `kubectl get ${R} -A failed: more than 67108864 bytes of output; kubectl was stopped`,
+  );
+  assertFalse(JSON.stringify(e).includes(PASSWORD));
+  await withKubectl({
+    textCommands: [{ words: ["logs"], positionals: [1, 1] }],
+    calls: [{ text: true, args: ["logs", "pod"], out: "x", tooLarge: true }],
+  }, async () => {
+    const t = await assertRejects(
+      () => runKubectlText(["logs", "pod"]),
+      KubectlError,
+    );
+    assertStringIncludes(t.message, "bytes of output; kubectl was stopped");
+  });
+});
