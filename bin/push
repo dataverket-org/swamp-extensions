@@ -10,6 +10,7 @@ source "${0%/*}/functions.sh" || exit $?
 
 push_flags=()
 extensions=()
+root=""
 pushed=()
 current=()
 failed=()
@@ -80,6 +81,7 @@ function parse_options()
 function init()
 {
 	cd "${0%/*}/.." || return $?
+	root="$PWD"
 
 	if ! command -v jq >/dev/null; then
 		error "push needs jq"
@@ -108,6 +110,16 @@ function manifest_field()
 }
 
 #
+# Whether an extension imports the shared modules in lib/.
+#
+function uses_lib()
+{
+	local dir="$1"
+
+	grep -qsE 'from "\.\./lib/' "$dir"/*.ts
+}
+
+#
 # Prints the latest published version of an extension, or nothing.
 #
 function published_version()
@@ -126,6 +138,7 @@ function push_extension()
 	local dir="$1"
 	local manifest="$dir/manifest.yaml"
 	local name version published
+	local tracked=("$dir") root_flags=()
 
 	if [[ ! -f "$manifest" ]]; then
 		error "$dir has no manifest.yaml"
@@ -142,9 +155,17 @@ function push_extension()
 		return
 	fi
 
+	# An extension that imports lib/ carries those modules in its archive, and
+	# swamp packages them only when told where the repository root is. The
+	# option changes the content hash, so the others are pushed without it.
+	if uses_lib "$dir"; then
+		tracked+=(lib)
+		root_flags=(--extensions-dir "$root")
+	fi
+
 	# Publishing uncommitted code would release what no commit records.
-	if [[ -n "$(git status --porcelain -- "$dir")" ]]; then
-		error "$dir has uncommitted changes; commit them first!"
+	if [[ -n "$(git status --porcelain -- "${tracked[@]}")" ]]; then
+		error "${tracked[*]} has uncommitted changes; commit them first!"
 		return 1
 	fi
 
@@ -153,6 +174,7 @@ function push_extension()
 		cd "$dir" || exit $?
 		SWAMP_EXTENSION_REVIEW_DIR="$PWD/.review" \
 			run swamp extension push manifest.yaml \
+			${root_flags[@]+"${root_flags[@]}"} \
 			${push_flags[@]+"${push_flags[@]}"}
 	) || return $?
 
