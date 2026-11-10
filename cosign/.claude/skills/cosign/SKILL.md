@@ -86,15 +86,15 @@ swamp model create @dataverket/cosign/signer upstream \
 
 ## What gets recorded
 
-| Record                                            | Holds                                                                                                                        |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `signer`                                          | cosign version, how the key was given, the public key in effect and its fingerprint, `verifyMode` (`key`, `keyless`, `none`) |
-| `signature-<repository>-<digest>`                 | One image signed: ref, repository, digest, annotations                                                                       |
-| `verification-<repository>-<digest>`              | `verified`, the signatures' payloads, cosign's `error` when none counted                                                     |
-| `attestation-<repository>-<digest>`               | One attestation: type, predicate path and its sha256                                                                         |
-| `attestationVerification-<repository>-<digest>`   | `verified`, the predicate types found                                                                                        |
-| `blobSignature-<file>`, `blobVerification-<file>` | A file's sha256, its bundle, and whether it verifies                                                                         |
-| `keypair`                                         | A generated pair; `privateKey` is sensitive                                                                                  |
+| Record                                            | Holds                                                                                                                              |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `signer`                                          | cosign version, how the key was given, the public key in effect and its fingerprint, `verifyMode` (`key`, `keyless`, `none`)       |
+| `signature-<repository>-<digest>`                 | One image signed: ref, repository, digest, annotations                                                                             |
+| `verification-<repository>-<digest>`              | `verified`, the signatures' payloads, cosign's `error` when none counted                                                           |
+| `attestation-<repository>-<digest>`               | One attestation: type, predicate path and its sha256                                                                               |
+| `attestationVerification-<repository>-<digest>`   | `verified`, the predicate types found, and what the provenance names: `sourceRepository`, `sourceRef`, `sourceCommit`, `builderId` |
+| `blobSignature-<file>`, `blobVerification-<file>` | A file's sha256, its bundle, and whether it verifies                                                                               |
+| `keypair`                                         | A generated pair; `privateKey` is sensitive                                                                                        |
 
 An image that does not verify is a record with `verified: false`, not a failed
 method; the workflows assert on it. Read the latest verdicts with:

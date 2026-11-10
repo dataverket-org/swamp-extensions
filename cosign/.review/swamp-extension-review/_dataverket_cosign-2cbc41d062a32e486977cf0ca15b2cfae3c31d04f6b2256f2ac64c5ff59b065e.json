@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cosign",
+  "version": "2026.11.10.1",
+  "reviewedAt": "2026-11-10T19:08:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Third review. Key handling unchanged and sound; the verification records hold the identity and issuer as given to cosign or the fingerprint of the PEM cosign read, never a key or a path. URL fields (workflow repository, dependency uri, builder id, build type) are now parsed with the URL parser after a strict shape test. Probed about 75 shapes: every user or password before a host is withheld, including the three forms left last time (a space in the userinfo, one slash, a relative path), backslashes, a tab, upper-case schemes, an IPv6 bracket form, a percent-encoded '@' under https, a full-width '@', and any query or fragment; honest shapes are stored (host with port, IPv6 host, IDN host, '@' in a path, builder ids ending @refs/...). Residuals, all within what README now states and none blocking, since only text a signer already published can be kept: (1) the opaque allowance stores any text after pkg:, mailto: or urn: without '?', '#', space or a leading '//', so 'mailto:user:SECRET@host', 'pkg:generic/u:SECRET@h/x' and 'urn:x:SECRET@h' are stored; README says these schemes have no host, it does not say such text can hold anything. (2) Under ssh and git, a percent-encoded userinfo, 'ssh://u%3ASECRET%40h/x', parses as a host and is stored; no reader takes it for a credential. (3) By stated design a subject name, the workflow ref and path have no URL rule: a path of 'https://u:SECRET@h/p' or a v0.2 ref of 'u:SECRET@h/x' is stored. A secret in a path segment can never be told from a name. In the other direction, 'git+ssh://git@github.com/o/r' and the scp form are withheld, so such a source is null and an expectation on it fails closed; README says no user and names the scp form."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Intent and one outcome line per ref, structured placeholders, the bounded one-line reason; the test now asserts on the log lines themselves."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged since the second review and rechecked by probe: expectations refused before cosign runs when malformed, references must start with a letter or digit and follow '--', error is one bounded line in three record types, partial records with several refs documented and tested. Small, not new: the thrown error for a cosign failure that is not a verdict carries the whole stderr."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "deno lint exit 0, deno fmt --check exit 0, 61 tests pass, 2 e2e ignored without their env. 47 mutations in a scratch copy, all 47 fail a test: the earlier set plus the new parser (user allowed, password allowed, query, fragment, any scheme, space or backslash, one slash, opaque with query, opaque with '//', any opaque scheme, each URL field stored as plain text, invocation id as any text), the v0.2 two-digest rule and the second build type. The survivor of last time (v1 builder id) is now killed. The fake cosign is strict about flags, '--' and --type. The smoke suite was read, not run: 21 checks, the count in its README matches."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Reads; same call, same record but for verifiedAt. Scratch key file removed in finally."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Probed again: subject check exact on sha256; summary only from counted statements and null on disagreement; source only for the listed build types, exact match; commit 40 or 64 lower-case hex; a second dependency for the same uri with anything but the same whole commit gives null; a v0.2 digest with gitCommit and sha1 that differ, or where one is malformed or in another case, gives null. Renovate-shaped v1 and Flux-shaped v0.2 still derive and pass both expectations, also with the new parser. The second v1 build type, https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1: as I know that document, externalParameters has the fixed keys workflow, inputs and vars, with workflow {ref, repository, path} set from the run's own claims and one resolved dependency git+<repository>@<ref> with gitCommit; inputs and vars are the caller's, workflow is not, and they are not read here. Same reading as the first, so adding it is sound; I could not open the document from here, so this rests on the author's reading and my memory. The invocation id rule (a storable URL, or one token of letters, digits, '.', '_', '-') stores '15275748456-1' and refuses anything with ':', '@', '/', or a space. Note: builder ids and dependency uris of other schemes (spiffe://, oci://, docker://, gs://) are now null with withheld counted; a gate on builderId for such a builder fails closed. README lists the schemes that are stored."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "issue",
+      "note": "Not changed in this version, stated accurately now under README 'Known limits': signer.ts:343-366 starts cosign with Deno.Command, not through lib/cli.ts, and sets no time limit of its own (AGENTS.md rules 2 and 7); cosign's own --timeout, three minutes per call, and the context signal are the bounds, per reference. Fix in a later version: lib/cli.ts runCli with a limit per call. Scratch files are removed on every path, stdin is closed."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, skill, manifest and tests use example hosts and placeholders; the public upstream images named are in README's keyless example and in smoke/, which is not packaged."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Closed schemas. verification 15 fields declared and written, attestationVerification 23, statement 12, provenance 6. Every cap has its count beside it."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All eight specs: lifetime infinite, garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Signatures and verifications are not managed resources."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "arguments (policy), cosign-installed (local, live), key-usable (live, sign, attest, signBlob), unchanged. Method arguments are judged in the method before cosign runs."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "Not changed, by design, since the name is a published contract: 12 hex of the digest, a sanitized repository ('a/b' and 'a-b' alike), and two runs on one image share a name. All three are now stated under README 'Known limits' with what to assert on instead (digest, repository). Fix when the name can next change."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads stored data back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "One upgrades entry to 2026.11.10.1, identity on unchanged global arguments, pinned by a test. Old fields and data names keep their meaning. 'Changed since 2026.10.28.1' lists the new fields on both record types, the stricter verified, the two new arguments, the call that threw and now records, the predicateTypes cap, the bounded error, the new refusal of a reference that does not start with a letter or digit, and '--'. The bullet on a payload that is not a statement object is now right: I ran the published parser, [] , 7 and a text gave predicateTypes [\"\"] and verified true, null failed with a type error, as it says."
+    }
+  ]
+}

@@ -102,6 +102,12 @@ export const VerifyAttestationArgsSchema = z.object({
   type: z.string().min(1).default("custom").describe(
     "The predicate type an attestation must have to count",
   ),
+  sourceRepository: z.string().default("").describe(
+    "When set, an attestation counts only if the source repository its provenance names equals this exactly, such as https://github.com/<owner>/<repository>; empty asks nothing",
+  ),
+  sourceCommit: z.string().default("").describe(
+    "When set, an attestation counts only if the source commit its provenance names equals this exactly, the full hash in lower case; empty asks nothing",
+  ),
 });
 
 /** `signBlob`'s arguments. */
@@ -184,6 +190,11 @@ const VerificationSchema = z.object({
   signatures: z.number().int(),
   payloads: z.array(PayloadSchema),
   annotations: z.record(z.string(), z.string()),
+  verifyMode: z.enum(["key", "keyless"]),
+  certificateIdentity: z.string(),
+  certificateIdentityRegexp: z.string(),
+  oidcIssuer: z.string(),
+  publicKeyFingerprint: z.string(),
   error: z.string(),
   tlog: z.boolean(),
   verifiedAt: z.iso.datetime(),
@@ -201,6 +212,42 @@ const AttestationSchema = z.object({
   attestedAt: z.iso.datetime(),
 });
 
+const SubjectSchema = z.object({
+  name: z.string().nullable(),
+  digest: z.record(z.string(), z.string()),
+});
+
+const ProvenanceSchema = z.object({
+  buildType: z.string().nullable(),
+  workflow: z.object({
+    repository: z.string().nullable(),
+    ref: z.string().nullable(),
+    path: z.string().nullable(),
+  }).nullable(),
+  resolvedDependencies: z.array(z.object({
+    uri: z.string().nullable(),
+    gitCommit: z.string().nullable(),
+  })),
+  resolvedDependencyCount: z.number().int(),
+  builderId: z.string().nullable(),
+  invocationId: z.string().nullable(),
+});
+
+const StatementSchema = z.object({
+  predicateType: z.string(),
+  subjects: z.array(SubjectSchema),
+  subjectCount: z.number().int(),
+  subjectMatches: z.boolean(),
+  counted: z.boolean(),
+  reason: z.string(),
+  provenance: ProvenanceSchema.nullable(),
+  sourceRepository: z.string().nullable(),
+  sourceRef: z.string().nullable(),
+  sourceCommit: z.string().nullable(),
+  builderId: z.string().nullable(),
+  withheld: z.number().int(),
+});
+
 const AttestationVerificationSchema = z.object({
   ref: z.string(),
   repository: z.string(),
@@ -208,7 +255,20 @@ const AttestationVerificationSchema = z.object({
   type: z.string(),
   verified: z.boolean(),
   attestations: z.number().int(),
+  matched: z.number().int(),
   predicateTypes: z.array(z.string()),
+  statements: z.array(StatementSchema),
+  sourceRepository: z.string().nullable(),
+  sourceRef: z.string().nullable(),
+  sourceCommit: z.string().nullable(),
+  builderId: z.string().nullable(),
+  expectedSourceRepository: z.string(),
+  expectedSourceCommit: z.string(),
+  verifyMode: z.enum(["key", "keyless"]),
+  certificateIdentity: z.string(),
+  certificateIdentityRegexp: z.string(),
+  oidcIssuer: z.string(),
+  publicKeyFingerprint: z.string(),
   error: z.string(),
   tlog: z.boolean(),
   verifiedAt: z.iso.datetime(),
@@ -241,6 +301,11 @@ type Payload = z.infer<typeof PayloadSchema>;
 type Verification = z.infer<typeof VerificationSchema>;
 type Attestation = z.infer<typeof AttestationSchema>;
 type AttestationVerification = z.infer<typeof AttestationVerificationSchema>;
+type Subject = z.infer<typeof SubjectSchema>;
+type Provenance = z.infer<typeof ProvenanceSchema>;
+
+/** What one verified attestation says, as the record keeps it. */
+export type Statement = z.infer<typeof StatementSchema>;
 
 /** A data handle, as swamp returns it. */
 export type Handle = { name: string };
@@ -319,7 +384,9 @@ export function absolute(root: string, path: string): string {
 
 const PEM = /^-----BEGIN [A-Z ]+-----\r?\n[\s\S]+-----END [A-Z ]+-----\s*$/;
 const REFERENCE = /^([a-z0-9]+:\/\/|pkcs11:)/;
-const DIGEST_REF = /^([^@\s]+)@(sha256:[0-9a-f]{64})$/;
+// A repository starts with a letter or a digit, as a registry host does: one
+// that starts with a dash would be read by cosign as a flag.
+const DIGEST_REF = /^([A-Za-z0-9][^@\s]*)@(sha256:[0-9a-f]{64})$/;
 const ANNOTATION = /^[^=\s]+=[^\n]*$/;
 
 /** How `key` was given. */
@@ -504,9 +571,9 @@ export function parseVerifyOutput(stdout: string): Payload[] {
   });
 }
 
-/** The predicate types of the DSSE envelopes cosign verify-attestation printed, one per line. */
-export function parseAttestationOutput(stdout: string): string[] {
-  const types: string[] = [];
+/** The in-toto statements in the DSSE envelopes cosign verify-attestation printed, one per line. */
+export function parseStatements(stdout: string): unknown[] {
+  const statements: unknown[] = [];
   for (const line of stdout.split("\n")) {
     const text = line.trim();
     if (text === "") continue;
@@ -520,27 +587,438 @@ export function parseAttestationOutput(stdout: string): string[] {
         }`,
       );
     }
-    const payload = envelope.payload ?? "";
-    let statement: { predicateType?: string };
     try {
-      statement = JSON.parse(
+      statements.push(JSON.parse(
         new TextDecoder().decode(
-          Uint8Array.from(atob(payload), (c) => c.charCodeAt(0)),
+          Uint8Array.from(
+            atob(envelope?.payload ?? ""),
+            (c) => c.charCodeAt(0),
+          ),
         ),
-      );
+      ));
     } catch {
       throw new Error(
         "cosign verify-attestation printed an envelope whose payload is not an in-toto statement",
       );
     }
-    types.push(statement.predicateType ?? "");
   }
-  return types;
+  return statements;
+}
+
+/** The longest text kept from a statement; a longer value is not stored. */
+const MAX_TEXT = 1024;
+/** How many statements, subjects and dependencies a record keeps; the counts say how many there were. */
+const MAX_LIST = 20;
+/** How many predicate types a record keeps; `attestations` is the whole number. */
+const MAX_TYPES = 100;
+
+const SLSA_V1 = "https://slsa.dev/provenance/v1";
+const SLSA_V02 = "https://slsa.dev/provenance/v0.2";
+
+/** A whole SHA-1 or SHA-256 in lower case: what a git commit is. */
+const COMMIT = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+// deno-lint-ignore no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const HEX = /^[0-9a-fA-F]{7,128}$/;
+/** The digest algorithms kept for a subject; a name is text a statement chose. */
+const SUBJECT_ALGORITHMS = ["sha256", "sha512", "sha384", "sha1", "gitCommit"];
+
+/** `v` when it is an object with fields, else an object with none. */
+function fields(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+    ? v as Record<string, unknown>
+    : {};
+}
+
+function own(o: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(o, key) ? o[key] : undefined;
+}
+
+/** Counts what a statement held and the record does not keep. */
+type Tally = { withheld: number };
+
+/** Whether `v` is text short enough to keep, with no control character. */
+function plain(v: unknown): v is string {
+  return typeof v === "string" && v.length <= MAX_TEXT && !CONTROL.test(v);
+}
+
+/**
+ * `v` when it is text short enough to keep, with no control character;
+ * null for a field that is not there. Anything else is counted as withheld
+ * and is null too. For what is not a URL: a subject name, a ref, a path.
+ */
+function kept(v: unknown, tally: Tally): string | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (!plain(v)) {
+    tally.withheld++;
+    return null;
+  }
+  return v;
+}
+
+/** URI schemes that have no host, so no place for a user or a password. */
+const OPAQUE = /^(pkg|mailto|urn):(?!\/\/)[^?#\s\\]+$/i;
+// The host starts right after the two slashes: a third slash is refused,
+// where a URL parser would take the first path segment for the host.
+const HIERARCHICAL = /^(?:git\+)?(https?|git|ssh):\/\/[^\/\s\\][^\s\\]*$/i;
+
+/**
+ * Whether `v` is a URL that can be stored: http, https, git or ssh, with
+ * or without `git+` before it, that parses with a host and has no user, no
+ * password, no query and no fragment; or a `pkg:`, `mailto:` or `urn:`
+ * URI, which has no host, without query or fragment. Anything else is not:
+ * no scheme, one slash, a space, a backslash, another scheme, and the scp
+ * form `git@host:path`, whose user cannot be told from a credential.
+ */
+export function storableUrl(v: unknown): v is string {
+  if (!plain(v)) return false;
+  if (OPAQUE.test(v)) return true;
+  if (!HIERARCHICAL.test(v) || /[?#]/.test(v)) return false;
+  let url: URL;
+  try {
+    url = new URL(v.replace(/^git\+/i, ""));
+  } catch {
+    return false;
+  }
+  return url.hostname !== "" && url.username === "" && url.password === "" &&
+    url.search === "" && url.hash === "";
+}
+
+/** `v` when it is a URL that can be stored, see storableUrl; else as kept. */
+function keptUrl(v: unknown, tally: Tally): string | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (!storableUrl(v)) {
+    tally.withheld++;
+    return null;
+  }
+  return v;
+}
+
+/** An invocation id: a URL that can be stored, or one plain token. */
+function keptId(v: unknown, tally: Tally): string | null {
+  return typeof v === "string" && /^[A-Za-z0-9._-]+$/.test(v)
+    ? kept(v, tally)
+    : keptUrl(v, tally);
+}
+
+/** A hash as hex, as it was given, or null. */
+function keptHex(v: unknown, tally: Tally): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string" || !HEX.test(v)) {
+    tally.withheld++;
+    return null;
+  }
+  return v;
+}
+
+/**
+ * A git URI as SLSA writes it, `git+<repository URL>[@<ref>]`, split; null
+ * for anything else, and for a URL with a user, a password or a query.
+ */
+export function parseGitUri(
+  uri: unknown,
+): { repository: string; ref: string | null } | null {
+  if (
+    typeof uri !== "string" || !uri.startsWith("git+") || CONTROL.test(uri)
+  ) {
+    return null;
+  }
+  const m = uri.slice("git+".length).match(
+    /^([a-z][a-z0-9+.-]*:\/\/[^\/?#@\s]+\/[^@?#\s]*)(?:@([^?#\s]+))?$/,
+  );
+  if (!m || m[1].length > MAX_TEXT || (m[2] ?? "").length > MAX_TEXT) {
+    return null;
+  }
+  return { repository: m[1], ref: m[2] ?? null };
+}
+
+/** The first MAX_LIST dependencies as records, and how many there were. */
+function dependencies(
+  list: unknown,
+  commitOf: (uri: unknown, digest: Record<string, unknown>) => unknown,
+  tally: Tally,
+): Pick<Provenance, "resolvedDependencies" | "resolvedDependencyCount"> {
+  const all = Array.isArray(list) ? list : [];
+  return {
+    resolvedDependencies: all.slice(0, MAX_LIST).map((d) => {
+      const dep = fields(d);
+      const uri = own(dep, "uri");
+      return {
+        uri: keptUrl(uri, tally),
+        gitCommit: keptHex(commitOf(uri, fields(own(dep, "digest"))), tally),
+      };
+    }),
+    resolvedDependencyCount: all.length,
+  };
+}
+
+type Source = {
+  provenance: Provenance;
+  sourceRepository: string | null;
+  sourceRef: string | null;
+  sourceCommit: string | null;
+};
+
+/**
+ * The build types whose own fields are read for a source. A predicate of
+ * another build type keeps its build type, dependencies and builder, and
+ * names no source: what its `workflow` or config source means is for that
+ * builder to say, and a caller of it may choose the value.
+ */
+export const KNOWN_BUILD_TYPES = {
+  /**
+   * SLSA v1: GitHub's workflow build type, and the community build type it
+   * replaced, which has the same `externalParameters.workflow` and the same
+   * resolved dependency for it.
+   */
+  v1: [
+    "https://actions.github.io/buildtypes/workflow/v1",
+    "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+  ],
+  /** SLSA v0.2: the slsa-github-generator's builders, `invocation.configSource`. */
+  v02: [
+    "https://github.com/slsa-framework/slsa-github-generator/container@v1",
+    "https://github.com/slsa-framework/slsa-github-generator/generic@v1",
+    "https://github.com/slsa-framework/slsa-github-generator/go@v1",
+  ],
+};
+
+/** `v` when it is a whole commit hash, else null: a summary holds nothing shorter. */
+function commitOrNull(v: unknown): string | null {
+  return typeof v === "string" && COMMIT.test(v) ? v : null;
+}
+
+/**
+ * SLSA v1 of GitHub's workflow build type: the workflow reference of the
+ * external parameters is the source, and its commit is the one of the
+ * resolved dependency that names exactly that repository at that ref. No
+ * such dependency, or more than one unless each names the same whole
+ * commit: no commit, rather than a guess.
+ */
+function slsaV1(predicate: Record<string, unknown>, tally: Tally): Source {
+  const definition = fields(own(predicate, "buildDefinition"));
+  const run = fields(own(predicate, "runDetails"));
+  const buildType = own(definition, "buildType");
+  const known = typeof buildType === "string" &&
+    KNOWN_BUILD_TYPES.v1.includes(buildType);
+  const external = fields(own(definition, "externalParameters"));
+  const rawWorkflow = known ? own(external, "workflow") : undefined;
+  const w = fields(rawWorkflow);
+  const workflow = rawWorkflow === undefined || rawWorkflow === null ? null : {
+    repository: keptUrl(own(w, "repository"), tally),
+    ref: kept(own(w, "ref"), tally),
+    path: kept(own(w, "path"), tally),
+  };
+  const raw = own(definition, "resolvedDependencies");
+  let sourceCommit: string | null = null;
+  if (workflow?.repository && workflow.ref && Array.isArray(raw)) {
+    const uri = `git+${workflow.repository}@${workflow.ref}`;
+    const commits = raw.filter((d) => own(fields(d), "uri") === uri).map((d) =>
+      commitOrNull(own(fields(own(fields(d), "digest")), "gitCommit"))
+    );
+    if (commits.length > 0 && commits.every((c) => c === commits[0])) {
+      sourceCommit = commits[0];
+    }
+  }
+  return {
+    provenance: {
+      buildType: keptUrl(buildType, tally),
+      workflow,
+      ...dependencies(raw, (_uri, digest) => own(digest, "gitCommit"), tally),
+      builderId: keptUrl(own(fields(own(run, "builder")), "id"), tally),
+      invocationId: keptId(
+        own(fields(own(run, "metadata")), "invocationId"),
+        tally,
+      ),
+    },
+    sourceRepository: workflow?.repository ?? null,
+    sourceRef: workflow?.ref ?? null,
+    sourceCommit,
+  };
+}
+
+/**
+ * A v0.2 digest's commit: `gitCommit`, or `sha1` when the URI is a git one.
+ * With both, they must be the same: two values name no commit.
+ */
+function commitV02(uri: unknown, digest: Record<string, unknown>): unknown {
+  const commit = own(digest, "gitCommit");
+  const sha1 = typeof uri === "string" && uri.startsWith("git+")
+    ? own(digest, "sha1")
+    : undefined;
+  if (commit === undefined) return sha1;
+  return sha1 === undefined || sha1 === commit ? commit : undefined;
+}
+
+/**
+ * SLSA v0.2 of the slsa-github-generator's build types: the config source
+ * of the invocation is the source, when its URI is a git one; its entry
+ * point is the workflow's path, the materials are the dependencies. The
+ * invocation's parameters and environment are not read.
+ */
+function slsaV02(predicate: Record<string, unknown>, tally: Tally): Source {
+  const invocation = fields(own(predicate, "invocation"));
+  const buildType = own(predicate, "buildType");
+  const known = typeof buildType === "string" &&
+    KNOWN_BUILD_TYPES.v02.includes(buildType);
+  const rawConfig = known ? own(invocation, "configSource") : undefined;
+  const config = fields(rawConfig);
+  const uri = own(config, "uri");
+  const parsed = parseGitUri(uri);
+  // The same rule as for any other text that is kept.
+  const repository = keptUrl(parsed?.repository, tally);
+  const git = repository === null
+    ? null
+    : { repository, ref: kept(parsed?.ref, tally) };
+  const metadata = fields(own(predicate, "metadata"));
+  if (uri !== undefined && uri !== null && parsed === null) tally.withheld++;
+  const workflow = rawConfig === undefined || rawConfig === null ? null : {
+    repository: git?.repository ?? null,
+    ref: git?.ref ?? null,
+    path: kept(own(config, "entryPoint"), tally),
+  };
+  return {
+    provenance: {
+      buildType: keptUrl(buildType, tally),
+      workflow,
+      ...dependencies(own(predicate, "materials"), commitV02, tally),
+      builderId: keptUrl(own(fields(own(predicate, "builder")), "id"), tally),
+      // The specification writes buildInvocationId; the generators that
+      // use in-toto's Go types write buildInvocationID.
+      invocationId: keptId(
+        own(metadata, "buildInvocationId") ??
+          own(metadata, "buildInvocationID"),
+        tally,
+      ),
+    },
+    sourceRepository: git?.repository ?? null,
+    sourceRef: git?.ref ?? null,
+    sourceCommit: git
+      ? commitOrNull(commitV02(uri, fields(own(config, "digest"))))
+      : null,
+  };
+}
+
+/** A statement's predicate type as text; "" when it has none. */
+function predicateTypeOf(statement: unknown): string {
+  const type = own(fields(statement), "predicateType");
+  return typeof type === "string" ? type.slice(0, MAX_TEXT) : "";
+}
+
+/** Whether a subject entry names `digest`, a `sha256:<hex>`, exactly. */
+function names(subject: unknown, digest: string): boolean {
+  const sha256 = own(fields(own(fields(subject), "digest")), "sha256");
+  return typeof sha256 === "string" && `sha256:${sha256}` === digest;
+}
+
+/** What is asked of an attestation's source; "" asks nothing. */
+export type Expected = { sourceRepository: string; sourceCommit: string };
+
+/**
+ * What one in-toto statement says, bounded, judged against the digest that
+ * was verified and against what is expected of its source. Nothing of the
+ * predicate is kept but the fields named here; a value that is too long,
+ * not text, or a URL with a credential in it is counted in `withheld`.
+ */
+export function readStatement(
+  statement: unknown,
+  digest: string,
+  expected: Expected = { sourceRepository: "", sourceCommit: "" },
+): Statement {
+  const tally: Tally = { withheld: 0 };
+  const s = fields(statement);
+  const predicateType = predicateTypeOf(statement);
+  const rawSubjects = own(s, "subject");
+  const all = Array.isArray(rawSubjects) ? rawSubjects : [];
+  const matching = all.filter((x) => names(x, digest));
+  const subjectMatches = matching.length > 0;
+  const subjects: Subject[] = [
+    ...matching,
+    ...all.filter((x) => !names(x, digest)),
+  ].slice(0, MAX_LIST).map((x) => {
+    const subject = fields(x);
+    const rawDigest = fields(own(subject, "digest"));
+    const kinds: Record<string, string> = {};
+    for (const key of Object.keys(rawDigest).slice(0, MAX_LIST)) {
+      const value = SUBJECT_ALGORITHMS.includes(key)
+        ? keptHex(rawDigest[key], tally)
+        : (tally.withheld++, null);
+      if (value !== null) kinds[key] = value;
+    }
+    return { name: kept(own(subject, "name"), tally), digest: kinds };
+  });
+
+  const predicate = fields(own(s, "predicate"));
+  const source = predicateType === SLSA_V1
+    ? slsaV1(predicate, tally)
+    : predicateType === SLSA_V02
+    ? slsaV02(predicate, tally)
+    : null;
+  const sourceRepository = source?.sourceRepository ?? null;
+  const sourceCommit = source?.sourceCommit ?? null;
+
+  let reason = "";
+  if (!subjectMatches) {
+    reason = `no subject digest equals ${digest}`;
+  } else if (
+    expected.sourceRepository !== "" &&
+    sourceRepository !== expected.sourceRepository
+  ) {
+    reason = `sourceRepository is ${JSON.stringify(sourceRepository)}, not ${
+      JSON.stringify(expected.sourceRepository)
+    }`;
+  } else if (
+    expected.sourceCommit !== "" && sourceCommit !== expected.sourceCommit
+  ) {
+    reason = `sourceCommit is ${JSON.stringify(sourceCommit)}, not ${
+      JSON.stringify(expected.sourceCommit)
+    }`;
+  }
+  return {
+    predicateType,
+    subjects,
+    subjectCount: all.length,
+    subjectMatches,
+    counted: reason === "",
+    reason,
+    provenance: source?.provenance ?? null,
+    sourceRepository,
+    sourceRef: source?.sourceRef ?? null,
+    sourceCommit,
+    builderId: source?.provenance.builderId ?? null,
+    withheld: tally.withheld,
+  };
+}
+
+/** The value every statement agrees on, or null: a summary never chooses. */
+function agreed(values: (string | null)[]): string | null {
+  return values.length > 0 && values.every((v) => v === values[0])
+    ? values[0]
+    : null;
+}
+
+/** What is wrong with an expectation as written, or null. */
+function expectedProblem(expected: Expected): string | null {
+  for (const [name, value] of Object.entries(expected)) {
+    if (value === "") continue;
+    if (value.includes("${{")) {
+      return `${name} holds an unevaluated expression`;
+    }
+    if (value.length > MAX_TEXT || /\s/.test(value) || CONTROL.test(value)) {
+      return `${name} is not one word of at most ${MAX_TEXT} characters: it is compared exactly with what the provenance names, so write it with no space or newline`;
+    }
+  }
+  return null;
+}
+
+/** The predicate types of the DSSE envelopes cosign verify-attestation printed, one per line. */
+export function parseAttestationOutput(stdout: string): string[] {
+  return parseStatements(stdout).map(predicateTypeOf);
 }
 
 /** cosign's way of saying the signature or attestation is not there or does not check out. */
 const NOT_VERIFIED =
-  /no matching (attestations|signatures)|no signatures found|no attestations found|failed to verify signature|invalid signature|none of the expected (identities|issuers) matched/i;
+  /no matching (attestations|signatures)|no signatures found|no attestations found|none of the attestations matched the predicate type|failed to verify signature|invalid signature|none of the expected (identities|issuers) matched/i;
 
 function env(ctx: Context): Record<string, string> {
   const g = ctx.globalArgs;
@@ -677,13 +1155,30 @@ async function publicKeyPem(
 }
 
 /**
+ * What a verification was checked against, for its record: the certificate
+ * identity and issuer, or the fingerprint of the public key. Never the key
+ * or a path to it.
+ */
+type Checked = {
+  verifyMode: "key" | "keyless";
+  certificateIdentity: string;
+  certificateIdentityRegexp: string;
+  oidcIssuer: string;
+  publicKeyFingerprint: string;
+};
+
+/**
  * Flags that say how a signature is checked: the certificate identity and
  * its issuer for a keyless signature, else the public key file and the log
  * choice; then the trusted root.
  */
-async function verifyFlags(ctx: Context, scratch: Scratch): Promise<string[]> {
+async function verifyFlags(
+  ctx: Context,
+  scratch: Scratch,
+): Promise<{ flags: string[]; checked: Checked }> {
   const g = ctx.globalArgs;
   const flags: string[] = [];
+  let checked: Checked;
   if (verifyMode(g) === "keyless") {
     const problem = identityProblem(g);
     if (problem) throw new Error(problem);
@@ -693,6 +1188,13 @@ async function verifyFlags(ctx: Context, scratch: Scratch): Promise<string[]> {
       flags.push("--certificate-identity-regexp", g.certificateIdentityRegexp);
     }
     flags.push("--certificate-oidc-issuer", g.oidcIssuer);
+    checked = {
+      verifyMode: "keyless",
+      certificateIdentity: g.certificateIdentity,
+      certificateIdentityRegexp: g.certificateIdentityRegexp,
+      oidcIssuer: g.oidcIssuer,
+      publicKeyFingerprint: "",
+    };
   } else {
     const { pem, source } = await publicKeyPem(ctx);
     if (source === "none") {
@@ -702,11 +1204,19 @@ async function verifyFlags(ctx: Context, scratch: Scratch): Promise<string[]> {
     }
     flags.push("--key", await scratch.file("cosign-public-key-", pem));
     if (!g.tlog) flags.push("--insecure-ignore-tlog");
+    checked = {
+      verifyMode: "key",
+      certificateIdentity: "",
+      certificateIdentityRegexp: "",
+      oidcIssuer: "",
+      // cosign judges the key; a key it would refuse has no fingerprint here.
+      publicKeyFingerprint: await fingerprint(pem).catch(() => ""),
+    };
   }
   if (g.trustedRoot !== "") {
     flags.push("--trusted-root", absolute(ctx.repoDir, g.trustedRoot));
   }
-  return [...flags, ...registryFlags(g)];
+  return { flags: [...flags, ...registryFlags(g)], checked };
 }
 
 /** A check's outcome. */
@@ -868,6 +1378,17 @@ async function fileInstance(spec: string, path: string): Promise<string> {
   return `${spec}-${name}-${hash.slice(0, 12)}`;
 }
 
+/**
+ * Text cosign printed, as one bounded line: control characters become
+ * spaces, and what is longer than MAX_TEXT is cut with an ellipsis. Its
+ * messages quote what a registry holds, such as the predicate types found.
+ */
+export function oneLine(text: string): string {
+  // deno-lint-ignore no-control-regex
+  const line = text.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return line.length > MAX_TEXT ? line.slice(0, MAX_TEXT - 1) + "…" : line;
+}
+
 /** Runs a verify-like command and says whether it verified, with cosign's reason when not. */
 async function verifyOne(
   args: string[],
@@ -882,7 +1403,7 @@ async function verifyOne(
     return {
       verified: false,
       stdout: "",
-      error: reason.replace(/^Error:\s*/, ""),
+      error: oneLine(reason.replace(/^Error:\s*/, "")),
     };
   }
   throw new Error(`cosign ${shown(args)} exited ${res.code}: ${stderr}`);
@@ -891,8 +1412,18 @@ async function verifyOne(
 /** Model definition for one cosign signing identity. */
 export const model = {
   type: "@dataverket/cosign/signer",
-  version: "2026.10.28.1",
+  version: "2026.11.10.1",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "verifyAttestation records what each verified attestation says (subjects, SLSA provenance, a source summary), counts only an attestation whose subject is the digest verified, takes sourceRepository and sourceCommit, and records an image with no attestation of the type asked for as not verified instead of failing; verification and attestationVerification records say which identity and issuer, or which key, they were checked against; a reference that starts with a dash is refused. No global argument changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   checks,
   resources: {
     signer: {
@@ -930,7 +1461,7 @@ export const model = {
     },
     attestationVerification: {
       description:
-        "One image's attestations of a type verified, or not, with their predicate types",
+        "One image's attestations of a type verified, or not: their predicate types, the subjects and SLSA provenance of each, and the source repository, ref, commit and builder they agree on",
       schema: AttestationVerificationSchema,
       lifetime: "infinite" as const,
       garbageCollection: 10,
@@ -1056,7 +1587,7 @@ export const model = {
             for (const a of args.annotations) argv.push("-a", a);
             if (args.recursive) argv.push("--recursive");
             if (!args.upload) argv.push("--upload=false");
-            argv.push(ref);
+            argv.push("--", ref);
             await mustRun(argv, ctx);
             ctx.logger.info("Signed {ref}", { ref });
             const record: Signature = {
@@ -1093,7 +1624,7 @@ export const model = {
         if (problem) throw new Error(problem);
         const scratch = new Scratch();
         try {
-          const flags = await verifyFlags(ctx, scratch);
+          const { flags, checked } = await verifyFlags(ctx, scratch);
           ctx.logger.info("Verifying {count} images", {
             count: args.refs.length,
           });
@@ -1105,7 +1636,7 @@ export const model = {
             };
             const argv = ["verify", ...flags, "--output", "json"];
             for (const a of args.annotations) argv.push("-a", a);
-            argv.push(ref);
+            argv.push("--", ref);
             const res = await verifyOne(argv, ctx);
             const payloads = res.verified ? parseVerifyOutput(res.stdout) : [];
             const record: Verification = {
@@ -1115,6 +1646,7 @@ export const model = {
               signatures: payloads.length,
               payloads,
               annotations: annotationRecord(args.annotations),
+              ...checked,
               error: res.error,
               tlog: g.tlog,
               verifiedAt: new Date().toISOString(),
@@ -1180,7 +1712,7 @@ export const model = {
               args.type,
             ];
             if (!args.upload) argv.push("--upload=false");
-            argv.push(ref);
+            argv.push("--", ref);
             await mustRun(argv, ctx);
             ctx.logger.info("Attested {ref}", { ref });
             const record: Attestation = {
@@ -1209,15 +1741,19 @@ export const model = {
     },
     verifyAttestation: {
       description:
-        "Verify the attestations of the given type on every image named by digest against the public key, or keyless against the certificate identity, and record what was found",
+        "Verify the attestations of the given type on every image named by digest against the public key, or keyless against the certificate identity, and record what was found and what each says; an attestation counts only when one of its subjects is that digest and, when sourceRepository or sourceCommit is given, its provenance names exactly that",
       arguments: VerifyAttestationArgsSchema,
       execute: async (args: VerifyAttestationArgs, ctx: Context) => {
         const g = ctx.globalArgs;
-        const problem = refsProblem(args.refs);
+        const expected: Expected = {
+          sourceRepository: args.sourceRepository,
+          sourceCommit: args.sourceCommit,
+        };
+        const problem = refsProblem(args.refs) ?? expectedProblem(expected);
         if (problem) throw new Error(problem);
         const scratch = new Scratch();
         try {
-          const flags = await verifyFlags(ctx, scratch);
+          const { flags, checked } = await verifyFlags(ctx, scratch);
           ctx.logger.info("Verifying {type} attestations on {count} images", {
             type: args.type,
             count: args.refs.length,
@@ -1235,28 +1771,52 @@ export const model = {
               args.type,
               "--output",
               "json",
+              "--",
               ref,
             ];
             const res = await verifyOne(argv, ctx);
-            const predicateTypes = res.verified
-              ? parseAttestationOutput(res.stdout)
-              : [];
+            const raw = res.verified ? parseStatements(res.stdout) : [];
+            const statements = raw.map((s) =>
+              readStatement(s, parsed.digest, expected)
+            );
+            const counted = statements.filter((s) => s.counted);
+            let error = res.error;
+            if (statements.length > 0 && counted.length === 0) {
+              const reasons = [...new Set(statements.map((s) => s.reason))];
+              error = `${statements.length} attestation${
+                statements.length === 1 ? "" : "s"
+              } verified by cosign, none counted: ${
+                reasons.slice(0, 3).join("; ")
+              }`;
+            }
             const record: AttestationVerification = {
               ref,
               ...parsed,
               type: args.type,
-              verified: res.verified && predicateTypes.length > 0,
-              attestations: predicateTypes.length,
-              predicateTypes,
-              error: res.error,
+              verified: res.verified && counted.length > 0,
+              attestations: statements.length,
+              matched: counted.length,
+              predicateTypes: raw.slice(0, MAX_TYPES).map(predicateTypeOf),
+              statements: [
+                ...counted,
+                ...statements.filter((s) => !s.counted),
+              ].slice(0, MAX_LIST),
+              sourceRepository: agreed(counted.map((s) => s.sourceRepository)),
+              sourceRef: agreed(counted.map((s) => s.sourceRef)),
+              sourceCommit: agreed(counted.map((s) => s.sourceCommit)),
+              builderId: agreed(counted.map((s) => s.builderId)),
+              expectedSourceRepository: expected.sourceRepository,
+              expectedSourceCommit: expected.sourceCommit,
+              ...checked,
+              error,
               tlog: g.tlog,
               verifiedAt: new Date().toISOString(),
             };
             ctx.logger.info("{ref}: {outcome}", {
               ref,
               outcome: record.verified
-                ? `${predicateTypes.length} attestations verified`
-                : `not verified: ${res.error || "no attestation counted"}`,
+                ? `${counted.length} of ${statements.length} attestations verified and counted`
+                : `not verified: ${error || "no attestation counted"}`,
             });
             handles.push(
               await ctx.writeResource(
@@ -1300,6 +1860,7 @@ export const model = {
               ...flags,
               "--bundle",
               bundle,
+              "--",
               path,
             ],
             ctx,
@@ -1334,7 +1895,7 @@ export const model = {
         const sha256 = await fileSha256(path);
         const scratch = new Scratch();
         try {
-          const flags = (await verifyFlags(ctx, scratch)).filter((f) =>
+          const flags = (await verifyFlags(ctx, scratch)).flags.filter((f) =>
             !f.startsWith("--allow-")
           );
           ctx.logger.info("Verifying {path} against {bundle}", {
@@ -1342,7 +1903,7 @@ export const model = {
             bundle,
           });
           const res = await verifyOne(
-            ["verify-blob", ...flags, "--bundle", bundle, path],
+            ["verify-blob", ...flags, "--bundle", bundle, "--", path],
             ctx,
           );
           const record: BlobVerification = {

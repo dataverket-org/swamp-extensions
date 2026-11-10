@@ -8,16 +8,16 @@ included. One model type, `@dataverket/cosign/signer`, one signing identity; two
 workflows that bring their own model; and a skill, `cosign`, that says which to
 run for what.
 
-| Method              | Runs                                  | Records                                                                                                                                                     |
-| ------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `describe`          | `cosign version`, `cosign public-key` | `signer`: version, how the key was given, the public key in effect and its fingerprint, how it verifies (`verifyMode`), log and config choices              |
-| `generateKeyPair`   | `cosign generate-key-pair`            | `keypair`: both halves; the private one is a sensitive field, which swamp keeps in the vault, an encrypted PEM whose passphrase is `password`, empty or not |
-| `sign`              | `cosign sign` per image               | One `signature-<repository>-<digest>` per image: reference, digest, annotations                                                                             |
-| `verify`            | `cosign verify` per image             | One `verification-<repository>-<digest>` per image: verified or not, the payloads found, cosign's reason                                                    |
-| `attest`            | `cosign attest` per image             | One `attestation-<repository>-<digest>` per image: type, predicate file and its sha256                                                                      |
-| `verifyAttestation` | `cosign verify-attestation` per image | One `attestationVerification-<repository>-<digest>` per image: verified or not, the predicate types                                                         |
-| `signBlob`          | `cosign sign-blob --bundle`           | `blobSignature-<file>`: the file's sha256 and the Sigstore bundle written beside it                                                                         |
-| `verifyBlob`        | `cosign verify-blob --bundle`         | `blobVerification-<file>`: verified or not, cosign's reason                                                                                                 |
+| Method              | Runs                                  | Records                                                                                                                                                                       |
+| ------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `describe`          | `cosign version`, `cosign public-key` | `signer`: version, how the key was given, the public key in effect and its fingerprint, how it verifies (`verifyMode`), log and config choices                                |
+| `generateKeyPair`   | `cosign generate-key-pair`            | `keypair`: both halves; the private one is a sensitive field, which swamp keeps in the vault, an encrypted PEM whose passphrase is `password`, empty or not                   |
+| `sign`              | `cosign sign` per image               | One `signature-<repository>-<digest>` per image: reference, digest, annotations                                                                                               |
+| `verify`            | `cosign verify` per image             | One `verification-<repository>-<digest>` per image: verified or not, the payloads found, cosign's reason                                                                      |
+| `attest`            | `cosign attest` per image             | One `attestation-<repository>-<digest>` per image: type, predicate file and its sha256                                                                                        |
+| `verifyAttestation` | `cosign verify-attestation` per image | One `attestationVerification-<repository>-<digest>` per image: verified or not, the predicate types, each attestation's subjects and SLSA provenance, and the source it names |
+| `signBlob`          | `cosign sign-blob --bundle`           | `blobSignature-<file>`: the file's sha256 and the Sigstore bundle written beside it                                                                                           |
+| `verifyBlob`        | `cosign verify-blob --bundle`         | `blobVerification-<file>`: verified or not, cosign's reason                                                                                                                   |
 
 Written and tested against cosign 3.1.4.
 
@@ -84,10 +84,11 @@ carries them, and a verification requires them. `sign` also takes `recursive`
 (sign every image of an index too) and `upload` (false signs and discards, a
 rehearsal). `attest` takes `predicate`, a file, and `type`: `slsaprovenance1`,
 `spdxjson`, `cyclonedx`, `vuln`, `openvex`, `custom` (the default) or a URI;
-`verifyAttestation` takes `type`. `signBlob` and `verifyBlob` take `path`, a
-file, and `bundle`, the Sigstore bundle beside it, `<path>.sigstore.json` when
-not given: a release manifest or a checksum file signed the same way as the
-images, with the same key and the same log choice.
+`verifyAttestation` takes `type`, and `sourceRepository` and `sourceCommit` when
+the provenance must name a source (see "What an attestation says"). `signBlob`
+and `verifyBlob` take `path`, a file, and `bundle`, the Sigstore bundle beside
+it, `<path>.sigstore.json` when not given: a release manifest or a checksum file
+signed the same way as the images, with the same key and the same log choice.
 
 ## The transparency log
 
@@ -156,7 +157,178 @@ annotation` or
 `... accepted signatures do not match threshold`, so a workflow can assert over
 the records and name every image that failed. Only cosign failing for another
 reason, a registry it cannot reach or a key it cannot load, fails the method.
-Nothing is recorded then.
+Nothing is recorded for that image then. With several references the method
+works through them in order and records each as it goes, as `sign` and `attest`
+do: when cosign fails at a later one, the records of the earlier ones are
+written and true, the method fails, and the rest have no record of this run, so
+count the records of a run before trusting them all. An attestation cosign
+verified that is about another digest, or names another source than the one
+asked for, is recorded the same way: `verified: false`, with the reason in
+`error` and per attestation in `statements[].reason`.
+
+## What an attestation says
+
+A verified attestation proves that someone signed a statement, not what the
+statement is about. `verifyAttestation` reads each statement cosign verified and
+records it, bounded, so a workflow can assert on where an image was built from
+without reading a predicate itself.
+
+An attestation counts only when one of its subjects is the digest that was
+verified: `subject[].digest.sha256` must equal the digest of the reference,
+exactly. An attestation about another artifact is recorded with `counted: false`
+and does not make the image verified.
+
+| Field of the record                                          |                                                                                                                               |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `verified`                                                   | cosign verified at least one attestation, and at least one of them counts                                                     |
+| `attestations`, `matched`                                    | How many cosign verified, and how many of those count                                                                         |
+| `predicateTypes`                                             | The predicate type of every attestation cosign verified                                                                       |
+| `sourceRepository`, `sourceRef`, `sourceCommit`, `builderId` | What the attestations that count say, each `null` when they do not say it or do not agree                                     |
+| `expectedSourceRepository`, `expectedSourceCommit`           | What the call asked for, empty when it asked nothing                                                                          |
+| `statements`                                                 | Up to 20 attestations, the ones that count first: `predicateType`, `subjects`, `counted`, `reason`, `provenance`, the summary |
+| `error`                                                      | cosign's reason, or why none of the verified attestations counted                                                             |
+
+For SLSA provenance v1 (`https://slsa.dev/provenance/v1`) a statement's
+`provenance` holds `buildType`, `resolvedDependencies` (`uri` and `gitCommit` of
+the first 20, with `resolvedDependencyCount`), `builderId` and `invocationId`,
+which SLSA defines for every build type, and `workflow` (`repository`, `ref`,
+`path` from `externalParameters.workflow`), which only a build type defines.
+
+A source is derived only for a build type whose fields are known here, since
+what another builder's parameters mean is for that builder to say, and its
+caller may choose their values:
+
+| Predicate | Build types understood                                                                                                                                                                                                                              | The source is                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| SLSA v1   | `https://actions.github.io/buildtypes/workflow/v1`, GitHub's workflow build type, and `https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1`, the community build type GitHub's attestations used before it, with the same fields | `externalParameters.workflow` and its dependency       |
+| SLSA v0.2 | `https://github.com/slsa-framework/slsa-github-generator/container@v1`, `.../generic@v1` and `.../go@v1`, exactly so                                                                                                                                | `invocation.configSource`, when its `uri` is a git URI |
+
+For those, `sourceRepository` and `sourceRef` are the workflow's, or the two
+halves of the config source's `git+<repository>@<ref>`, and `sourceCommit` is
+the `gitCommit` of the resolved dependency whose `uri` is exactly
+`git+<repository>@<ref>`, or the config source's `sha1` or `gitCommit`, which
+must be the same when it has both. A commit is a whole SHA-1 or SHA-256 in lower
+case, 40 or 64 hex characters; anything shorter, longer or in upper case stays
+in the statement's dependency as it was given and leaves the summary `null`. A
+second dependency for the same `uri` that is not the same whole commit leaves it
+`null` too. For v0.2 the `entryPoint` is the workflow's path, `materials` are
+the dependencies, and the build invocation id is the invocation id. Of the v0.2
+build types only `container@v1` has been run against a real image.
+
+A predicate of any other build type, such as the one BuildKit writes, keeps its
+`buildType`, dependencies, builder and invocation id; its `workflow` and its
+source are `null`. Any other predicate type keeps its `predicateType` and
+subjects, with `provenance` and the summary `null`.
+
+What is kept is bounded, and the rest of a predicate is not stored: no
+environment, no parameters beyond the workflow reference, no byproducts. Every
+value kept is text of at most 1024 characters with no control character; one
+that is longer, is not text or has a control character is not stored, and is not
+altered to fit.
+
+The fields that are URLs are parsed, and stored only when they parse: the
+workflow's repository, a dependency's `uri`, the builder id and the build type
+must each be an `http`, `https`, `git` or `ssh` URL, with or without `git+`
+before it, written with `://` and a host, and with no user, no password, no
+query and no fragment; or a `pkg:`, `mailto:` or `urn:` URI, which has no host,
+with no query and no fragment. Nothing else is stored in those fields: not a
+value with no scheme, with one slash, with a space or a backslash, or of another
+scheme, and not the scp form `git@<host>:<path>`, whose user cannot be told from
+a credential. An invocation id is stored when it is such a URL or one plain
+token of letters, digits, `.`, `_` and `-`.
+
+The fields that are not URLs get no such rule: a subject's `name`, the
+workflow's `ref` and `path` are stored as the attestation gives them, within the
+bound above. A subject name is whatever the signer wrote, an image repository, a
+file name, a package URL with its query.
+
+`withheld` counts what was not stored, per statement. A summary field that could
+not be stored is `null`, so it can never equal an expectation. Lists are cut and
+their length kept: `statements` at 20 with `attestations` as the count,
+`subjects` at 20 with `subjectCount`, `resolvedDependencies` at 20 with
+`resolvedDependencyCount`, `predicateTypes` at 100 with `attestations`. `error`,
+here and in every other verification record, is cosign's reason as one line of
+at most 1024 characters with control characters replaced by spaces: cosign
+quotes what it found on the image, such as the predicate types, and whoever can
+write to the registry chooses those.
+
+With `sourceRepository` or `sourceCommit` the method makes the check itself: an
+attestation then counts only when its derived value equals the argument exactly,
+a repository as the provenance writes it and a commit as the full hash, and both
+when both are given, in one attestation.
+
+An empty `sourceRepository` or `sourceCommit` asks nothing. A workflow that
+passes an input through must therefore not rely on `verified` alone: an input
+that turned out empty switches the check off. Assert on what was asked as well,
+`expectedSourceRepository` and `expectedSourceCommit`, which the record carries
+for that:
+
+```yaml
+expr: >-
+  data.latest("upstream", "<record name>").attributes.verified == true
+  && data.latest("upstream", "<record name>").attributes.expectedSourceCommit == inputs.sourceCommit
+  && inputs.sourceCommit != ""
+```
+
+The `verification` and `attestationVerification` records also say what they were
+checked against: `verifyMode` (`key` or `keyless`), `certificateIdentity`,
+`certificateIdentityRegexp` and `oidcIssuer` for a keyless check, and
+`publicKeyFingerprint` for a key, the same fingerprint `describe` records, never
+the key or a path to it. A workflow that sets a signer's arguments per run, and
+shares the signer with other runs, asserts on these to know its own arguments
+were the ones in force.
+
+```sh
+swamp model method run upstream verifyAttestation \
+  --input 'refs:json=["ghcr.io/<owner>/<image>@sha256:<digest>"]' \
+  --input type=slsaprovenance1 \
+  --input sourceRepository=https://github.com/<owner>/<repository> \
+  --input sourceCommit=<40 hex>
+```
+
+An image built from another commit is then a record with `verified: false` and
+`error` such as
+`1 attestation verified by cosign, none counted: sourceCommit is "<found>", not "<expected>"`.
+
+### Changed since 2026.10.28.1
+
+- The `attestationVerification` record has new fields: `matched`, `statements`,
+  `sourceRepository`, `sourceRef`, `sourceCommit`, `builderId`,
+  `expectedSourceRepository` and `expectedSourceCommit`. The fields it had, and
+  its name, are unchanged. A record written by 2026.10.28.1 does not have the
+  new fields; run `verifyAttestation` again before asserting on them.
+- `verified` is stricter: an attestation whose subjects do not name the digest
+  that was verified no longer counts. cosign compares the subject with the image
+  too, so an image that verified before is expected to verify still; this check
+  does not rely on that. `attestations` still counts what cosign verified;
+  `matched` counts what also passed here.
+- `verifyAttestation` takes two new arguments, `sourceRepository` and
+  `sourceCommit`, both empty by default. A call that does not pass them asks
+  nothing new.
+- An image that has attestations, but none of the `type` asked for, is a record
+  with `verified: false` and cosign's reason,
+  `none of the attestations matched the predicate type: ...`. In 2026.10.28.1
+  the method failed there and recorded nothing.
+- A predicate type that is not text is recorded as `""` in `predicateTypes`, and
+  one longer than 1024 characters is cut there. `predicateTypes` holds the first
+  100; `attestations` is the whole number. The field is still a list of text.
+- A verification that passed before can now fail, by intent: a payload that is
+  JSON but not a statement object, such as `[]`, `7` or a text, was counted as
+  an attestation in 2026.10.28.1 and gave `verified: true` with
+  `predicateTypes: [""]`. It now names no subject, so the record is
+  `verified: false`. A payload of `null` made the method fail before, with a
+  type error; it is now such a record too.
+- The `verification` and `attestationVerification` records have five new fields:
+  `verifyMode`, `certificateIdentity`, `certificateIdentityRegexp`, `oidcIssuer`
+  and `publicKeyFingerprint`.
+- `error` in the `verification`, `attestationVerification` and
+  `blobVerification` records is one line of at most 1024 characters, with
+  control characters replaced by spaces and a longer reason cut with `…`.
+- A reference whose repository does not start with a letter or a digit is
+  refused before cosign runs, so one that starts with a dash is never read as a
+  flag; every reference and file is passed to cosign after `--`.
+- No global argument changed. A definition of 2026.10.28.1 runs unchanged and is
+  stamped with the new version.
 
 ## Workflows
 
@@ -223,9 +395,27 @@ its exit code and what it printed, with the PEM masked wherever it would appear,
 and nothing is recorded. A tag, an annotation without `=`, an empty key for
 `sign`, an empty key and public key for `verify`, an identity without an issuer
 or with `tlog: false` or beside a public key, a predicate or a file that cannot
-be read are refused before cosign runs. Record names carry the image's
-repository before the digest, and a file's name with a hash of its path, so the
-same digest in two repositories, or two files of one name, give two records.
+be read, a `sourceRepository` or `sourceCommit` with a space or a newline in it
+are refused before cosign runs, as is a reference that does not start with a
+letter or a digit. Record names carry the image's repository before the digest,
+and a file's name with a hash of its path, so the same digest in two
+repositories, or two files of one name, give two records.
+
+## Known limits
+
+- The method sets no time limit of its own. cosign's own `--timeout`, three
+  minutes by default, bounds each call to the registry and the log, so a service
+  that never answers holds a method for about that long per reference. A later
+  version is to run cosign with a limit per call.
+- A record name carries the first 12 hex characters of the digest. Two digests
+  of one repository that share those 12 characters would share a record name,
+  the later replacing the earlier; the record's own `digest` field is always the
+  whole digest, so assert on that. The repository part of the name has every run
+  of other characters replaced by `-`, so `a/b` and `a-b` give the same name;
+  the record's `repository` field tells them apart.
+- Two runs that verify the same image with the same signer write the same record
+  name. A workflow that reads its own run's record by run id finds none when
+  another run wrote later; such runs must not overlap.
 
 ## Development
 
@@ -257,6 +447,11 @@ registry, Rekor and the Sigstore TUF root, and ran from this machine against
 cosign 3.1.4 on 2026-10-29. `crane digest cgr.dev/chainguard/static:latest`
 gives a current digest; `COSIGN_KEYLESS_E2E_IDENTITY_REGEXP` and
 `COSIGN_KEYLESS_E2E_ISSUER` point it at another image's workflow.
+
+`smoke/` holds the live suite that runs through swamp, from a scratch repository
+that loads this extension from source: `verifyAttestation` against two public
+images, one with SLSA v1 provenance and one with v0.2, with the right and a
+wrong source. `smoke/README.md` says how to run it and what it ran on.
 
 ## License
 
