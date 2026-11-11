@@ -107,7 +107,7 @@ YAML
 run sm-old verifyAttestation "refs:json=[\"$V1\"]" type=slsaprovenance1
 holds "a definition of 2026.10.28.1 runs as before, with the old fields as they were" \
   '.verified == true and .attestations == 1 and .predicateTypes == ["https://slsa.dev/provenance/v1"] and .error == "" and .tlog == true and .type == "slsaprovenance1" and .expectedSourceCommit == "" and .expectedSourceRepository == ""'
-if grep -q '^typeVersion: 2026.11.10.1' "$dir/sm-old.yaml"; then
+if grep -q '^typeVersion: 2026.11.10.2' "$dir/sm-old.yaml"; then
   ok "and is stamped with the new version"
 else
   bad "and is stamped with the new version" "$(grep typeVersion "$dir/sm-old.yaml")"

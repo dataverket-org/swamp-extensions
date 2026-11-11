@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/cosign"
-version: "2026.11.10.1"
+version: "2026.11.10.2"
 description: >
   Container images signed and verified with cosign, https://github.com/sigstore/cosign,
   signed with a key, with or without a transparency log, verified against
@@ -14,7 +14,10 @@ description: >
   and `verifyAttestation` checks those, counts only an attestation whose
   subject is the digest verified, and records what each says: its subjects,
   and for SLSA provenance the source repository, ref, commit and builder, which
-  it can hold to a `sourceRepository` and `sourceCommit`; `signBlob` and `verifyBlob` do the
+  it can hold to a `sourceRepository` and `sourceCommit`; `identify` reads who
+  signed an image, the identity and OIDC issuer of each signing certificate
+  that cosign finds genuine, with no identity expected, so its record gives
+  the arguments for a keyless `verify` and is never itself a pass; `signBlob` and `verifyBlob` do the
   same for a file, with a Sigstore bundle beside it; `describe` records
   cosign's version and the public key in effect with its fingerprint;
   `generateKeyPair` makes a key pair and records it with the private key as a

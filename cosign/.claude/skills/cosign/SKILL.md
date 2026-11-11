@@ -4,10 +4,12 @@ description: >
   Sign and verify container images with cosign through the @dataverket/cosign
   extension: key-based signatures by digest, with or without a transparency
   log, keyless verification against a certificate identity and OIDC issuer,
+  reading who signed an image when that identity is not known yet,
   attestations with a predicate file, files signed with a Sigstore bundle,
   and a key pair kept in a swamp vault. Use when asked to "sign images",
   "cosign sign", "verify a signature before deploy", "verify an upstream image
-  keyless", "attach an SBOM or provenance attestation", "sign a release file",
+  keyless", "who signed this image", "find the certificate identity", "attach
+  an SBOM or provenance attestation", "sign a release file",
   "sign-blob", "generate a cosign key", or to gate a rollout on signed images.
 ---
 
@@ -84,6 +86,42 @@ swamp model create @dataverket/cosign/signer upstream \
   --global-arg tlog=true
 ```
 
+## Who signed this image
+
+When the identity and issuer for a keyless check are not known, do not read the
+certificate by hand: run `identify`. It needs no key and no identity, so a
+signer with no argument can ask.
+
+```sh
+swamp model create @dataverket/cosign/signer who
+swamp model method run who identify \
+  --input 'refs:json=["<repo>@sha256:<digest>"]'
+```
+
+The `identification` record's `state` says what was found:
+
+| `state`              | Do                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `identified`         | Show the user `certificateIdentity` and `oidcIssuer`; they are the two arguments of a keyless signer                  |
+| `several-identities` | Show `identities`; the user chooses, nothing is chosen for them                                                       |
+| `key-signed`         | No certificate, and nothing of the signature was checked: ask for the signer's public key and verify with `publicKey` |
+| `unproven`           | No identity could be established; `reason` and `signatures[].reason` say why                                          |
+| `unsigned`           | The registry answered and holds no signature                                                                          |
+| `not-found`          | The registry has no such image: check the digest                                                                      |
+
+An identification is not a verification. It says a valid signature exists and
+whom its certificate was issued to, never that this is the right signer:
+`identityChecked` is always `false` and there is no `verified` field. The user
+decides whether the identity is the expected one; then create the keyless signer
+with it and run `verify`. A gate asserts on a `verification` record. Never copy
+`unprovenIdentity` or `unprovenKeyFingerprint`: they are what the registry
+holds, not what was checked. A registry that limits the rate, refuses the login
+or does not answer fails the method; run it again, do not read that as unsigned.
+For a signature under an older `.sig` tag the record holds the identity, the
+issuer and at most the five `githubWorkflow` claims, each only when cosign
+confirmed it of the certificate. `tagSignaturesUnlisted: true` says the image
+has signatures under a tag beside bundles that could not all be listed.
+
 ## What gets recorded
 
 | Record                                            | Holds                                                                                                                              |
@@ -91,6 +129,7 @@ swamp model create @dataverket/cosign/signer upstream \
 | `signer`                                          | cosign version, how the key was given, the public key in effect and its fingerprint, `verifyMode` (`key`, `keyless`, `none`)       |
 | `signature-<repository>-<digest>`                 | One image signed: ref, repository, digest, annotations                                                                             |
 | `verification-<repository>-<digest>`              | `verified`, the signatures' payloads, cosign's `error` when none counted                                                           |
+| `identification-<repository>-<digest>`            | Who signed an image: `state`, `certificateIdentity`, `oidcIssuer`, `identities`, each signature's claims; never a pass             |
 | `attestation-<repository>-<digest>`               | One attestation: type, predicate path and its sha256                                                                               |
 | `attestationVerification-<repository>-<digest>`   | `verified`, the predicate types found, and what the provenance names: `sourceRepository`, `sourceRef`, `sourceCommit`, `builderId` |
 | `blobSignature-<file>`, `blobVerification-<file>` | A file's sha256, its bundle, and whether it verifies                                                                               |
@@ -103,9 +142,14 @@ method; the workflows assert on it. Read the latest verdicts with:
 swamp data query 'modelName == "cosign-verify" && specName == "verification"' --json
 ```
 
+`swamp model validate` passes for a signer with no `key`: it only verifies.
+`sign`, `attest` and `signBlob` refuse an empty key.
+
 ## Do not
 
 - Sign a tag, or pass a key or passphrase as an input.
+- Treat an `identification` record as a pass, or pick one of several identities
+  for the user.
 - Verify keyless with `tlog: false`: the signature is in Rekor, and the model
   refuses the combination.
 - Expect `.sig` tags: cosign 3 stores signatures as OCI referrers, so the

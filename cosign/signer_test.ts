@@ -7,23 +7,29 @@ import {
 import { z } from "npm:zod@4";
 import {
   __setExec,
+  __setScratchRoot,
   absolute,
   annotationRecord,
   argumentProblem,
   AttestArgsSchema,
+  certificateFacts,
   checks,
   type CommandResult,
   type Context,
   fingerprint,
   GlobalArgsSchema,
+  IdentifyArgsSchema,
   identityProblem,
   keyKind,
   masked,
   model,
   parseAttestationOutput,
   parseDigestRef,
+  parseDownload,
   parseGitUri,
+  parseTree,
   parseVerifyOutput,
+  readCertificate,
   readStatement,
   SignArgsSchema,
   SignBlobArgsSchema,
@@ -35,6 +41,21 @@ import {
 
 /** This extension's directory doubles as the repository root in tests. */
 const REPO = import.meta.dirname!;
+
+/**
+ * Every temporary file of a test, and of the model under test, is made in
+ * this one directory, which is removed when the run ends, also after a
+ * failed test. Nothing is left in the system's temporary directory.
+ */
+const SCRATCH = Deno.makeTempDirSync({ prefix: "cosign-test-" });
+__setScratchRoot(SCRATCH);
+globalThis.addEventListener("unload", () => {
+  try {
+    Deno.removeSync(SCRATCH, { recursive: true });
+  } catch {
+    // Already gone.
+  }
+});
 
 const DIGEST =
   "sha256:c02a5ac89d2df90595ef9dee1fba7364dfd8b218df88536e742421203fcb5c19";
@@ -86,7 +107,12 @@ function envelope(predicateType: string, digest: string): string {
   });
 }
 
-type Call = { args: string[]; cwd: string; env: Record<string, string> };
+type Call = {
+  bin: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+};
 
 /** The flags each cosign command of the fake knows: those that take a value, and those that do not. */
 const REGISTRY = ["--allow-insecure-registry", "--allow-http-registry"];
@@ -97,6 +123,15 @@ const IDENTITY_FLAGS = [
   "--certificate-oidc-issuer",
   "--trusted-root",
 ];
+/** The flags that have cosign verify require a claim of the certificate, by the claim's name. */
+const GITHUB_CLAIM_FLAGS: Record<string, string> = {
+  githubWorkflowTrigger: "--certificate-github-workflow-trigger",
+  githubWorkflowSha: "--certificate-github-workflow-sha",
+  githubWorkflowName: "--certificate-github-workflow-name",
+  githubWorkflowRepository: "--certificate-github-workflow-repository",
+  githubWorkflowRef: "--certificate-github-workflow-ref",
+};
+const GITHUB_FLAGS = Object.values(GITHUB_CLAIM_FLAGS);
 const FLAGS: Record<string, { value: string[]; plain: string[] }> = {
   "version": { value: [], plain: ["--json"] },
   "public-key": { value: ["--key"], plain: [] },
@@ -117,8 +152,32 @@ const FLAGS: Record<string, { value: string[]; plain: string[] }> = {
     plain: ["--yes", "--upload=false", ...REGISTRY],
   },
   "verify": {
-    value: [...IDENTITY_FLAGS, "--output", "-a"],
-    plain: ["--insecure-ignore-tlog", ...REGISTRY],
+    value: [
+      ...IDENTITY_FLAGS,
+      "--certificate-oidc-issuer-regexp",
+      ...GITHUB_FLAGS,
+      "--output",
+      "-a",
+    ],
+    plain: [
+      "--insecure-ignore-tlog",
+      "--new-bundle-format=false",
+      ...REGISTRY,
+    ],
+  },
+  "download": { value: [], plain: REGISTRY },
+  "tree": { value: [], plain: REGISTRY },
+  "verify-blob-attestation": {
+    value: [
+      "--bundle",
+      "--certificate-identity-regexp",
+      "--certificate-oidc-issuer-regexp",
+      "--digest",
+      "--digestAlg",
+      "--type",
+      "--trusted-root",
+    ],
+    plain: [],
   },
   "verify-attestation": {
     value: [...IDENTITY_FLAGS, "--output", "--type"],
@@ -141,6 +200,8 @@ const POSITIONAL = [
   "verify-attestation",
   "sign-blob",
   "verify-blob",
+  "download",
+  "tree",
 ];
 
 /** argv as cosign's flag parser reads it, or what it refuses. */
@@ -151,18 +212,25 @@ function parseArgv(
   if (!known) return `unknown command "${args[0]}" for "cosign"`;
   const flags: Record<string, string[]> = {};
   const positional: string[] = [];
-  let i = args[0] === "signing-config" ? 2 : 1;
+  if (args[0] === "download" && args[1] !== "signature") {
+    return `unknown command "${args[1]}" for "cosign download"`;
+  }
+  let i = args[0] === "signing-config" || args[0] === "download" ? 2 : 1;
   for (; i < args.length; i++) {
     const a = args[i];
     if (a === "--") {
       positional.push(...args.slice(i + 1));
       break;
     }
-    if (known.value.includes(a)) {
+    const eq = a.indexOf("=");
+    if (known.plain.includes(a)) {
+      flags[a] = [];
+    } else if (eq > 0 && known.value.includes(a.slice(0, eq))) {
+      // --flag=value: one argument, whatever the value starts with.
+      (flags[a.slice(0, eq)] ??= []).push(a.slice(eq + 1));
+    } else if (known.value.includes(a)) {
       if (i + 1 >= args.length) return `flag needs an argument: ${a}`;
       (flags[a] ??= []).push(args[++i]);
-    } else if (known.plain.includes(a)) {
-      flags[a] = [];
     } else if (a.startsWith("-")) {
       return `unknown flag: ${a}`;
     } else {
@@ -196,8 +264,53 @@ function predicateUri(type: string): string {
  * cosign does when there is none. `printed` is printed whatever it is: for
  * output the real cosign would not give, such as a statement about another
  * digest, which it refuses with its default --check-claims.
+ *
+ * For identify: `downloads` is what `download signature` prints for a
+ * digest, as objects, one per line, or as text printed as it is; a digest
+ * with none has no signature, and `downloadError` is cosign's message for
+ * one that fails another way. `tree` lists what the downloads hold, as
+ * cosign tree does, unless `treeLists` says what it lists for a digest or
+ * `treeError` that it fails. `genuine` holds the certificates
+ * `verify-blob-attestation` accepts, as base64; any other gets
+ * `bundleError`. That command refuses, with words that are no verdict, a
+ * bundle that holds a field the model did not read. `tagVerified` is what
+ * `verify` prints for a digest when it is asked with an identity pattern,
+ * and `tagError` what it says when it has nothing to print. `certified` is
+ * what the certificates of those signatures really say, which is what the
+ * exact flags of `verify` are held against; when not given it is what was
+ * printed. Beside bundles `verify` reads the tag form only with
+ * `--new-bundle-format=false`, and refuses that flag anywhere else;
+ * `tagBeside` names digests with key signatures under the tag beside
+ * their bundles. `treePrints` replaces what cosign tree prints. `spawn` is
+ * thrown instead of running anything: a binary that is not there, or a
+ * cancelled run.
  */
+/** What the certificate of one verified tag-form signature really says. */
+type TagCertificate = {
+  identity: string;
+  issuer: string;
+  claims: Record<string, string>;
+};
+
 function fake(opts: {
+  downloads?: Record<string, unknown[] | string>;
+  downloadError?: Record<string, string>;
+  genuine?: string[];
+  bundleError?: string;
+  tagVerified?: Record<string, unknown[]>;
+  tagError?: string;
+  certified?: Record<string, TagCertificate[]>;
+  tagBeside?: string[];
+  treeLists?: Record<
+    string,
+    ("bundle" | "tag" | "attestation" | "foreign" | "odd")[]
+  >;
+  treeError?: Record<string, string>;
+  treePrints?: Record<
+    string,
+    { code?: number; stdout?: string; stderr?: string }
+  >;
+  spawn?: Error;
   signed?: string[];
   attested?: Record<string, string[]>;
   statements?: Record<string, unknown[]>;
@@ -207,13 +320,16 @@ function fake(opts: {
   fail?: string;
 }) {
   const calls: Call[] = [];
+  /** Every bundle file a call named, to see that none is left behind. */
+  const bundles: string[] = [];
   const run = async (
-    _bin: string,
+    bin: string,
     args: string[],
     o: { cwd: string; env: Record<string, string> },
   ): Promise<CommandResult> => {
     {
-      calls.push({ args, cwd: o.cwd, env: o.env });
+      calls.push({ bin, args, cwd: o.cwd, env: o.env });
+      if (opts.spawn) throw opts.spawn;
       const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
       const parsed = parseArgv(args);
       if (typeof parsed === "string") {
@@ -262,7 +378,288 @@ function fake(opts: {
           stderr: "WARNING: Skipping tlog\n",
         };
       }
+      if (args[0] === "verify-blob-attestation") {
+        const path = flags["--bundle"][0];
+        bundles.push(path);
+        const bundle = JSON.parse(await Deno.readTextFile(path));
+        const statement = JSON.parse(atob(bundle.dsseEnvelope.payload));
+        const refuse = (said: string) => ({
+          code: 1,
+          stdout: "",
+          stderr: `Error: ${said}\nerror during command execution: ${said}\n`,
+        });
+        if (
+          flags["--certificate-identity-regexp"]?.[0] !== ".*" ||
+          flags["--certificate-oidc-issuer-regexp"]?.[0] !== ".*" ||
+          flags["--digestAlg"]?.[0] !== "sha256"
+        ) {
+          return refuse("the fake wants the patterns and sha256");
+        }
+        if (flags["--trusted-root"]?.[0]?.endsWith("missing.json")) {
+          return refuse(
+            "setting trusted material: loading trusted root: failed to read trusted root open missing.json: no such file or directory",
+          );
+        }
+        if (statement.predicateType !== flags["--type"]?.[0]) {
+          return refuse(
+            `invalid predicate type, expected ${
+              flags["--type"]?.[0]
+            } got ${statement.predicateType}`,
+          );
+        }
+        if (
+          !statement.subject.some((x: { digest: { sha256: string } }) =>
+            x.digest.sha256 === flags["--digest"]?.[0]
+          )
+        ) {
+          return refuse(
+            "failed to verify signature: provided artifact digest does not match any digest in statement",
+          );
+        }
+        // cosign reads more spellings of a bundle's fields than the model
+        // does, so the model must hand over only what it read.
+        const material = bundle.verificationMaterial ?? {};
+        const extra = [
+          ...Object.keys(bundle).filter((k) =>
+            !["mediaType", "verificationMaterial", "dsseEnvelope"].includes(k)
+          ),
+          ...Object.keys(material).filter((k) =>
+            ![
+              "certificate",
+              "x509CertificateChain",
+              "tlogEntries",
+              "timestampVerificationData",
+            ].includes(k)
+          ),
+          ...Object.keys(material.certificate ?? {}).filter((k) =>
+            k !== "rawBytes"
+          ),
+          ...Object.keys(bundle.dsseEnvelope).filter((k) =>
+            !["payload", "payloadType", "signatures"].includes(k)
+          ),
+        ];
+        if (
+          extra.length > 0 ||
+          (material.certificate && material.x509CertificateChain)
+        ) {
+          return refuse(
+            `the fake was handed a bundle with more than was read: ${
+              extra.join(",")
+            }`,
+          );
+        }
+        const raw = material.certificate?.rawBytes ??
+          material.x509CertificateChain?.certificates?.[0]?.rawBytes;
+        if (!(opts.genuine ?? []).includes(raw)) {
+          return refuse(
+            opts.bundleError ??
+              "failed to verify log inclusion: transparency log certificate does not match",
+          );
+        }
+        return { code: 0, stdout: "", stderr: "Verified OK\n" };
+      }
       const digest = (positional[0] ?? "").split("@")[1];
+      if (args[0] === "download") {
+        const failure = (opts.downloadError ?? {})[digest];
+        if (failure) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr:
+              `Error: ${failure}\nerror during command execution: ${failure}\n`,
+          };
+        }
+        const lines = (opts.downloads ?? {})[digest];
+        if (lines === undefined) {
+          const none = `${positional[0]}: no signatures associated`;
+          return {
+            code: 1,
+            stdout: "",
+            stderr: `Error: ${none}\nerror during command execution: ${none}\n`,
+          };
+        }
+        return ok(
+          typeof lines === "string"
+            ? lines
+            : lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
+        );
+      }
+      const held = (opts.downloads ?? {})[digest];
+      const beside = Array.isArray(held) &&
+        held.some((l) => !Object.hasOwn(l as object, "Base64Signature"));
+      const tagForm = flags["--new-bundle-format=false"] !== undefined;
+      if (args[0] === "verify" && tagForm && !beside) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr:
+            "Error: the fake wants --new-bundle-format=false only beside bundles\n",
+        };
+      }
+      if (
+        args[0] === "verify" &&
+        (opts.tagVerified || opts.certified || tagForm)
+      ) {
+        const refuse = (code: number, none: string) => ({
+          code,
+          stdout: "",
+          stderr: `Error: ${none}\nerror during command execution: ${none}\n`,
+        });
+        if (beside && !tagForm) {
+          // cosign reads bundles only once an image has one.
+          return refuse(
+            1,
+            "no matching attestations: the fake was asked for bundles",
+          );
+        }
+        const printed = (opts.tagVerified ?? {})[digest];
+        const anyone = flags["--certificate-identity-regexp"]?.[0] === ".*" &&
+          flags["--certificate-oidc-issuer-regexp"]?.[0] === ".*";
+        if (!printed) {
+          if (opts.tagError) return refuse(10, opts.tagError);
+          const there = (Array.isArray(held) && held.some((l) =>
+            Object.hasOwn(l as object, "Base64Signature")
+          )) || (opts.tagBeside ?? []).includes(digest);
+          const withCertificate = Array.isArray(held) &&
+            held.some((l) =>
+              (l as { Cert?: unknown }).Cert
+            );
+          return refuse(
+            10,
+            withCertificate
+              ? "no matching signatures: error verifying bundle: comparing public key PEMs"
+              : there
+              ? "no matching signatures: x509: unsupported public key type: <nil>"
+              : "no signatures found",
+          );
+        }
+        if (anyone) return ok(JSON.stringify(printed) + "\n");
+        // Exact requirements are held against the certificates themselves.
+        const certificates = (opts.certified ?? {})[digest] ??
+          (printed as { optional: Record<string, string> }[]).map((p) => ({
+            identity: p.optional.Subject,
+            issuer: p.optional.Issuer,
+            claims: Object.fromEntries(
+              Object.keys(GITHUB_CLAIM_FLAGS).filter((k) => k in p.optional)
+                .map((k) => [k, p.optional[k]]),
+            ),
+          }));
+        // A pattern that matches anything asks nothing of that field.
+        const any = (flag: string) => flags[flag]?.[0] === ".*";
+        const matching = certificates.filter((c) =>
+          (any("--certificate-identity-regexp") ||
+            c.identity === flags["--certificate-identity"]?.[0]) &&
+          (any("--certificate-oidc-issuer-regexp") ||
+            c.issuer === flags["--certificate-oidc-issuer"]?.[0])
+        );
+        if (matching.length === 0) {
+          return refuse(
+            12,
+            "no matching signatures: none of the expected identities matched what was in the certificate",
+          );
+        }
+        const accepted = matching.filter((c) =>
+          Object.entries(GITHUB_CLAIM_FLAGS).every(([claim, flag]) =>
+            // An empty requirement asks nothing, as with cosign.
+            !flags[flag]?.[0] || c.claims[claim] === flags[flag][0]
+          )
+        );
+        if (accepted.length === 0) {
+          return refuse(
+            12,
+            "no matching signatures: expected GitHub Workflow Repository not found in certificate",
+          );
+        }
+        return ok(
+          JSON.stringify(
+            accepted.map((c) =>
+              payload(digest, {
+                Subject: c.identity,
+                Issuer: c.issuer,
+                ...c.claims,
+              })
+            ),
+          ) + "\n",
+        );
+      }
+      if (args[0] === "tree") {
+        const failure = (opts.treeError ?? {})[digest];
+        if (failure) {
+          return {
+            code: 1,
+            stdout: `📦 Supply Chain Security Related artifacts for an image: ${
+              positional[0]
+            }\n`,
+            stderr:
+              `Error: ${failure}\nerror during command execution: ${failure}\n`,
+          };
+        }
+        const replaced = (opts.treePrints ?? {})[digest];
+        if (replaced) {
+          return {
+            code: replaced.code ?? 0,
+            stdout: replaced.stdout ??
+              `📦 Supply Chain Security Related artifacts for an image: ${
+                positional[0]
+              }\nNo Supply Chain Security Related Artifacts found for image ${
+                positional[0]
+              },\n start creating one with simply running$ cosign sign <img>`,
+            stderr: replaced.stderr ?? "",
+          };
+        }
+        const kindOf = (l: unknown) => {
+          if (Object.hasOwn(l as object, "Base64Signature")) return "tag";
+          let type: unknown = SIGN_TYPE;
+          try {
+            const statement = JSON.parse(
+              atob(
+                (l as { dsseEnvelope: { payload: string } }).dsseEnvelope
+                  .payload,
+              ),
+            );
+            type = statement.predicateType ?? statement.predicate_type;
+          } catch {
+            // A bundle with no statement is listed as a signature.
+          }
+          return type === SIGN_TYPE ? "bundle" : "attestation";
+        };
+        const listed = (opts.treeLists ?? {})[digest] ?? [
+          ...(Array.isArray(held) ? held.map(kindOf) : []),
+          ...((opts.tagBeside ?? []).includes(digest) ? ["tag"] : []),
+        ];
+        const repository = positional[0].split("@")[0];
+        const layer = (last: boolean, n: number) =>
+          `   ${last ? "└" : "├"}── 🍒 sha256:${
+            n.toString(16).padStart(64, "0")
+          }\n`;
+        const tags = listed.includes("tag")
+          ? `└── 🔐 Signatures for an image tag: ${repository}:sha256-x.sig\n` +
+            layer(true, 1)
+          : "";
+        const referrers = listed.filter((k) => k !== "tag").map((kind, i) =>
+          `└── 🔗 ${
+            kind === "bundle"
+              ? SIGN_TYPE
+              : kind === "foreign"
+              ? "application/vnd.cncf.notary.signature"
+              : kind === "odd"
+              ? "doc/example"
+              : "https://slsa.dev/provenance/v1"
+          } artifacts via OCI referrer: ${repository}@sha256:${
+            (i + 2).toString(16).padStart(64, "0")
+          }\n` + layer(true, i + 2)
+        ).join("");
+        return ok(
+          `📦 Supply Chain Security Related artifacts for an image: ${
+            positional[0]
+          }\n` +
+            (listed.length
+              ? tags + referrers
+              : `No Supply Chain Security Related Artifacts found for image ${
+                positional[0]
+              },\n start creating one with simply running$ cosign sign <img>`),
+        );
+      }
       if (args[0] === "verify") {
         if ((opts.signed ?? []).includes(digest)) {
           const annotations: Record<string, string> = {};
@@ -330,7 +727,7 @@ function fake(opts: {
   const restore = __setExec(run);
   /** One call straight at the fake, as cosign would be called. */
   const direct = (args: string[]) => run("cosign", args, { cwd: "", env: {} });
-  return { calls, restore, direct };
+  return { calls, bundles, restore, direct };
 }
 
 type Written = { spec: string; name: string; data: Record<string, unknown> };
@@ -482,11 +879,38 @@ Deno.test("cosign-installed and key-usable report what cosign says", async () =>
       }),
       { pass: true },
     );
-    const none = await checks["key-usable"].execute({
-      globalArgs: {},
-      logger,
-    });
-    assertStringIncludes(none.errors![0], "key is empty");
+    // An empty key fails only where a key is needed: before a method that
+    // signs. swamp model validate with no --method names no method.
+    for (const methodName of ["sign", "attest", "signBlob"]) {
+      const none = await checks["key-usable"].execute({
+        globalArgs: {},
+        methodName,
+        logger,
+      });
+      assertEquals(none, {
+        pass: false,
+        errors: ["key is empty: nothing to sign with"],
+      });
+    }
+    for (
+      const methodName of [undefined, "", "verify", "identify", "describe"]
+    ) {
+      assertEquals(
+        await checks["key-usable"].execute({
+          globalArgs: {},
+          methodName,
+          logger,
+        }),
+        { pass: true },
+      );
+    }
+    // No cosign ran for an empty key, and a key that is there is still tried.
+    assertEquals(f.calls.map((c) => c.args[0]), ["version", "public-key"]);
+    assertEquals(checks["key-usable"].appliesTo, [
+      "sign",
+      "attest",
+      "signBlob",
+    ]);
   } finally {
     f.restore();
   }
@@ -799,7 +1223,10 @@ Deno.test("verify with nothing to verify with, or a cosign error that is not a v
 
 Deno.test("attest signs the predicate onto each digest and records its hash", async () => {
   const f = fake({});
-  const dir = await Deno.makeTempDir({ prefix: "cosign-attest-" });
+  const dir = await Deno.makeTempDir({
+    prefix: "cosign-attest-",
+    dir: SCRATCH,
+  });
   try {
     await Deno.writeTextFile(`${dir}/release.json`, '{"commit":"abc"}\n');
     const { ctx, written } = context();
@@ -930,7 +1357,10 @@ Deno.test("two repositories with one digest, and two files of one name, get thei
   } finally {
     f.restore();
   }
-  const dir = await Deno.makeTempDir({ prefix: "cosign-blob-" });
+  const dir = await Deno.makeTempDir({
+    prefix: "cosign-blob-",
+    dir: SCRATCH,
+  });
   const g = fake({});
   try {
     await Deno.mkdir(`${dir}/a`);
@@ -960,7 +1390,10 @@ Deno.test("masked replaces the PEM wherever cosign echoes it, and nothing else",
 
 Deno.test("signBlob signs the file with the signing config and records its digest and bundle", async () => {
   const f = fake({});
-  const dir = await Deno.makeTempDir({ prefix: "cosign-blob-" });
+  const dir = await Deno.makeTempDir({
+    prefix: "cosign-blob-",
+    dir: SCRATCH,
+  });
   try {
     await Deno.writeTextFile(`${dir}/release.json`, '{"release": 1}\n');
     const { ctx, written } = context({ httpRegistry: true });
@@ -1005,7 +1438,10 @@ Deno.test("signBlob refuses a file it cannot read, before running cosign", async
 });
 
 Deno.test("verifyBlob records a file that verifies and one that does not", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "cosign-blob-" });
+  const dir = await Deno.makeTempDir({
+    prefix: "cosign-blob-",
+    dir: SCRATCH,
+  });
   await Deno.writeTextFile(`${dir}/release.json`, '{"release": 1}\n');
   const f = fake({});
   try {
@@ -1108,7 +1544,10 @@ Deno.test({
     assertEquals(wrong.written[0].data.verified, false);
     assertStringIncludes(String(wrong.written[0].data.error), "no matching");
 
-    const dir = await Deno.makeTempDir({ prefix: "cosign-e2e-" });
+    const dir = await Deno.makeTempDir({
+      prefix: "cosign-e2e-",
+      dir: SCRATCH,
+    });
     try {
       await Deno.writeTextFile(`${dir}/release.json`, '{"suite":"e2e"}\n');
       const a = context({ ...over, key });
@@ -1274,7 +1713,10 @@ Deno.test("verify keyless passes the identity and issuer instead of a key, with 
 
 Deno.test("verifyAttestation and verifyBlob keyless carry the identity flags and no key file", async () => {
   const f = fake({ attested: { [DIGEST]: ["https://spdx.dev/Document"] } });
-  const dir = await Deno.makeTempDir({ prefix: "cosign-keyless-" });
+  const dir = await Deno.makeTempDir({
+    prefix: "cosign-keyless-",
+    dir: SCRATCH,
+  });
   try {
     await Deno.writeTextFile(`${dir}/release.json`, "{}\n");
     const { ctx, written } = context(KEYLESS);
@@ -2263,7 +2705,11 @@ Deno.test("readStatement judges one statement against a digest without the model
 });
 
 Deno.test("the type carries an upgrade to this version, and its arguments are unchanged", () => {
-  assertEquals(model.version, "2026.11.10.1");
+  assertEquals(model.version, "2026.11.10.2");
+  assertEquals(model.upgrades.map((u) => u.toVersion), [
+    "2026.11.10.1",
+    "2026.11.10.2",
+  ]);
   const last = model.upgrades[model.upgrades.length - 1];
   assertEquals(last.toVersion, model.version);
   const old = { key: "", tlog: true, certificateIdentity: "x" };
@@ -2916,4 +3362,2229 @@ Deno.test("the community build type GitHub's first attestations used is read as 
   assertEquals(record.sourceCommit, "c27d339ee6075c1f744c5d4b200f7901aad2c369");
   assertEquals(record.statements[0].withheld, 0);
   assertEquals(record.statements[0].provenance!.resolvedDependencyCount, 2);
+});
+
+// identify: who signed an image.
+
+const identify = (a: z.input<typeof IdentifyArgsSchema>, ctx: Context) =>
+  model.methods.identify.execute(IdentifyArgsSchema.parse(a), ctx);
+
+const SIGN_TYPE = "https://sigstore.dev/cosign/sign/v1";
+const FULCIO = "1.3.6.1.4.1.57264.1.";
+
+/** One DER element. */
+function tlv(tag: number, ...parts: Uint8Array[]): Uint8Array {
+  const length = parts.reduce((n, p) => n + p.length, 0);
+  const head = length < 0x80
+    ? [tag, length]
+    : length < 0x100
+    ? [tag, 0x81, length]
+    : [tag, 0x82, length >> 8, length & 0xff];
+  const out = new Uint8Array(head.length + length);
+  out.set(head);
+  let at = head.length;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+const bytes = (text: string) => new TextEncoder().encode(text);
+/** A DER UTF8String, as Fulcio writes its extensions from 8 on. */
+const utf8 = (text: string) => tlv(0x0c, bytes(text));
+/** Subject alternative names: a URI, an email address. */
+const uri = (text: string) => tlv(0x86, bytes(text));
+const email = (text: string) => tlv(0x81, bytes(text));
+
+function oidBytes(dotted: string): Uint8Array {
+  const n = dotted.split(".").map(Number);
+  const body = [n[0] * 40 + n[1]];
+  for (const v of n.slice(2)) {
+    const chunk = [v & 0x7f];
+    for (let rest = v >> 7; rest > 0; rest >>= 7) {
+      chunk.unshift((rest & 0x7f) | 0x80);
+    }
+    body.push(...chunk);
+  }
+  return tlv(0x06, Uint8Array.from(body));
+}
+
+/**
+ * A certificate with the given subject alternative names and Fulcio
+ * extensions, as base64 DER. It has the structure of one and no signature
+ * that would check out: whether a certificate is genuine is for cosign to
+ * say, and in these tests for the fake.
+ */
+function certificate(
+  names: Uint8Array[],
+  fulcio: [number, Uint8Array][],
+): string {
+  const extension = (oid: string, value: Uint8Array) =>
+    tlv(0x30, oidBytes(oid), tlv(0x04, value));
+  const extensions = [
+    ...(names.length ? [extension("2.5.29.17", tlv(0x30, ...names))] : []),
+    ...fulcio.map(([n, v]) => extension(`${FULCIO}${n}`, v)),
+  ];
+  const tbs = tlv(
+    0x30,
+    tlv(0xa0, tlv(0x02, Uint8Array.of(2))),
+    tlv(0x02, Uint8Array.of(1)),
+    tlv(0x30),
+    tlv(0x30),
+    tlv(0x30),
+    tlv(0x30),
+    tlv(0x30),
+    tlv(0xa3, tlv(0x30, ...extensions)),
+  );
+  const der = tlv(0x30, tbs, tlv(0x30), tlv(0x03, Uint8Array.of(0)));
+  return btoa(Array.from(der, (b) => String.fromCharCode(b)).join(""));
+}
+
+/** A certificate as Fulcio issues one: one URI, the issuer twice, claims by number. */
+function issued(
+  identity: string,
+  issuer: string,
+  claims: Record<number, string> = {},
+): string {
+  return certificate([uri(identity)], [
+    [1, bytes(issuer)],
+    [8, utf8(issuer)],
+    ...Object.entries(claims).map(([n, v]): [number, Uint8Array] => [
+      Number(n),
+      Number(n) <= 6 ? bytes(v) : utf8(v),
+    ]),
+  ]);
+}
+
+const ID_A =
+  "https://github.com/example/api/.github/workflows/release.yml@refs/tags/v1";
+const ID_B =
+  "https://gitlab.example.org/team/api//.gitlab-ci.yml@refs/heads/main";
+const ISSUER_B = "https://gitlab.example.org";
+const CLAIMS_A = {
+  2: "push",
+  3: COMMIT,
+  4: "release",
+  5: "example/api",
+  6: "refs/tags/v1",
+  12: SOURCE,
+  13: COMMIT,
+  14: "refs/tags/v1",
+  20: "push",
+  99: "a claim this version has no name for",
+};
+const CERT_A = issued(ID_A, ISSUER, CLAIMS_A);
+const CERT_B = issued(ID_B, ISSUER_B, {
+  12: "https://gitlab.example.org/team/api",
+});
+/** The certificate of A with one claim changed: what a forger would attach. */
+const VICTIM = "https://github.com/victim/product";
+const CERT_FORGED = issued(ID_A, ISSUER, { ...CLAIMS_A, 12: VICTIM });
+
+/** A signature as a Sigstore bundle, as `cosign download signature` prints one. */
+function bundle(
+  digest: string,
+  material: Record<string, unknown>,
+  predicateType = SIGN_TYPE,
+) {
+  return {
+    mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+    verificationMaterial: material,
+    dsseEnvelope: {
+      payload: btoa(JSON.stringify({
+        _type: "https://in-toto.io/Statement/v1",
+        subject: [{ digest: { sha256: hex(digest) }, annotations: {} }],
+        predicateType,
+        predicate: {},
+      })),
+      payloadType: "application/vnd.in-toto+json",
+      signatures: [{ sig: "MEUC" }],
+    },
+  };
+}
+const certBundle = (digest: string, cert: string) =>
+  bundle(digest, { certificate: { rawBytes: cert }, tlogEntries: [{}] });
+/** The hint of a key-signed bundle: the base64 of the key's sha256. */
+const HINT = "6VIIIu1k4vanonG242viGb2RM9QmtkztF1/bcse7k9c=";
+const HINT_FINGERPRINT =
+  "sha256:e9520822ed64e2f6a7a271b6e36be219bd9133d426b64ced175fdb72c7bb93d7";
+const keyBundle = (digest: string) =>
+  bundle(digest, { publicKey: { hint: HINT } });
+
+/** A signature of the tag form, as `cosign download signature` prints one. */
+function tagLine(digest: string, cert: string | null, body?: unknown) {
+  return {
+    Base64Signature: "MEUC",
+    Payload: btoa(JSON.stringify(body ?? payload(digest, null))),
+    Cert: cert === null ? null : { Raw: cert, Version: 3 },
+    Chain: null,
+    Bundle: null,
+    RFC3161Timestamp: null,
+  };
+}
+/** A payload cosign accepts and a reader of exact names does not: Go reads names in any case. */
+const capitalised = (digest: string) => ({
+  Critical: {
+    identity: { "docker-reference": "x" },
+    IMAGE: { "Docker-Manifest-Digest": digest },
+    type: "cosign container image signature",
+  },
+  optional: null,
+});
+
+/** What `cosign verify` prints for a tag-form signature whose certificate it verified. */
+function tagVerified(
+  digest: string,
+  identity: string,
+  issuer: string,
+  github: Record<string, string> = {},
+) {
+  return payload(digest, { Subject: identity, Issuer: issuer, ...github });
+}
+const GITHUB_A = {
+  githubWorkflowTrigger: "push",
+  githubWorkflowSha: COMMIT,
+  githubWorkflowName: "release",
+  githubWorkflowRepository: "example/api",
+  githubWorkflowRef: "refs/tags/v1",
+};
+
+type Identified = Record<string, unknown> & {
+  signatures: (Record<string, unknown> & { claims: Record<string, string> })[];
+  identities: Record<string, unknown>[];
+};
+
+/** identify on a signer with nothing set, against the fake; the record, the calls, the log. */
+async function identified(
+  opts: Parameters<typeof fake>[0],
+  refs: string[] = [REF],
+  over: Record<string, unknown> = { key: "", password: "" },
+) {
+  const f = fake(opts);
+  try {
+    const { ctx, written, logs } = context(over);
+    await identify({ refs }, ctx);
+    return {
+      record: written[0].data as Identified,
+      written,
+      logs,
+      calls: f.calls,
+      bundles: f.bundles,
+    };
+  } finally {
+    f.restore();
+  }
+}
+
+/** identify that must fail: the error, with nothing written and no file left. */
+async function failing(
+  opts: Parameters<typeof fake>[0],
+  over: Record<string, unknown> = { key: "" },
+): Promise<string> {
+  const f = fake(opts);
+  try {
+    const { ctx, written } = context(over);
+    const err = await assertRejects(() => identify({ refs: [REF] }, ctx));
+    assertEquals(written.length, 0);
+    for (const path of f.bundles) {
+      await assertRejects(() => Deno.stat(path), Deno.errors.NotFound);
+    }
+    return String(err);
+  } finally {
+    f.restore();
+  }
+}
+
+/** The subcommands of the calls made. */
+const commands = (calls: Call[]) => calls.map((c) => c.args[0]);
+
+Deno.test("identify records who signed an image kept as a bundle: the identity, the issuer and the claims of a certificate cosign finds genuine", async () => {
+  const { record, written, calls, bundles, logs } = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [CERT_A],
+  });
+  assertEquals(written.length, 1);
+  assertEquals(written[0].spec, "identification");
+  assertEquals(
+    written[0].name,
+    "identification-registry.example.org-team-api-c02a5ac89d2d",
+  );
+  const { identifiedAt: _, signatures, ...rest } = record;
+  assertEquals(rest, {
+    ref: REF,
+    repository: "registry.example.org/team/api",
+    digest: DIGEST,
+    state: "identified",
+    certificateIdentity: ID_A,
+    oidcIssuer: ISSUER,
+    identities: [{
+      certificateIdentity: ID_A,
+      oidcIssuer: ISSUER,
+      signatures: 1,
+    }],
+    identityChecked: false,
+    signaturesFound: 1,
+    certificatesGenuine: 1,
+    keySigned: 0,
+    otherStatements: 0,
+    tagSignaturesUnlisted: false,
+    forms: ["bundle"],
+    reason: "",
+  });
+  assertEquals(signatures, [{
+    form: "bundle",
+    signedWith: "certificate",
+    subjectMatches: true,
+    certificateGenuine: true,
+    certificateIdentity: ID_A,
+    oidcIssuer: ISSUER,
+    claims: {
+      githubWorkflowTrigger: "push",
+      githubWorkflowSha: COMMIT,
+      githubWorkflowName: "release",
+      githubWorkflowRepository: "example/api",
+      githubWorkflowRef: "refs/tags/v1",
+      sourceRepositoryUri: SOURCE,
+      sourceRepositoryDigest: COMMIT,
+      sourceRepositoryRef: "refs/tags/v1",
+      buildTrigger: "push",
+      [`${FULCIO}99`]: "a claim this version has no name for",
+    },
+    unprovenIdentity: "",
+    unprovenIssuer: "",
+    unprovenKeyFingerprint: "",
+    reason: "",
+    withheld: 0,
+  }]);
+  // The record passes the schema swamp checks it against.
+  model.resources.identification.schema.parse(record);
+  // The download, which proves nothing; cosign tree, to know every lookup
+  // answered; one check of the one bundle, with patterns that match any
+  // identity and any issuer; and the tag form, which cosign reads beside
+  // bundles only when told to.
+  assertEquals(calls[0].args, ["download", "signature", "--", REF]);
+  assertEquals(calls[1].args, ["tree", "--", REF]);
+  assertEquals(calls[3].args, [
+    "verify",
+    "--new-bundle-format=false",
+    "--certificate-identity-regexp",
+    ".*",
+    "--certificate-oidc-issuer-regexp",
+    ".*",
+    "--output",
+    "json",
+    "--",
+    REF,
+  ]);
+  assertEquals(calls[2].args, [
+    "verify-blob-attestation",
+    "--bundle",
+    bundles[0],
+    "--certificate-identity-regexp",
+    ".*",
+    "--certificate-oidc-issuer-regexp",
+    ".*",
+    "--digest",
+    hex(DIGEST),
+    "--digestAlg",
+    "sha256",
+    "--type",
+    SIGN_TYPE,
+  ]);
+  assertEquals(calls.length, 4);
+  // The bundle file was made in the test's own directory and is gone.
+  assertEquals(bundles.length, 1);
+  assert(bundles[0].startsWith(`${SCRATCH}/cosign-bundle-`));
+  await assertRejects(() => Deno.stat(bundles[0]), Deno.errors.NotFound);
+  // The log line says it is no comparison.
+  assert(logs.some((l) => l.includes("not compared with any identity")));
+  // The method is a read, so swamp runs no check before it.
+  assertEquals(model.methods.identify.kind, "read");
+});
+
+Deno.test("identify honours trustedRoot, the registry switches and cosignBinary, never ignores the log, and hands cosign no key", async () => {
+  const { record, calls, bundles } = await identified(
+    {
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      genuine: [CERT_A],
+    },
+    [REF],
+    {
+      key: PRIVATE,
+      password: MARKER,
+      tlog: false,
+      trustedRoot: "trust/root.json",
+      insecureRegistry: true,
+      httpRegistry: true,
+      cosignBinary: "/opt/cosign",
+    },
+  );
+  assertEquals(record.state, "identified");
+  assertEquals(calls[0].args, [
+    "download",
+    "signature",
+    "--allow-insecure-registry",
+    "--allow-http-registry",
+    "--",
+    REF,
+  ]);
+  assertEquals(calls[1].args, [
+    "tree",
+    "--allow-insecure-registry",
+    "--allow-http-registry",
+    "--",
+    REF,
+  ]);
+  assertEquals(calls[2].args.slice(-2), [
+    "--trusted-root",
+    `${REPO}/trust/root.json`,
+  ]);
+  assertEquals(calls[2].args[2], bundles[0]);
+  assertEquals(calls[3].args.slice(6), [
+    "--trusted-root",
+    `${REPO}/trust/root.json`,
+    "--allow-insecure-registry",
+    "--allow-http-registry",
+    "--output",
+    "json",
+    "--",
+    REF,
+  ]);
+  assertEquals(calls.length, 4);
+  for (const call of calls) {
+    assertEquals(call.bin, "/opt/cosign");
+    assertEquals(call.cwd, REPO);
+    // No key and no passphrase: identify signs nothing.
+    assertEquals(call.env, {});
+    assert(!call.args.includes("--insecure-ignore-tlog"));
+    assert(!call.args.includes("--key"));
+  }
+});
+
+Deno.test("cosign is handed a bundle of only the fields that were read, so it cannot check one certificate while another is recorded", async () => {
+  // cosign reads a bundle's fields under more than one spelling. A line
+  // that holds a forged certificate where the model reads, and the real
+  // one where only cosign would, must not come out as genuine.
+  const twoSpellings = {
+    ...certBundle(DIGEST, CERT_FORGED),
+    verification_material: {
+      certificate: { rawBytes: CERT_A },
+      tlogEntries: [{}],
+    },
+  };
+  const rawBytesTwice = bundle(DIGEST, {
+    certificate: { rawBytes: CERT_FORGED, raw_bytes: CERT_A },
+    tlogEntries: [{}],
+  });
+  // The certificate is read before the chain of the older bundle versions.
+  const certificateAndChain = bundle(DIGEST, {
+    certificate: { rawBytes: CERT_FORGED },
+    x509CertificateChain: { certificates: [{ rawBytes: CERT_A }] },
+    tlogEntries: [{}],
+  });
+  for (const line of [twoSpellings, rawBytesTwice, certificateAndChain]) {
+    const { record, calls } = await identified({
+      downloads: { [DIGEST]: [line] },
+      genuine: [CERT_A],
+    });
+    assertEquals(record.state, "unproven");
+    assertEquals(record.certificatesGenuine, 0);
+    assertEquals(record.signatures[0].claims, {});
+    assertEquals(record.signatures[0].unprovenIdentity, ID_A);
+    assertEquals(commands(calls), [
+      "download",
+      "tree",
+      "verify-blob-attestation",
+      "verify",
+    ]);
+    assert(!JSON.stringify(record).includes(VICTIM));
+  }
+  // A chain alone, as bundles before version 0.3 hold one, is read and
+  // handed over as a chain.
+  const { record, calls, bundles } = await identified({
+    downloads: {
+      [DIGEST]: [
+        bundle(DIGEST, {
+          x509CertificateChain: {
+            certificates: [{ rawBytes: CERT_A }, { rawBytes: CERT_B }],
+          },
+          tlogEntries: [{}],
+          timestampVerificationData: {},
+          somethingElse: MARKER,
+        }),
+      ],
+    },
+    genuine: [CERT_A],
+  });
+  assertEquals(record.state, "identified");
+  assertEquals(record.certificateIdentity, ID_A);
+  assertEquals(calls[2].args[2], bundles[0]);
+  // A statement that spells its type as protobuf's JSON also allows.
+  const snake = bundle(DIGEST, { certificate: { rawBytes: CERT_A } });
+  snake.dsseEnvelope.payload = btoa(JSON.stringify({
+    subject: [{ digest: { sha256: hex(DIGEST) } }],
+    predicate_type: SIGN_TYPE,
+  }));
+  const spelled = await identified({ downloads: { [DIGEST]: [snake] } });
+  assertEquals(spelled.record.signaturesFound, 1);
+  assertEquals(spelled.record.otherStatements, 0);
+});
+
+Deno.test("identify reads the tag form too, and records for it only what cosign verify itself printed", async () => {
+  const { record, calls } = await identified(
+    {
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A)] },
+    },
+    [REF],
+    { key: "", trustedRoot: "root.json", httpRegistry: true },
+  );
+  assertEquals(record.state, "identified");
+  assertEquals(record.certificateIdentity, ID_A);
+  assertEquals(record.oidcIssuer, ISSUER);
+  assertEquals(record.forms, ["tag"]);
+  assertEquals(record.signaturesFound, 1);
+  assertEquals(record.certificatesGenuine, 1);
+  assertEquals(record.signatures, [{
+    form: "tag",
+    signedWith: "certificate",
+    subjectMatches: true,
+    certificateGenuine: true,
+    certificateIdentity: ID_A,
+    oidcIssuer: ISSUER,
+    // The five claims cosign prints, and none read from the certificate.
+    claims: GITHUB_A,
+    unprovenIdentity: "",
+    unprovenIssuer: "",
+    unprovenKeyFingerprint: "",
+    reason: "",
+    withheld: 0,
+  }]);
+  model.resources.identification.schema.parse(record);
+  // The download, cosign tree, the check of the tag form, and its confirmation.
+  assertEquals(calls.map((c) => c.args), [
+    ["download", "signature", "--allow-http-registry", "--", REF],
+    ["tree", "--allow-http-registry", "--", REF],
+    [
+      "verify",
+      "--certificate-identity-regexp",
+      ".*",
+      "--certificate-oidc-issuer-regexp",
+      ".*",
+      "--trusted-root",
+      `${REPO}/root.json`,
+      "--allow-http-registry",
+      "--output",
+      "json",
+      "--",
+      REF,
+    ],
+    // What cosign printed, given back as exact requirements on the
+    // certificate, each as one argument.
+    [
+      "verify",
+      `--certificate-identity=${ID_A}`,
+      `--certificate-oidc-issuer=${ISSUER}`,
+      "--certificate-github-workflow-trigger=push",
+      `--certificate-github-workflow-sha=${COMMIT}`,
+      "--certificate-github-workflow-name=release",
+      "--certificate-github-workflow-repository=example/api",
+      "--certificate-github-workflow-ref=refs/tags/v1",
+      "--trusted-root",
+      `${REPO}/root.json`,
+      "--allow-http-registry",
+      "--output",
+      "json",
+      "--",
+      REF,
+    ],
+  ]);
+  for (const call of calls) assertEquals(call.env, {});
+});
+
+Deno.test("in the tag form a forged certificate adds nothing: not a claim, not a genuine mark, however many there are and however the payload is spelled", async () => {
+  // Twenty layers with a forged certificate, then twenty real ones. cosign
+  // verifies the real ones; the forged claim must be nowhere in the record.
+  const many = await identified({
+    downloads: {
+      [DIGEST]: [
+        ...Array.from({ length: 20 }, () => tagLine(DIGEST, CERT_FORGED)),
+        ...Array.from({ length: 20 }, () => tagLine(DIGEST, CERT_A)),
+      ],
+    },
+    tagVerified: {
+      [DIGEST]: Array.from(
+        { length: 20 },
+        () => tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A),
+      ),
+    },
+  });
+  assertEquals(many.record.state, "identified");
+  assertEquals(many.record.certificateIdentity, ID_A);
+  assertEquals(many.record.signaturesFound, 40);
+  assertEquals(many.record.certificatesGenuine, 20);
+  assertEquals(many.record.identities, [{
+    certificateIdentity: ID_A,
+    oidcIssuer: ISSUER,
+    signatures: 20,
+  }]);
+  assertEquals(
+    many.record.reason,
+    "other signatures on this image: 20 that could not be checked",
+  );
+  assertEquals(many.record.signatures.length, 20);
+  for (const s of many.record.signatures) {
+    assertEquals(s.certificateGenuine, true);
+    assertEquals(s.claims, GITHUB_A);
+  }
+  assert(!JSON.stringify(many.written).includes(VICTIM));
+  assert(!many.logs.join("\n").includes(VICTIM));
+
+  // Every line counts, also past the twentieth: 25 real signatures.
+  const all = await identified({
+    downloads: {
+      [DIGEST]: Array.from({ length: 25 }, () => tagLine(DIGEST, CERT_A)),
+    },
+    tagVerified: {
+      [DIGEST]: Array.from(
+        { length: 25 },
+        () => tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A),
+      ),
+    },
+  });
+  assertEquals(all.record.signaturesFound, 25);
+  assertEquals(all.record.certificatesGenuine, 25);
+  assertEquals(all.record.identities[0].signatures, 25);
+  assertEquals(all.record.signatures.length, 20);
+  assertEquals(all.record.reason, "");
+  assertEquals(commands(all.calls), ["download", "tree", "verify", "verify"]);
+
+  // A real signature whose payload is spelled in capitals, which cosign
+  // accepts, beside a forged certificate.
+  const spelled = await identified({
+    downloads: {
+      [DIGEST]: [
+        tagLine(DIGEST, CERT_FORGED),
+        tagLine(DIGEST, CERT_A, capitalised(DIGEST)),
+      ],
+    },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A)] },
+  });
+  assertEquals(spelled.record.state, "identified");
+  assertEquals(spelled.record.certificatesGenuine, 1);
+  assertEquals(spelled.record.signaturesFound, 2);
+  assertEquals(spelled.record.signatures[0].claims, GITHUB_A);
+  assertEquals(spelled.record.signatures[1], {
+    form: "tag",
+    signedWith: "certificate",
+    subjectMatches: false,
+    certificateGenuine: false,
+    certificateIdentity: "",
+    oidcIssuer: "",
+    claims: {},
+    unprovenIdentity: "",
+    unprovenIssuer: "",
+    unprovenKeyFingerprint: "",
+    reason:
+      "cosign verified 1 of the 2 signatures with a certificate, and in the tag form it does not say which",
+    withheld: 0,
+  });
+  assert(!JSON.stringify(spelled.written).includes(VICTIM));
+
+  // What cosign printed is for another digest: it is not about this image.
+  const other = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST2, ID_A, ISSUER, GITHUB_A)] },
+  });
+  assertEquals(other.record.state, "unproven");
+  assertEquals(other.record.certificateIdentity, "");
+  assertEquals(other.record.certificatesGenuine, 0);
+  assertEquals(
+    other.record.signatures[0].reason,
+    "cosign verified 0 of the 1 signatures with a certificate, and in the tag form it does not say which",
+  );
+  // The certificate cosign did not verify names no one, not even as unproven.
+  assert(!JSON.stringify(other.record).includes(ID_A));
+
+  // cosign verified none: its reason is the record's.
+  const none = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A), tagLine(DIGEST, null)] },
+    tagVerified: {},
+  });
+  assertEquals(none.record.state, "unproven");
+  assertEquals(none.record.keySigned, 1);
+  assertEquals(none.record.signaturesFound, 2);
+  assertStringIncludes(
+    String(
+      none.record.signatures.find((s) => s.signedWith === "certificate")!
+        .reason,
+    ),
+    "no matching signatures: error verifying bundle",
+  );
+
+  // Two identities in the tag form are two identities.
+  const two = await identified({
+    downloads: {
+      [DIGEST]: [tagLine(DIGEST, CERT_A), tagLine(DIGEST, CERT_B)],
+    },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A),
+        tagVerified(DIGEST, ID_B, ISSUER_B),
+      ],
+    },
+  });
+  assertEquals(two.record.state, "several-identities");
+  assertEquals(two.record.certificateIdentity, "");
+  assertEquals(two.record.identities.length, 2);
+
+  // What cosign prints goes through the same rule as any other text.
+  const odd = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, `https://a.example/\u202eevil`, ISSUER, {
+          githubWorkflowName: `x\u0085y`,
+          githubWorkflowRef: "refs/heads/main",
+          notAClaim: MARKER,
+        }),
+      ],
+    },
+  });
+  assertEquals(odd.record.state, "unproven");
+  assertEquals(odd.record.signatures[0].certificateGenuine, true);
+  assertEquals(odd.record.signatures[0].certificateIdentity, "");
+  // An identity that cannot be stored cannot be confirmed, so no claim is
+  // kept, and cosign is not asked to confirm an empty one.
+  assertEquals(odd.record.signatures[0].claims, {});
+  assertEquals(
+    odd.record.signatures[0].reason,
+    "the certificate is genuine, and its identity or its issuer is not text that can be stored",
+  );
+  assertEquals(commands(odd.calls), ["download", "tree", "verify"]);
+  assertEquals(odd.record.signatures[0].withheld, 3);
+  assert(!JSON.stringify(odd.record).includes(MARKER));
+});
+
+Deno.test("an image with no signature is a record, not a failure, and so is one that is not in the registry", async () => {
+  const unsigned = await identified({});
+  assertEquals(unsigned.record.state, "unsigned");
+  assertEquals(unsigned.record.reason, "no signature found");
+  assertEquals(unsigned.record.certificateIdentity, "");
+  assertEquals(unsigned.record.oidcIssuer, "");
+  assertEquals(unsigned.record.signaturesFound, 0);
+  assertEquals(unsigned.record.signatures, []);
+  assertEquals(unsigned.record.identities, []);
+  assertEquals(unsigned.record.identityChecked, false);
+  // cosign tree is asked before an image is called unsigned.
+  assertEquals(unsigned.calls.map((c) => c.args), [
+    ["download", "signature", "--", REF],
+    ["tree", "--", REF],
+  ]);
+
+  const gone = await identified({
+    downloadError: {
+      [DIGEST]:
+        `entity not found in registry, error: GET https://registry.example.org/v2/team/api/manifests/${DIGEST}: MANIFEST_UNKNOWN: manifest unknown`,
+    },
+  });
+  assertEquals(gone.record.state, "not-found");
+  assertStringIncludes(String(gone.record.reason), "MANIFEST_UNKNOWN");
+  assertEquals(gone.record.certificateIdentity, "");
+  assertEquals(gone.record.signaturesFound, 0);
+  assertEquals(commands(gone.calls), ["download"]);
+
+  // The reference is quoted in cosign's messages and must not decide how
+  // one is read: an unsigned image in a repository named after a registry
+  // error, or after cosign tree's own words, is unsigned.
+  for (
+    const repository of [
+      "registry.example.org/MANIFEST_UNKNOWN/api",
+      "registry.example.org/UNAUTHORIZED/api",
+      "registry.example.org/sigstore.dev/cosign/sign/v1",
+    ]
+  ) {
+    const odd = await identified({}, [`${repository}@${DIGEST}`]);
+    assertEquals(odd.record.state, "unsigned");
+  }
+
+  // Attestations stored the same way are not signatures.
+  const attested = await identified({
+    downloads: {
+      [DIGEST]: [
+        bundle(DIGEST, { certificate: { rawBytes: CERT_A } }, SLSA1),
+      ],
+    },
+    genuine: [CERT_A],
+  });
+  assertEquals(attested.record.state, "unsigned");
+  assertEquals(attested.record.otherStatements, 1);
+  assertEquals(attested.record.signaturesFound, 0);
+  assertEquals(
+    attested.record.reason,
+    "no signature found; identify does not read attestations, and the image has 1",
+  );
+  assertEquals(commands(attested.calls), ["download", "tree", "verify"]);
+  // An artifact of another kind beside the image, such as a signature of
+  // another tool, is no Sigstore bundle and does not contradict "unsigned".
+  const listed = await identified({ treeLists: { [DIGEST]: ["foreign"] } });
+  assertEquals(listed.record.state, "unsigned");
+});
+
+Deno.test("unsigned means the registry answered and there was nothing: a lookup that failed fails the method", async () => {
+  const limited =
+    `getting referrers: GET https://registry.example.org/v2/team/api/referrers/${DIGEST}: TOOMANYREQUESTS: rate limited`;
+  // cosign download signature says "no signatures" for a rate limit, a
+  // refused login and a server error on the lookup of the bundles.
+  for (
+    const failure of [
+      limited,
+      limited.replace("TOOMANYREQUESTS: rate limited", "UNAUTHORIZED: login"),
+      limited.replace("TOOMANYREQUESTS: rate limited", "UNKNOWN: injected"),
+    ]
+  ) {
+    const err = await failing({ treeError: { [DIGEST]: failure } });
+    assertStringIncludes(err, "cosign tree -- " + REF);
+    assertStringIncludes(err, "exited 1");
+    assertStringIncludes(err, failure.slice(-20));
+    assertStringIncludes(err, "says nothing while a lookup fails");
+  }
+  // The same fault on an image that also has signatures under a tag: the
+  // tag form must not be read in place of the bundles.
+  const f = fake({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A)] },
+    treeError: { [DIGEST]: limited },
+  });
+  try {
+    const { ctx, written } = context({ key: "" });
+    await assertRejects(() => identify({ refs: [REF] }, ctx));
+    assertEquals(written.length, 0);
+    assertEquals(commands(f.calls), ["download", "tree"]);
+  } finally {
+    f.restore();
+  }
+  // The lookup failed for the download and worked for cosign tree: the two
+  // answers disagree, and nothing is recorded.
+  assertStringIncludes(
+    await failing({ treeLists: { [DIGEST]: ["bundle"] } }),
+    "cosign tree lists 1 bundles and cosign download signature returned 0",
+  );
+  assertStringIncludes(
+    await failing({ treeLists: { [DIGEST]: ["tag"] } }),
+    "cosign tree lists signatures under a tag that cosign download signature did not return",
+  );
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER)] },
+      treeLists: { [DIGEST]: ["tag", "bundle"] },
+    }),
+    "cosign tree lists 1 bundles and cosign download signature returned 0",
+  );
+  // Two bundles listed, one returned: the other one's lookup failed.
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      genuine: [CERT_A],
+      treeLists: { [DIGEST]: ["bundle", "bundle"] },
+    }),
+    "cosign tree lists 2 bundles and cosign download signature returned 1",
+  );
+  // What cosign tree calls a bundle is a label its writer chose. A real
+  // image has an attestation labelled as a signature: as many bundles came
+  // back as are listed, and each one's own statement says what it is.
+  const mislabelled = await identified({
+    downloads: {
+      [DIGEST]: [
+        certBundle(DIGEST, CERT_A),
+        bundle(DIGEST, { certificate: { rawBytes: CERT_A } }, SLSA1),
+      ],
+    },
+    genuine: [CERT_A],
+    treeLists: { [DIGEST]: ["bundle", "bundle"] },
+  });
+  assertEquals(mislabelled.record.state, "identified");
+  assertEquals(mislabelled.record.signaturesFound, 1);
+  assertEquals(mislabelled.record.otherStatements, 1);
+  const onlyLabel = await identified({
+    downloads: {
+      [DIGEST]: [
+        bundle(DIGEST, { certificate: { rawBytes: CERT_A } }, SLSA1),
+      ],
+    },
+    treeLists: { [DIGEST]: ["bundle"] },
+  });
+  assertEquals(onlyLabel.record.state, "unsigned");
+  assertEquals(onlyLabel.record.otherStatements, 1);
+  // A signature labelled as an attestation is still a signature.
+  const other = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [CERT_A],
+    treeLists: { [DIGEST]: ["attestation"] },
+  });
+  assertEquals(other.record.state, "identified");
+  // An artifact of a kind nobody registered, beside an unsigned image.
+  for (const kind of ["odd", "foreign"] as const) {
+    const beside = await identified({ treeLists: { [DIGEST]: [kind] } });
+    assertEquals(beside.record.state, "unsigned");
+  }
+  // An attestation bundle that is listed and did not come back: cosign
+  // then reads the tag form in its place, so nothing is recorded.
+  assertStringIncludes(
+    await failing({ treeLists: { [DIGEST]: ["attestation"] } }),
+    "cosign tree lists 1 bundles and cosign download signature returned 0",
+  );
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, null)] },
+      treeLists: { [DIGEST]: ["attestation", "tag"] },
+    }),
+    "cosign tree lists 1 bundles and cosign download signature returned 0",
+  );
+  // "no signatures" beside the words of a fault is a fault.
+  assertStringIncludes(
+    await failing({
+      downloadError: {
+        [DIGEST]: "no signatures associated: UNAUTHORIZED: authentication",
+      },
+    }),
+    "cosign download signature -- " + REF,
+  );
+});
+
+Deno.test("an image signed with a key has no identity to read, in either form; nothing of it is checked, and the record says so", async () => {
+  for (const line of [keyBundle(DIGEST), tagLine(DIGEST, null)]) {
+    const { record, calls } = await identified({
+      downloads: { [DIGEST]: [line] },
+    });
+    assertEquals(record.state, "key-signed");
+    assertStringIncludes(String(record.reason), "made with a key");
+    assertStringIncludes(String(record.reason), "was not checked");
+    assertStringIncludes(String(record.reason), "nothing here says which key");
+    assertEquals(record.certificateIdentity, "");
+    assertEquals(record.oidcIssuer, "");
+    assertEquals(record.identities, []);
+    assertEquals(record.keySigned, 1);
+    assertEquals(record.certificatesGenuine, 0);
+    assertEquals(record.signatures[0].signedWith, "key");
+    assertEquals(record.signatures[0].certificateGenuine, false);
+    // No check of the signature: the download, and cosign tree for the tag form.
+    assertEquals(
+      commands(calls),
+      "Payload" in line ? ["download", "tree"] : ["download", "tree", "verify"],
+    );
+  }
+  // The bundle form carries a hint of the key, written as describe writes
+  // a fingerprint, under a name that says it is not proven.
+  const hinted = await identified({
+    downloads: { [DIGEST]: [keyBundle(DIGEST)] },
+  });
+  assertEquals(
+    hinted.record.signatures[0].unprovenKeyFingerprint,
+    HINT_FINGERPRINT,
+  );
+  assert(!("publicKeyFingerprint" in hinted.record.signatures[0]));
+  // A hint that is not the base64 of a sha256 is not stored.
+  const odd = await identified({
+    downloads: {
+      [DIGEST]: [bundle(DIGEST, { publicKey: { hint: MARKER } })],
+    },
+  });
+  assertEquals(odd.record.signatures[0].unprovenKeyFingerprint, "");
+  assert(!JSON.stringify(odd.record).includes(MARKER));
+  const short = await identified({
+    downloads: {
+      [DIGEST]: [bundle(DIGEST, { publicKey: { hint: btoa(MARKER) } })],
+    },
+  });
+  assertEquals(short.record.signatures[0].unprovenKeyFingerprint, "");
+  assertEquals(short.record.state, "key-signed");
+  // A tag-form key signature whose payload is spelled in capitals is about
+  // this digest, as cosign reads it; one that names the digest twice is not.
+  const spelled = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, null, capitalised(DIGEST))] },
+  });
+  assertEquals(spelled.record.state, "key-signed");
+  const twice = await identified({
+    downloads: {
+      [DIGEST]: [
+        tagLine(DIGEST, null, {
+          ...payload(DIGEST, null),
+          ...capitalised(DIGEST2),
+        }),
+      ],
+    },
+  });
+  assertEquals(twice.record.state, "unproven");
+  assertEquals(twice.record.keySigned, 0);
+});
+
+Deno.test("several identities are listed and none is chosen; one identity beside a key's signature is still one", async () => {
+  const two = await identified({
+    downloads: {
+      [DIGEST]: [
+        certBundle(DIGEST, CERT_A),
+        certBundle(DIGEST, CERT_B),
+        certBundle(DIGEST, CERT_A),
+      ],
+    },
+    genuine: [CERT_A, CERT_B],
+  });
+  assertEquals(two.record.state, "several-identities");
+  assertEquals(two.record.certificateIdentity, "");
+  assertEquals(two.record.oidcIssuer, "");
+  assertEquals(two.record.identities, [
+    { certificateIdentity: ID_A, oidcIssuer: ISSUER, signatures: 2 },
+    { certificateIdentity: ID_B, oidcIssuer: ISSUER_B, signatures: 1 },
+  ]);
+  assertEquals(two.record.certificatesGenuine, 3);
+  assertStringIncludes(String(two.record.reason), "2 identities");
+  assertEquals(commands(two.calls), [
+    "download",
+    "tree",
+    "verify-blob-attestation",
+    "verify-blob-attestation",
+    "verify-blob-attestation",
+    "verify",
+  ]);
+
+  // The same identity from another issuer is another identity.
+  const issuers = await identified({
+    downloads: {
+      [DIGEST]: [
+        certBundle(DIGEST, CERT_A),
+        certBundle(DIGEST, issued(ID_A, ISSUER_B)),
+      ],
+    },
+    genuine: [CERT_A, issued(ID_A, ISSUER_B)],
+  });
+  assertEquals(issuers.record.state, "several-identities");
+  assertEquals(issuers.record.oidcIssuer, "");
+
+  const mixed = await identified({
+    downloads: {
+      [DIGEST]: [keyBundle(DIGEST), certBundle(DIGEST, CERT_A)],
+    },
+    genuine: [CERT_A],
+  });
+  assertEquals(mixed.record.state, "identified");
+  assertEquals(mixed.record.certificateIdentity, ID_A);
+  assertEquals(mixed.record.keySigned, 1);
+  assertEquals(
+    mixed.record.reason,
+    "other signatures on this image: 1 made with a key, not checked",
+  );
+  // The signature that names the identity comes first.
+  assertEquals(mixed.record.signatures.map((s) => s.signedWith), [
+    "certificate",
+    "key",
+  ]);
+});
+
+Deno.test("a certificate cosign does not find genuine names no identity: what it says is kept apart, as unproven", async () => {
+  const { record } = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [],
+  });
+  assertEquals(record.state, "unproven");
+  assertEquals(record.certificateIdentity, "");
+  assertEquals(record.oidcIssuer, "");
+  assertEquals(record.identities, []);
+  assertEquals(record.certificatesGenuine, 0);
+  assertEquals(record.signaturesFound, 1);
+  const [s] = record.signatures;
+  assertEquals(s.certificateGenuine, false);
+  assertEquals(s.certificateIdentity, "");
+  assertEquals(s.oidcIssuer, "");
+  assertEquals(s.claims, {});
+  assertEquals(s.unprovenIdentity, ID_A);
+  assertEquals(s.unprovenIssuer, ISSUER);
+  assertEquals(
+    s.reason,
+    "failed to verify log inclusion: transparency log certificate does not match",
+  );
+  assertEquals(
+    record.reason,
+    "no identity could be established: failed to verify log inclusion: transparency log certificate does not match",
+  );
+  // The identity appears in the record only in the fields that say unproven.
+  const { unprovenIdentity: _i, unprovenIssuer: _o, ...proven } = s;
+  assert(!JSON.stringify({ ...record, signatures: [proven] }).includes(ID_A));
+
+  // A genuine signature beside a forged one for another identity: the
+  // forged one adds no identity.
+  const forged = await identified({
+    downloads: {
+      [DIGEST]: [certBundle(DIGEST, CERT_B), certBundle(DIGEST, CERT_A)],
+    },
+    genuine: [CERT_A],
+  });
+  assertEquals(forged.record.state, "identified");
+  assertEquals(forged.record.certificateIdentity, ID_A);
+  assertEquals(forged.record.identities.length, 1);
+  assertEquals(
+    forged.record.reason,
+    "other signatures on this image: 1 that could not be checked",
+  );
+  assertEquals(forged.record.signatures[1].unprovenIdentity, ID_B);
+  assertEquals(forged.record.signatures[1].certificateIdentity, "");
+
+  // Every way cosign has of saying a bundle does not check out is a record.
+  for (
+    const bundleError of [
+      "failed to verify log inclusion: not enough verified log entries from transparency log: 0 < 1",
+      "failed to verify leaf certificate: leaf certificate verification failed",
+      "failed to verify signature: could not verify envelope",
+      "bundle does not contain cert for verification, please provide public key",
+    ]
+  ) {
+    const said = await identified({
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      bundleError,
+    });
+    assertEquals(said.record.state, "unproven");
+    assertEquals(said.record.signatures[0].reason, bundleError);
+  }
+});
+
+Deno.test("a bundle that is about another digest, has no statement, or no certificate that can be read, is never checked and never counts", async () => {
+  const other = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST2, CERT_A)] },
+    genuine: [CERT_A],
+  });
+  assertEquals(other.record.state, "unproven");
+  assertEquals(other.record.certificateIdentity, "");
+  assertEquals(other.record.signatures[0].subjectMatches, false);
+  assertEquals(
+    other.record.signatures[0].reason,
+    "this signature is about another digest",
+  );
+  assertEquals(commands(other.calls), ["download", "tree", "verify"]);
+
+  // A key's signature about another digest is not a signature of this image.
+  const key = await identified({
+    downloads: { [DIGEST]: [keyBundle(DIGEST2)] },
+  });
+  assertEquals(key.record.state, "unproven");
+  assertEquals(key.record.keySigned, 0);
+  const tagKey = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST2, null)] },
+  });
+  assertEquals(tagKey.record.state, "unproven");
+  assertEquals(tagKey.record.keySigned, 0);
+
+  const noStatement = await identified({
+    downloads: {
+      [DIGEST]: [{
+        mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+        verificationMaterial: { certificate: { rawBytes: CERT_A } },
+        dsseEnvelope: { payload: "not base64 json" },
+      }, {
+        verificationMaterial: { certificate: { rawBytes: CERT_A } },
+        messageSignature: { signature: "MEUC" },
+      }],
+    },
+    genuine: [CERT_A],
+  });
+  assertEquals(noStatement.record.state, "unproven");
+  assertEquals(noStatement.record.signatures.map((s) => s.reason), [
+    "the bundle holds no in-toto statement",
+    "the bundle holds no in-toto statement",
+  ]);
+  assertEquals(commands(noStatement.calls), ["download", "tree", "verify"]);
+
+  for (
+    const raw of ["", "AAAA", "not base64!", 7, null, "A".repeat(40000), {
+      rawBytes: CERT_A,
+    }]
+  ) {
+    const unread = await identified({
+      downloads: {
+        [DIGEST]: [bundle(DIGEST, { certificate: { rawBytes: raw } })],
+      },
+      genuine: [CERT_A],
+    });
+    assertEquals(unread.record.state, "unproven");
+    assertEquals(unread.record.certificateIdentity, "");
+    assertEquals(unread.record.certificatesGenuine, 0);
+    assertEquals(
+      unread.record.signatures[0].reason,
+      "its certificate cannot be read",
+    );
+    assertEquals(commands(unread.calls), ["download", "tree", "verify"]);
+  }
+
+  // A certificate far larger than Fulcio issues is not read at all.
+  const huge = issued(ID_A, ISSUER, { 12: "x".repeat(30000) });
+  const large = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, huge)] },
+    genuine: [huge],
+  });
+  assertEquals(large.record.state, "unproven");
+  assertEquals(
+    large.record.signatures[0].reason,
+    "its certificate cannot be read",
+  );
+  assertEquals(commands(large.calls), ["download", "tree", "verify"]);
+
+  const nothing = await identified({
+    downloads: { [DIGEST]: [bundle(DIGEST, {})] },
+  });
+  assertEquals(nothing.record.state, "unproven");
+  assertEquals(nothing.record.signatures[0].signedWith, "unknown");
+  assertEquals(
+    nothing.record.signatures[0].reason,
+    "the bundle holds no certificate and no key",
+  );
+});
+
+Deno.test("identify fails, and records nothing for that image, when cosign prints what is not a signature list or cannot do its work", async () => {
+  assertStringIncludes(
+    await failing({ downloads: { [DIGEST]: "Signed by someone\n" } }),
+    "printed a line that is not JSON",
+  );
+  assertStringIncludes(
+    await failing({ downloads: { [DIGEST]: '["a"]\n' } }),
+    "JSON that is not an object",
+  );
+  assertStringIncludes(
+    await failing({ downloads: { [DIGEST]: "7\n" } }),
+    "JSON that is not an object",
+  );
+  assertStringIncludes(
+    await failing({ downloads: { [DIGEST]: [{ kind: "something else" }] } }),
+    "neither a Sigstore bundle nor a signature",
+  );
+  // A registry that does not answer is not an unsigned image.
+  const refused = await failing({
+    downloadError: {
+      [DIGEST]:
+        'Get "https://registry.example.org/v2/": dial tcp: connection refused',
+    },
+  });
+  assertStringIncludes(refused, "cosign download signature -- " + REF);
+  assertStringIncludes(refused, "exited 1");
+  assertStringIncludes(refused, "connection refused");
+  // Nor is a login that is refused.
+  assertStringIncludes(
+    await failing({
+      downloadError: { [DIGEST]: "UNAUTHORIZED: authentication required" },
+    }),
+    "UNAUTHORIZED",
+  );
+  // A trusted root that cannot be loaded says nothing about the signature:
+  // one that is not there, and one that is not JSON, in cosign's words.
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      genuine: [CERT_A],
+    }, { key: "", trustedRoot: "missing.json" }),
+    "loading trusted root",
+  );
+  for (
+    const bundleError of [
+      "setting trusted material: loading trusted root: failed to proto-json unmarshal trusted root: proto: syntax error (line 1:1): invalid value not",
+      "setting trusted material: loading trusted root: unsupported TrustedRoot media type: ",
+      // The words of a verdict in front of a call that could not be made.
+      // The words of a verdict that are not at the start are no verdict.
+      "setting trusted material: the root says: failed to verify signature",
+      "failed to verify log inclusion: fetching the log's key: dial tcp 192.0.2.1:443: i/o timeout",
+      'failed to verify signature: Get "https://tuf.example.org/root.json": context deadline exceeded',
+      "reading /tmp/x: open /tmp/x: no such file or directory",
+      "something this version has never seen",
+    ]
+  ) {
+    const err = await failing({
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      bundleError,
+    });
+    assertStringIncludes(err, "cosign verify-blob-attestation --bundle");
+    assertStringIncludes(err, bundleError.slice(0, 40));
+  }
+  // The tag form: a log that cannot be reached is not a verdict, and
+  // neither is an error cosign has no verdict words for.
+  for (
+    const tagError of [
+      'no matching signatures: searching log query: Post "https://rekor.example.org/api/v1/log/entries/retrieve": dial tcp 192.0.2.1:443: connect: connection refused',
+      "no matching signatures: context deadline exceeded",
+      // The payload of a signature could not be fetched, whatever the answer.
+      "no matching signatures: GET https://registry.example.org/v2/team/api/blobs/sha256:ab: UNKNOWN: injected",
+      "no matching signatures: GET https://registry.example.org/v2/team/api/blobs/sha256:ab: BLOB_UNKNOWN: blob unknown to registry",
+      "no signatures found",
+      "loading trusted root: proto: syntax error",
+    ]
+  ) {
+    const err = await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      tagVerified: {},
+      tagError,
+    });
+    assertStringIncludes(err, "cosign verify --certificate-identity-regexp");
+    assertStringIncludes(err, tagError.slice(0, 30));
+  }
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      fail: "verify",
+    }),
+    "verify: boom",
+  );
+  // What cosign verify prints for the tag form must be its JSON.
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      tagVerified: { [DIGEST]: "not a list" as unknown as unknown[] },
+    }),
+    "not an array",
+  );
+});
+
+Deno.test("identify says so when cosign is not installed, and passes a cancelled run on as it is", async () => {
+  const f = fake({ spawn: new Deno.errors.NotFound("No such file: cosign-x") });
+  try {
+    const { ctx, written } = context({ key: "", cosignBinary: "cosign-x" });
+    const err = await assertRejects(() => identify({ refs: [REF] }, ctx));
+    assertStringIncludes(String(err), "cosign-x could not be run");
+    assertStringIncludes(String(err), "install cosign");
+    assertStringIncludes(String(err), "set cosignBinary");
+    assertEquals(written.length, 0);
+  } finally {
+    f.restore();
+  }
+  const abort = new AbortController();
+  abort.abort();
+  const cancelled = new DOMException("The operation was aborted", "AbortError");
+  const g = fake({ spawn: cancelled });
+  try {
+    const { ctx, written } = context({ key: "" });
+    const err = await assertRejects(() =>
+      identify({ refs: [REF] }, { ...ctx, signal: abort.signal })
+    );
+    assert(err === cancelled);
+    assertEquals(written.length, 0);
+  } finally {
+    g.restore();
+  }
+});
+
+Deno.test("with several references identify records each as it goes, and a failure at a later one leaves the earlier records", async () => {
+  const f = fake({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    downloadError: { [DIGEST2]: "dial tcp: connection refused" },
+    genuine: [CERT_A],
+  });
+  try {
+    const { ctx, written } = context({ key: "" });
+    await assertRejects(() => identify({ refs: [REF, REF2] }, ctx));
+    assertEquals(written.map((w) => w.name), [
+      "identification-registry.example.org-team-api-c02a5ac89d2d",
+    ]);
+    assertEquals(written[0].data.state, "identified");
+    for (const path of f.bundles) {
+      await assertRejects(() => Deno.stat(path), Deno.errors.NotFound);
+    }
+  } finally {
+    f.restore();
+  }
+  // Two repositories with one digest get a record each.
+  const other = `registry.example.org/team/mirror@${DIGEST}`;
+  const { written } = await identified({}, [REF, other]);
+  assertEquals(written.map((w) => w.name), [
+    "identification-registry.example.org-team-api-c02a5ac89d2d",
+    "identification-registry.example.org-team-mirror-c02a5ac89d2d",
+  ]);
+});
+
+Deno.test("identify refuses a tag, a reference shaped like a flag and a trusted root that is not a path, before cosign runs", async () => {
+  const f = fake({});
+  try {
+    for (
+      const refs of [
+        ["registry.example.org/team/api:v1"],
+        [REF, `-x@${DIGEST}`],
+        [`--allow-http-registry@${DIGEST}`],
+        [`--certificate-identity=me@${DIGEST}`],
+      ]
+    ) {
+      const { ctx, written } = context({ key: "" });
+      const err = await assertRejects(() => identify({ refs }, ctx));
+      assertStringIncludes(String(err), "not an image reference");
+      assertEquals(written.length, 0);
+    }
+    for (
+      const [trustedRoot, said] of [
+        ["a\nb", "trustedRoot holds a newline"],
+        ["${{ inputs.root }}", "unevaluated expression"],
+      ]
+    ) {
+      const { ctx } = context({ key: "", trustedRoot });
+      const err = await assertRejects(() => identify({ refs: [REF] }, ctx));
+      assertStringIncludes(String(err), said);
+    }
+    assertEquals(f.calls.length, 0);
+    assert(!IdentifyArgsSchema.safeParse({ refs: [] }).success);
+    // The fake refuses what cosign refuses for the new commands.
+    assertStringIncludes(
+      (await f.direct(["download", "signature", REF])).stderr,
+      "wants -- before",
+    );
+    assertStringIncludes(
+      (await f.direct(["download", "signature", "--key", "k", "--", REF]))
+        .stderr,
+      "unknown flag: --key",
+    );
+    assertStringIncludes(
+      (await f.direct(["download", "sbom", "--", REF])).stderr,
+      "unknown command",
+    );
+    assertStringIncludes(
+      (await f.direct(["tree", REF])).stderr,
+      "wants -- before",
+    );
+    assertStringIncludes(
+      (await f.direct(["tree", "--trusted-root", "x", "--", REF])).stderr,
+      "unknown flag: --trusted-root",
+    );
+    assertStringIncludes(
+      (await f.direct([
+        "verify-blob-attestation",
+        "--insecure-ignore-tlog",
+      ])).stderr,
+      "unknown flag: --insecure-ignore-tlog",
+    );
+    assertStringIncludes(
+      (await f.direct(["verify-blob-attestation", "--bundle", "b", "--", REF]))
+        .stderr,
+      "accepts 0 arg(s)",
+    );
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("no key, no passphrase and no credential in a certificate reaches a record, a log line or a call of identify", async () => {
+  const secretUrl = `https://builder:${MARKER}@ci.example.org/job`;
+  const cert = certificate([uri(secretUrl), email(`${MARKER}@example.org`)], [
+    [1, bytes(ISSUER)],
+    [8, utf8(ISSUER)],
+    [12, utf8(`https://${MARKER}@git.example.org/team/api`)],
+    [14, utf8(`refs/heads/main\u0000${MARKER}`)],
+    [20, utf8(`${MARKER}`.repeat(200))],
+    [21, tlv(0x04, bytes(MARKER))],
+    [3, Uint8Array.of(0xff, 0xfe)],
+  ]);
+  const key = PRIVATE.replace("eyJr", MARKER);
+  for (const genuine of [[cert], []]) {
+    const { record, written, logs, calls } = await identified(
+      { downloads: { [DIGEST]: [certBundle(DIGEST, cert)] }, genuine },
+      [REF],
+      { key, password: MARKER },
+    );
+    const [s] = record.signatures;
+    assertEquals(s.certificateIdentity, "");
+    assertEquals(s.unprovenIdentity, "");
+    assertEquals(s.claims, {});
+    // The identity, the second name and five claims were not stored.
+    assertEquals(s.withheld, 7);
+    assertEquals(record.certificateIdentity, "");
+    assertEquals(record.identities, []);
+    // A genuine certificate whose identity cannot be stored names no one.
+    assertEquals(record.state, "unproven");
+    assertEquals(s.certificateGenuine, genuine.length === 1);
+    assert(!JSON.stringify(written).includes(MARKER));
+    assert(!logs.join("\n").includes(MARKER));
+    for (const call of calls) {
+      assert(!JSON.stringify(call.env).includes(MARKER));
+      assert(!call.args.join(" ").includes(MARKER));
+    }
+  }
+  // The tag form makes three calls; none gets the key or the passphrase.
+  const tag = await identified(
+    {
+      downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+      tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER)] },
+    },
+    [REF],
+    { key, password: MARKER },
+  );
+  assertEquals(commands(tag.calls), ["download", "tree", "verify", "verify"]);
+  for (const call of tag.calls) assertEquals(call.env, {});
+  // An error names the command, never the key: the key is not in its
+  // environment, and its PEM would be masked if cosign echoed one.
+  const f = fake({
+    downloadError: { [DIGEST]: `cannot reach the registry ${key}` },
+  });
+  try {
+    const { ctx } = context({ key, password: MARKER });
+    const err = await assertRejects(() => identify({ refs: [REF] }, ctx));
+    assert(!String(err).includes(MARKER));
+    assertStringIncludes(String(err), "<redacted>");
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("text that changes how a line reads without showing is never stored and never logged: one rule for an identity, an issuer and a claim", async () => {
+  const unsafe: Record<string, string> = {
+    "a C0 control": "\u0007",
+    "a newline": "\n",
+    "delete": "\u007f",
+    "next line, a C1 control": "\u0085",
+    "line separator": "\u2028",
+    "paragraph separator": "\u2029",
+    "right-to-left override": "\u202e",
+    "left-to-right isolate": "\u2066",
+    "right-to-left mark": "\u200f",
+    "zero-width space": "\u200b",
+    "zero-width joiner": "\u200d",
+    "byte order mark": "\ufeff",
+    "soft hyphen": "\u00ad",
+    "a private use character": "\ue000",
+    "an unassigned code point": "\u0378",
+  };
+  for (const [name, ch] of Object.entries(unsafe)) {
+    const identity = `https://github.com/example/api${ch}evil`;
+    for (
+      const cert of [
+        issued(identity, ISSUER),
+        issued(ID_A, `https://issuer.example.org/${ch}x`),
+        issued(ID_A, ISSUER, { 12: `https://a.example/${ch}x`, 4: `b${ch}c` }),
+      ]
+    ) {
+      const { record, logs, written } = await identified({
+        downloads: { [DIGEST]: [certBundle(DIGEST, cert)] },
+        genuine: [cert],
+      });
+      assert(
+        !JSON.stringify(written).includes(JSON.stringify(ch).slice(1, -1)),
+        name,
+      );
+      assert(!JSON.stringify(written).includes(ch), name);
+      assert(!logs.join("").includes(ch), name);
+      assert(Number(record.signatures[0].withheld) >= 1, name);
+      assertEquals(record.signatures[0].claims, {}, name);
+    }
+    // At the very start too, where a decoder may drop a byte order mark.
+    const leading = certificateFacts(
+      issued(`${ch}https://x.example/y`, ISSUER),
+    )!;
+    assertEquals(leading.certificateIdentity, "", name);
+    assertEquals(leading.withheld, 1, name);
+    // An identity or an issuer that is withheld names no one.
+    const { record } = await identified({
+      downloads: {
+        [DIGEST]: [certBundle(DIGEST, issued(identity, ISSUER))],
+      },
+      genuine: [issued(identity, ISSUER)],
+    });
+    assertEquals(record.state, "unproven", name);
+    assertEquals(record.certificateIdentity, "", name);
+    // The same in what cosign says, which becomes a reason: there it is
+    // replaced by a space, since a reason is not copied anywhere.
+    const said = await identified({
+      downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+      bundleError: `failed to verify signature: got "x${ch}y"`,
+    });
+    assert(!JSON.stringify(said.written).includes(ch), name);
+    assert(!said.logs.join("").includes(ch), name);
+    assertEquals(
+      said.record.signatures[0].reason,
+      // cosign's reason is one line of what it printed.
+      ch === "\n"
+        ? 'failed to verify signature: got "x'
+        : 'failed to verify signature: got "x y"',
+      name,
+    );
+  }
+  // Text in another script, and a long one within the bound, is kept as it is.
+  const plainIdentity = "https://例え.example/ジョブ/émile@refs/heads/main";
+  const kept = await identified({
+    downloads: {
+      [DIGEST]: [certBundle(DIGEST, issued(plainIdentity, ISSUER))],
+    },
+    genuine: [issued(plainIdentity, ISSUER)],
+  });
+  assertEquals(kept.record.certificateIdentity, plainIdentity);
+});
+
+Deno.test("what cosign says about a bundle is one bounded line, and only the first 20 certificates are checked", async () => {
+  const { record } = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    bundleError: "failed to verify signature: \u001b[31m\t" + "x".repeat(3000),
+  });
+  const reason = String(record.signatures[0].reason);
+  assert(reason.length <= 1024);
+  // deno-lint-ignore no-control-regex
+  assert(!/[\u0000-\u001f]/.test(reason));
+  assert(String(record.reason).length <= 1024);
+
+  const certs = Array.from(
+    { length: 25 },
+    (_, i) => issued(`https://example.org/job/${i}`, ISSUER),
+  );
+  const many = await identified({
+    downloads: { [DIGEST]: certs.map((c) => certBundle(DIGEST, c)) },
+    genuine: certs,
+  });
+  assertEquals(
+    commands(many.calls).filter((c) => c === "verify-blob-attestation").length,
+    20,
+  );
+  // The download, cosign tree, 20 checks and the tag form: 23 calls.
+  assertEquals(many.calls.length, 23);
+  assertEquals(many.record.signaturesFound, 25);
+  assertEquals(many.record.certificatesGenuine, 20);
+  assertEquals(many.record.signatures.length, 20);
+  assertEquals(many.record.identities.length, 20);
+  assertEquals(many.record.state, "several-identities");
+  assertEquals(many.record.certificateIdentity, "");
+  for (const path of many.bundles) {
+    await assertRejects(() => Deno.stat(path), Deno.errors.NotFound);
+  }
+});
+
+/** The certificate of ghcr.io/renovatebot/renovate 44.226.2's signature, issued by the public Fulcio on 2026-11-10. */
+const RENOVATE_CERT =
+  "MIIGzjCCBlWgAwIBAgIUE0k/Qs9mCNMbPyAK90Y18rYmvS8wCgYIKoZIzj0EAwMwNzEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MR4wHAYDVQQDExVzaWdzdG9yZS1pbnRlcm1lZGlhdGUwHhcNMjYxMTEwMTQ1MDIyWhcNMjYxMTEwMTUwMDIyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZ8tHDTQpW+5oWGrgZQ7+L90xOJUqTNqsUwKWjNeXxkdqzEhNAwtbY8Lo8xUXLrwiZZUSxUes9jnNZk42DBWptqOCBXQwggVwMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAzAfBgNVHSMEGDAWgBTf0+nPViQRlvmo2OkoVaLGLhhkPzBhBgNVHREBAf8EVzBVhlNodHRwczovL2dpdGh1Yi5jb20vcmVub3ZhdGVib3QvcmVub3ZhdGUvLmdpdGh1Yi93b3JrZmxvd3MvYnVpbGQueW1sQHJlZnMvaGVhZHMvbWFpbjA5BgorBgEEAYO/MAEBBCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMBIGCisGAQQBg78wAQIEBHB1c2gwNgYKKwYBBAGDvzABAwQoYTQyNTUyZTZjOTczOWE5ZDU3N2Y4NmRkODE5ZTlkNDFhZWU3YzA1OTATBgorBgEEAYO/MAEEBAVCdWlsZDAiBgorBgEEAYO/MAEFBBRyZW5vdmF0ZWJvdC9yZW5vdmF0ZTAdBgorBgEEAYO/MAEGBA9yZWZzL2hlYWRzL21haW4wOwYKKwYBBAGDvzABCAQtDCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMGMGCisGAQQBg78wAQkEVQxTaHR0cHM6Ly9naXRodWIuY29tL3Jlbm92YXRlYm90L3Jlbm92YXRlLy5naXRodWIvd29ya2Zsb3dzL2J1aWxkLnltbEByZWZzL2hlYWRzL21haW4wOAYKKwYBBAGDvzABCgQqDChhNDI1NTJlNmM5NzM5YTlkNTc3Zjg2ZGQ4MTllOWQ0MWFlZTdjMDU5MB0GCisGAQQBg78wAQsEDwwNZ2l0aHViLWhvc3RlZDA3BgorBgEEAYO/MAEMBCkMJ2h0dHBzOi8vZ2l0aHViLmNvbS9yZW5vdmF0ZWJvdC9yZW5vdmF0ZTA4BgorBgEEAYO/MAENBCoMKGE0MjU1MmU2Yzk3MzlhOWQ1NzdmODZkZDgxOWU5ZDQxYWVlN2MwNTkwHwYKKwYBBAGDvzABDgQRDA9yZWZzL2hlYWRzL21haW4wGAYKKwYBBAGDvzABDwQKDAg3NjczNDA2ODAuBgorBgEEAYO/MAEQBCAMHmh0dHBzOi8vZ2l0aHViLmNvbS9yZW5vdmF0ZWJvdDAYBgorBgEEAYO/MAERBAoMCDM4NjU2NTIwMGMGCisGAQQBg78wARIEVQxTaHR0cHM6Ly9naXRodWIuY29tL3Jlbm92YXRlYm90L3Jlbm92YXRlLy5naXRodWIvd29ya2Zsb3dzL2J1aWxkLnltbEByZWZzL2hlYWRzL21haW4wOAYKKwYBBAGDvzABEwQqDChhNDI1NTJlNmM5NzM5YTlkNTc3Zjg2ZGQ4MTllOWQ0MWFlZTdjMDU5MBQGCisGAQQBg78wARQEBgwEcHVzaDBbBgorBgEEAYO/MAEVBE0MS2h0dHBzOi8vZ2l0aHViLmNvbS9yZW5vdmF0ZWJvdC9yZW5vdmF0ZS9hY3Rpb25zL3J1bnMvNDI4MzUwNzQ5NjEvYXR0ZW1wdHMvMTAWBgorBgEEAYO/MAEWBAgMBnB1YmxpYzA9BgorBgEEAYO/MAEYBC8MLXJlcG86cmVub3ZhdGVib3QvcmVub3ZhdGU6cmVmOnJlZnMvaGVhZHMvbWFpbjCBiQYKKwYBBAHWeQIEAgR7BHkAdwB1AN09MGrGxxEyYxkeHJlnNwKiSl643jyt/4eKcoAvKe6OAAABocXwTToAAAQDAEYwRAIgZgvU7goZ19PY708MzAZUol3PzEEEKWdLzRTSA7vNAQQCIB9PRWugGB+GgGZYBB84XLNk5K0Rjy0RcI7VgXSsEjarMAoGCCqGSM49BAMDA2cAMGQCMBJnbKuBE6+WHLE2IAImaJGahMborgjIx6vjA06i+Gs4EeYF1amVH1XJipTgPVh0oAIwAOCfDPk6nbwtcU6K7FPzPIqm+UT9fWRzU8F/0YzJpJFJSrJJCiXQ6RpaLdUaZFx4";
+
+Deno.test("certificateFacts reads a certificate the public Fulcio issued, and readCertificate the other kinds of name", () => {
+  const facts = certificateFacts(RENOVATE_CERT)!;
+  assertEquals(
+    facts.certificateIdentity,
+    "https://github.com/renovatebot/renovate/.github/workflows/build.yml@refs/heads/main",
+  );
+  assertEquals(facts.oidcIssuer, ISSUER);
+  assertEquals(facts.withheld, 0);
+  assertEquals(facts.claims.githubWorkflowRepository, "renovatebot/renovate");
+  assertEquals(facts.claims.githubWorkflowSha, COMMIT);
+  assertEquals(
+    facts.claims.sourceRepositoryUri,
+    "https://github.com/renovatebot/renovate",
+  );
+  assertEquals(facts.claims.sourceRepositoryRef, "refs/heads/main");
+  assertEquals(facts.claims.buildTrigger, "push");
+  assertEquals(facts.claims.runnerEnvironment, "github-hosted");
+  assertEquals(
+    facts.claims[`${FULCIO}24`],
+    "repo:renovatebot/renovate:ref:refs/heads/main",
+  );
+  assertEquals(Object.keys(facts.claims).length, 20);
+
+  // An email address, a DNS name, an address, and Fulcio's user name.
+  const der = (b64: string) =>
+    Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const otherName = tlv(
+    0xa0,
+    oidBytes(`${FULCIO}7`),
+    tlv(0xa0, utf8("alice!example.org")),
+  );
+  assertEquals(
+    readCertificate(der(certificate([
+      email("alice@example.org"),
+      tlv(0x82, bytes("host.example.org")),
+      tlv(0x87, Uint8Array.of(192, 0, 2, 1)),
+      otherName,
+      tlv(0xa4, tlv(0x30)),
+    ], []))).names,
+    [
+      "alice@example.org",
+      "host.example.org",
+      "192.0.2.1",
+      "alice!example.org",
+      null,
+    ],
+  );
+  const mail = certificateFacts(
+    certificate([email("alice@example.org")], [[
+      1,
+      bytes("https://accounts.example.org"),
+    ]]),
+  )!;
+  assertEquals(mail.certificateIdentity, "alice@example.org");
+  // With no extension 8 the issuer is extension 1; with both, 8, as cosign reads them.
+  assertEquals(mail.oidcIssuer, "https://accounts.example.org");
+  assertEquals(
+    certificateFacts(
+      certificate([uri(ID_A)], [[1, bytes("https://old.example.org")], [
+        8,
+        utf8(ISSUER),
+      ]]),
+    )!.oidcIssuer,
+    ISSUER,
+  );
+  // A second extension of one number is not read: the first stands.
+  const twice = certificateFacts(
+    certificate([uri(ID_A)], [[8, utf8(ISSUER)], [8, utf8(ISSUER_B)], [
+      12,
+      utf8(SOURCE),
+    ], [12, utf8("https://evil.example.org/x")]]),
+  )!;
+  assertEquals(twice.oidcIssuer, ISSUER);
+  assertEquals(twice.claims, { sourceRepositoryUri: SOURCE });
+  assertEquals(twice.withheld, 2);
+  // More claims than a record keeps are counted.
+  const wide = certificateFacts(
+    certificate(
+      [uri(ID_A)],
+      Array.from(
+        { length: 60 },
+        (_, i): [number, Uint8Array] => [100 + i, utf8("v")],
+      ),
+    ),
+  )!;
+  assertEquals(Object.keys(wide.claims).length, 40);
+  assertEquals(wide.withheld, 20);
+  // A certificate with no names and no extensions says nothing, and is read.
+  assertEquals(certificateFacts(certificate([], [])), {
+    certificateIdentity: "",
+    oidcIssuer: "",
+    claims: {},
+    withheld: 0,
+  });
+  // Bytes that are not a certificate are not one.
+  for (const raw of ["", "AAAA", "MAA=", "MIIB", btoa("hello"), 7, null]) {
+    assertEquals(certificateFacts(raw), null);
+  }
+  assertEquals(parseDownload(""), []);
+  assertEquals(parseDownload('{"a":1}\n\n{"b":2}\n'), [{ a: 1 }, { b: 2 }]);
+});
+
+Deno.test("attest and signBlob refuse an empty key themselves, before running cosign, as sign does", async () => {
+  const f = fake({});
+  try {
+    for (
+      const call of [
+        (c: Context) => sign({ refs: [REF] }, c),
+        (c: Context) => attest({ refs: [REF], predicate: "deno.json" }, c),
+        (c: Context) => signBlob({ path: "deno.json" }, c),
+      ]
+    ) {
+      const { ctx, written } = context({ key: "", password: "" });
+      const err = await assertRejects(() => call(ctx));
+      assertStringIncludes(String(err), "key is empty: nothing to sign with");
+      assertEquals(written.length, 0);
+    }
+    assertEquals(f.calls.length, 0);
+    // No bundle was written beside the file either.
+    await assertRejects(
+      () => Deno.stat(`${REPO}/deno.json.sigstore.json`),
+      Deno.errors.NotFound,
+    );
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("no test and no method leaves a temporary file behind: everything is made in the run's own directory", async () => {
+  const f = fake({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    signed: [DIGEST],
+    genuine: [CERT_A],
+  });
+  try {
+    const { ctx } = context();
+    await identify({ refs: [REF] }, ctx);
+    await verify({ refs: [REF] }, ctx);
+    await sign({ refs: [REF] }, ctx);
+    // Every file a call named lies in the run's directory, and is gone.
+    const named = f.calls.flatMap((c) => c.args).filter((a) =>
+      a.includes("cosign-")
+    );
+    assert(named.length >= 3);
+    for (const path of named) assert(path.startsWith(`${SCRATCH}/`), path);
+    const left: string[] = [];
+    for await (const entry of Deno.readDir(SCRATCH)) left.push(entry.name);
+    assertEquals(left, []);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("in the tag form only what cosign confirms of a certificate is recorded: a signer's own annotations are not claims, and not an issuer", async () => {
+  const mail = "builder@attacker.example";
+  const google = "https://accounts.google.com";
+  // cosign prints the signer's own annotations where the certificate has
+  // no such extension. The certificate here has an identity and an issuer.
+  const annotated = tagVerified(DIGEST, mail, google, {
+    githubWorkflowRepository: "victim/product",
+    githubWorkflowRef: "refs/tags/v1.0.0",
+    githubWorkflowName: "release",
+    githubWorkflowSha: "a".repeat(40),
+    githubWorkflowTrigger: "push",
+  });
+  const first = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [annotated] },
+    certified: { [DIGEST]: [{ identity: mail, issuer: google, claims: {} }] },
+  });
+  assertEquals(first.record.state, "identified");
+  assertEquals(first.record.certificateIdentity, mail);
+  assertEquals(first.record.oidcIssuer, google);
+  assertEquals(first.record.signatures[0].certificateGenuine, true);
+  assertEquals(first.record.signatures[0].claims, {});
+  assertEquals(first.record.signatures[0].withheld, 5);
+  assert(!JSON.stringify(first.written).includes("victim"));
+  assert(!first.logs.join("\n").includes("victim"));
+  // The pattern check, the whole of what was printed, then the identity
+  // and the issuer alone.
+  assertEquals(first.calls.map((c) => c.args.slice(1, 3)), [
+    ["signature", "--"],
+    ["--", REF],
+    ["--certificate-identity-regexp", ".*"],
+    [`--certificate-identity=${mail}`, `--certificate-oidc-issuer=${google}`],
+    [`--certificate-identity=${mail}`, `--certificate-oidc-issuer=${google}`],
+  ]);
+  assertEquals(first.calls[3].args.length, first.calls[4].args.length + 5);
+
+  // One claim that the certificate says otherwise: none of them is kept.
+  const oneWrong = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A)] },
+    certified: {
+      [DIGEST]: [{
+        identity: ID_A,
+        issuer: ISSUER,
+        claims: { ...GITHUB_A, githubWorkflowRepository: "other/repository" },
+      }],
+    },
+  });
+  assertEquals(oneWrong.record.state, "identified");
+  assertEquals(oneWrong.record.signatures[0].claims, {});
+
+  // With a trusted root whose certificates name no issuer, the issuer
+  // cosign prints is the signer's annotation too: nothing is confirmed,
+  // and the signature names no one.
+  const noIssuer = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, mail, google)] },
+    certified: { [DIGEST]: [{ identity: mail, issuer: "", claims: {} }] },
+  });
+  assertEquals(noIssuer.record.state, "unproven");
+  assertEquals(noIssuer.record.certificateIdentity, "");
+  assertEquals(noIssuer.record.identities, []);
+  assertEquals(noIssuer.record.signatures[0].certificateGenuine, true);
+  assertEquals(noIssuer.record.signatures[0].certificateIdentity, "");
+  assertEquals(noIssuer.record.signatures[0].oidcIssuer, "");
+  assertStringIncludes(
+    String(noIssuer.record.signatures[0].reason),
+    "did not confirm the identity and the issuer it printed",
+  );
+  assert(!JSON.stringify(noIssuer.record).includes(mail));
+  // One call, since there are no claims to drop.
+  assertEquals(commands(noIssuer.calls), [
+    "download",
+    "tree",
+    "verify",
+    "verify",
+  ]);
+
+  // Three signatures print the same; two certificates say it. Two are named.
+  const some = await identified({
+    downloads: {
+      [DIGEST]: [1, 2, 3].map(() => tagLine(DIGEST, CERT_A)),
+    },
+    tagVerified: {
+      [DIGEST]: [1, 2, 3].map(() => tagVerified(DIGEST, mail, google)),
+    },
+    certified: {
+      [DIGEST]: [
+        { identity: mail, issuer: google, claims: {} },
+        { identity: mail, issuer: google, claims: {} },
+        { identity: mail, issuer: "https://elsewhere.example", claims: {} },
+      ],
+    },
+  });
+  assertEquals(some.record.state, "identified");
+  assertEquals(some.record.identities, [{
+    certificateIdentity: mail,
+    oidcIssuer: google,
+    signatures: 2,
+  }]);
+  assertEquals(some.record.certificatesGenuine, 3);
+  assertEquals(
+    some.record.reason,
+    "other signatures on this image: 1 that could not be checked",
+  );
+
+  // What cosign printed is given back as one argument each, so a value
+  // shaped like a flag is a value.
+  const shaped = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, "--key=/tmp/k", "--insecure-ignore-tlog", {
+          githubWorkflowName: "--certificate-identity-regexp=.*",
+        }),
+      ],
+    },
+  });
+  assertEquals(shaped.record.certificateIdentity, "--key=/tmp/k");
+  assertEquals(shaped.calls[3].args.slice(1, 4), [
+    "--certificate-identity=--key=/tmp/k",
+    "--certificate-oidc-issuer=--insecure-ignore-tlog",
+    "--certificate-github-workflow-name=--certificate-identity-regexp=.*",
+  ]);
+
+  // Seven identities: five are confirmed, with one call each here, and
+  // the other two name no one.
+  const ids = [1, 2, 3, 4, 5, 6, 7].map((i) => `https://example.org/job/${i}`);
+  const seven = await identified({
+    downloads: { [DIGEST]: ids.map(() => tagLine(DIGEST, CERT_A)) },
+    tagVerified: { [DIGEST]: ids.map((i) => tagVerified(DIGEST, i, ISSUER)) },
+  });
+  assertEquals(seven.record.identities.length, 5);
+  assertEquals(seven.record.certificatesGenuine, 7);
+  assertEquals(seven.calls.length, 3 + 5);
+  assertStringIncludes(
+    String(seven.record.signatures[6].reason),
+    "cosign printed more identities for this image than the 5 that are confirmed",
+  );
+  assertEquals(
+    seven.record.reason,
+    "5 identities signed this image; identities lists them, and none is chosen for you; 2 more signatures name identities beyond the 5 that are confirmed",
+  );
+  // One identity confirmed and others beyond the five: the record says
+  // there are more than were confirmed.
+  const crowded = await identified({
+    downloads: { [DIGEST]: ids.map(() => tagLine(DIGEST, CERT_A)) },
+    tagVerified: { [DIGEST]: ids.map((i) => tagVerified(DIGEST, i, ISSUER)) },
+    certified: {
+      [DIGEST]: [{ identity: ids[4], issuer: ISSUER, claims: {} }],
+    },
+  });
+  assertEquals(crowded.record.state, "identified");
+  assertEquals(crowded.record.certificateIdentity, ids[4]);
+  assertEquals(
+    crowded.record.reason,
+    "other signatures on this image: 6 that could not be checked, 2 of those name identities beyond the 5 that are confirmed",
+  );
+  // The most calls the tag form can take: two for each of five identities.
+  const most = await identified({
+    downloads: { [DIGEST]: ids.map(() => tagLine(DIGEST, CERT_A)) },
+    tagVerified: {
+      [DIGEST]: ids.map((i) => tagVerified(DIGEST, i, ISSUER, GITHUB_A)),
+    },
+    certified: {
+      [DIGEST]: ids.map((identity) => ({
+        identity,
+        issuer: ISSUER,
+        claims: {},
+      })),
+    },
+  });
+  assertEquals(most.calls.length, 3 + 10);
+  assertEquals(most.record.identities.length, 5);
+
+  // A confirming call that cannot be made fails the method.
+  const f = fake({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, mail, google)] },
+    certified: { [DIGEST]: [] },
+    tagError: "x",
+  });
+  f.restore();
+  let call = 0;
+  const restore = __setExec((_bin, args) => {
+    if (args[0] === "verify" && ++call === 2) {
+      return Promise.resolve({
+        code: 1,
+        stdout: "",
+        stderr: "Error: no matching signatures: dial tcp: i/o timeout\n",
+      });
+    }
+    return f.direct(args);
+  });
+  try {
+    const { ctx, written } = context({ key: "" });
+    const err = await assertRejects(() => identify({ refs: [REF] }, ctx));
+    assertStringIncludes(String(err), "--certificate-identity=" + mail);
+    assertEquals(written.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("signatures under a tag beside bundles are read, or said to be there: an attestation does not hide them", async () => {
+  const attestation = bundle(
+    DIGEST,
+    { certificate: { rawBytes: CERT_B } },
+    SLSA1,
+  );
+  // Signed keyless under the tag by an older cosign, attested later as a
+  // bundle. cosign reads the tag form here only when told to.
+  const { record, calls } = await identified({
+    downloads: { [DIGEST]: [attestation] },
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A)] },
+    treeLists: { [DIGEST]: ["attestation", "tag"] },
+  });
+  assertEquals(record.state, "identified");
+  assertEquals(record.certificateIdentity, ID_A);
+  assertEquals(record.forms, ["tag"]);
+  assertEquals(record.otherStatements, 1);
+  assertEquals(record.tagSignaturesUnlisted, true);
+  assertEquals(record.signatures[0].claims, GITHUB_A);
+  assertEquals(commands(calls), ["download", "tree", "verify", "verify"]);
+  for (const call of calls.slice(2)) {
+    assertEquals(call.args[1], "--new-bundle-format=false");
+    assertEquals(call.env, {});
+  }
+
+  // A key's signature under the tag beside an attestation: it cannot be
+  // listed or checked, and the image is not called unsigned.
+  const key = await identified({
+    downloads: { [DIGEST]: [attestation] },
+    tagBeside: [DIGEST],
+  });
+  assertEquals(key.record.state, "unproven");
+  assertEquals(key.record.tagSignaturesUnlisted, true);
+  assertEquals(key.record.signaturesFound, 1);
+  assertEquals(key.record.signatures[0].form, "tag");
+  assertEquals(key.record.signatures[0].signedWith, "unknown");
+  assertStringIncludes(
+    String(key.record.reason),
+    "signatures are stored under the tag beside the bundles, and cosign verified none of them with a certificate",
+  );
+
+  // The mirror: a bundle signature, and signatures under the tag too.
+  const mirror = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [CERT_A],
+    tagBeside: [DIGEST],
+  });
+  assertEquals(mirror.record.state, "identified");
+  assertEquals(mirror.record.tagSignaturesUnlisted, true);
+  assertEquals(mirror.record.forms, ["bundle", "tag"]);
+  assertEquals(
+    mirror.record.reason,
+    "other signatures on this image: 1 that could not be checked",
+  );
+  const two = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [CERT_A],
+    tagVerified: { [DIGEST]: [tagVerified(DIGEST, ID_B, ISSUER_B)] },
+    tagBeside: [DIGEST],
+  });
+  assertEquals(two.record.state, "several-identities");
+
+  // Bundles and nothing under the tag: the registry said so.
+  const none = await identified({
+    downloads: { [DIGEST]: [certBundle(DIGEST, CERT_A)] },
+    genuine: [CERT_A],
+  });
+  assertEquals(none.record.tagSignaturesUnlisted, false);
+  assertEquals(none.record.forms, ["bundle"]);
+  // The tag form alone is listed in full, so nothing is unlisted.
+  const alone = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, null)] },
+  });
+  assertEquals(alone.record.tagSignaturesUnlisted, false);
+
+  // cosign tree lists signatures under the tag and verify finds none
+  // there: one of the two lookups failed.
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [attestation] },
+      treeLists: { [DIGEST]: ["attestation", "tag"] },
+    }),
+    "cosign tree lists signatures under a tag and cosign verify found none there",
+  );
+  // The lookup of the tag fails beside bundles: not "there is none".
+  assertStringIncludes(
+    await failing({
+      downloads: { [DIGEST]: [attestation] },
+      tagVerified: {},
+      tagError:
+        "GET https://registry.example.org/v2/team/api/manifests/sha256-x.sig: TOOMANYREQUESTS: rate limited",
+    }),
+    "cosign verify --new-bundle-format=false",
+  );
+});
+
+Deno.test("everything cosign tree prints must be understood: an error it prints and carries on from fails the method", async () => {
+  const header =
+    `📦 Supply Chain Security Related artifacts for an image: ${REF}\n`;
+  const nothing = header +
+    `No Supply Chain Security Related Artifacts found for image ${REF},\n start creating one with simply running$ cosign sign <img>`;
+  const layer = `   └── 🍒 ${DIGEST2}\n`;
+  const sign =
+    `└── 🔗 ${SIGN_TYPE} artifacts via OCI referrer: registry.example.org/team/api@${DIGEST2}\n`;
+  assertEquals(parseTree(nothing), {
+    bundleLayers: 0,
+    tagSignatures: false,
+  });
+  assertEquals(
+    parseTree(
+      header + sign + `   ├── 🍒 ${DIGEST}\n` + layer +
+        `└── 🔗 https://slsa.dev/provenance/v1 artifacts via OCI referrer: x@${DIGEST}\n` +
+        layer +
+        `└── 🔗 application/vnd.cncf.notary.signature artifacts via OCI referrer: x@${DIGEST}\n` +
+        layer +
+        `└── 🔗 doc/example artifacts via OCI referrer: x@${DIGEST}\n` + layer +
+        `└── 🔗 x-custom/thing artifacts via OCI referrer: x@${DIGEST}\n` +
+        layer +
+        `└── 💾 Attestations for an image tag: x:sha256-ab.att\n` + layer +
+        `└── 📦 SBOMs for an image tag: x:sha256-ab.sbom\n` + layer,
+    ),
+    // Seven layers under referrers; three are of other kinds of artifact,
+    // registered or not, and are no bundles.
+    { bundleLayers: 3, tagSignatures: false },
+  );
+  // A bundle whose manifest has no predicate label is named by its media
+  // type, and is a bundle.
+  assertEquals(
+    parseTree(
+      header +
+        `└── 🔗 application/vnd.dev.sigstore.bundle.v0.3+json artifacts via OCI referrer: x@${DIGEST}\n` +
+        layer,
+    ),
+    { bundleLayers: 1, tagSignatures: false },
+  );
+  assertEquals(
+    parseTree(
+      header + `└── 🔐 Signatures for an image tag: x:sha256-ab.sig\n` + layer,
+    ),
+    { bundleLayers: 0, tagSignatures: true },
+  );
+  for (
+    const printed of [
+      "",
+      header,
+      nothing + "\nand more",
+      header + "Error fetching artifact x: TOOMANYREQUESTS\n" +
+      nothing.slice(header.length),
+      header + sign + "something new\n",
+      header + "└── 🔗 two words artifacts via OCI referrer: x\n",
+      "not the header\n" + nothing.slice(header.length),
+    ]
+  ) {
+    assert(assertThrows(() => parseTree(printed)) instanceof Error, printed);
+  }
+
+  // The fault the download swallows: the manifest of the one signature
+  // bundle is refused. cosign tree exits 0, prints the error and then
+  // says there is nothing.
+  const fetching =
+    `Error fetching artifact sha256:ab: GET https://registry.example.org/v2/team/api/manifests/sha256:ab: TOOMANYREQUESTS: rate limited\n`;
+  for (
+    const treePrints of [
+      { stderr: fetching },
+      {
+        stderr: fetching.replace(
+          "TOOMANYREQUESTS: rate limited",
+          "MANIFEST_UNKNOWN: manifest unknown",
+        ),
+      },
+      { stderr: "WARNING: something cosign has not said before\n" },
+      { stdout: header + fetching + nothing.slice(header.length) },
+      { stdout: "" },
+      { stdout: header },
+      // An exit code that says failure, with nothing printed about it.
+      { code: 1 },
+    ]
+  ) {
+    const err = await failing({ treePrints: { [DIGEST]: treePrints } });
+    assert(
+      err.includes("cosign tree -- " + REF) ||
+        err.includes("cosign tree printed"),
+      err,
+    );
+    // And the same when signatures under a tag did come back.
+    await failing({
+      downloads: { [DIGEST]: [tagLine(DIGEST, null)] },
+      treePrints: { [DIGEST]: treePrints },
+    });
+  }
+});
+
+Deno.test("what cosign printed is confirmed for each identity, issuer and set of claims apart, and never with an empty issuer", async () => {
+  const mail = "builder@example.org";
+  const google = "https://accounts.google.com";
+  // Two signatures of one identity and issuer: one certificate has the
+  // claims, for the other they are the signer's own words.
+  const mixed = await identified({
+    downloads: {
+      [DIGEST]: [tagLine(DIGEST, CERT_A), tagLine(DIGEST, CERT_A)],
+    },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, ID_A, ISSUER, {
+          githubWorkflowRepository: "victim/product",
+        }),
+        tagVerified(DIGEST, ID_A, ISSUER, GITHUB_A),
+      ],
+    },
+    certified: {
+      [DIGEST]: [
+        { identity: ID_A, issuer: ISSUER, claims: {} },
+        { identity: ID_A, issuer: ISSUER, claims: GITHUB_A },
+      ],
+    },
+  });
+  assertEquals(mixed.record.state, "identified");
+  assertEquals(mixed.record.identities[0].signatures, 2);
+  assertEquals(mixed.record.signatures.map((s) => s.claims), [{}, GITHUB_A]);
+  assert(!JSON.stringify(mixed.written).includes("victim"));
+
+  // One identity under two issuers, and only one certificate says its issuer.
+  const issuers = await identified({
+    downloads: {
+      [DIGEST]: [tagLine(DIGEST, CERT_A), tagLine(DIGEST, CERT_A)],
+    },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, mail, google),
+        tagVerified(DIGEST, mail, ISSUER_B),
+      ],
+    },
+    certified: {
+      [DIGEST]: [
+        { identity: mail, issuer: google, claims: {} },
+        { identity: mail, issuer: "", claims: {} },
+      ],
+    },
+  });
+  assertEquals(issuers.record.state, "identified");
+  assertEquals(issuers.record.identities, [{
+    certificateIdentity: mail,
+    oidcIssuer: google,
+    signatures: 1,
+  }]);
+  assertEquals(issuers.record.certificatesGenuine, 2);
+  assert(!JSON.stringify(issuers.record).includes(ISSUER_B));
+  // The same identity under two issuers, and each certificate says its
+  // own: two identities, each confirmed with its own issuer.
+  const both = await identified({
+    downloads: {
+      [DIGEST]: [tagLine(DIGEST, CERT_A), tagLine(DIGEST, CERT_A)],
+    },
+    tagVerified: {
+      [DIGEST]: [
+        tagVerified(DIGEST, mail, google),
+        tagVerified(DIGEST, mail, ISSUER_B),
+      ],
+    },
+  });
+  assertEquals(both.record.state, "several-identities");
+  assertEquals(both.record.identities.map((i) => i.oidcIssuer), [
+    google,
+    ISSUER_B,
+  ]);
+
+  // cosign printed an identity and no issuer: there is nothing to ask
+  // cosign to confirm, and it is not asked.
+  const bare = payload(DIGEST, { Subject: mail });
+  const noIssuer = await identified({
+    downloads: { [DIGEST]: [tagLine(DIGEST, CERT_A)] },
+    tagVerified: { [DIGEST]: [bare] },
+    certified: { [DIGEST]: [{ identity: mail, issuer: "", claims: {} }] },
+  });
+  assertEquals(noIssuer.record.state, "unproven");
+  assertEquals(noIssuer.record.signatures[0].certificateIdentity, "");
+  assertEquals(
+    noIssuer.record.signatures[0].reason,
+    "the certificate is genuine, and its identity or its issuer is not text that can be stored",
+  );
+  assertEquals(commands(noIssuer.calls), ["download", "tree", "verify"]);
 });

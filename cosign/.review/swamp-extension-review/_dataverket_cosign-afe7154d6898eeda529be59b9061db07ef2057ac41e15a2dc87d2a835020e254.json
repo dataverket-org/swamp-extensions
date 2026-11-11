@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cosign",
+  "version": "2026.11.10.2",
+  "reviewedAt": "2026-11-11T00:38:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Fifth review, of a README-only change. In the fourth review, on the same sources: no cosign call of identify gets the key or its passphrase, values cosign printed go back to it as one argument each, and the mutations of this are killed."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "One text rule for identity, issuer and claims; cosign's words are made one safe line."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "No fault that blocks; a limit, now stated in README under Known limits. identify takes an image for unsigned only when cosign tree and cosign download signature agree, and that check goes by how cosign tree names a bundle. Reproduced live on registry:2 in the fourth review: a signature bundle that the registry's list names with no artifact type, or that is named by something that is neither a URI nor the bundle media type, is read correctly when nothing fails, and is recorded as 'unsigned' when a rate limit hits that bundle's blob in the same run (for the bundle with no artifact type, also its manifest). cosign 3.1.4 stores no signature this way, none of the 33 public images of smoke/survey.sh has one, and whoever can write such a shape to a registry can remove the signature outright. The other way round, another tool's artifact named by a URI fails the method. Everything else fails closed: faults on the referrers list, the fallback tag, a bundle's manifest, the .sig tag, the trusted root and the transparency log fail the method and record nothing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "This round: fmt, lint, check and test (86 passed, 2 ignored) exit 0. signer.ts, signer_test.ts and every file under smoke/ are older than the start of my fourth review; only README.md is newer, so the smoke suite and the mutation run of the fourth review stand: survey.sh 33, identify.sh 42, provenance.sh 21, hostile.sh 52 with registry:2 and zot, all exit 0, and 140 of 140 mutations killed. I kept no copy or checksum of the fourth-round sources; the evidence that they are unchanged is their modification times."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "No time limit of its own per cosign call; stated under Known limits with the bound (cosign's three minutes per call, at most 33 calls per image). On 33 real images a run took a few seconds."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "The three README corrections match what I observed. The sentence on unsigned now points to the limit. The sentence on other artifacts now says cosign does not go by the name and keeps whatever reads as a bundle, which is what GetBundles in cosign 3.1.4 does and what I saw live. The two new bullets under Known limits cover the three shapes I reproduced and the URI-named artifact of another tool. The first bullet says a fault on such a bundle is not noticed; for a bundle that is listed under another name a fault on its manifest is still noticed and only one on its content is not, so the text errs on the careful side. Notes that stay: identify depends on the printed lines of cosign tree and on --new-bundle-format=false, an option cosign 3.1.4 accepts and no longer documents, both under Known limits; only the first five identities of the tag form are confirmed; a key-signed record proves nothing about the key. One leftover outside README, for the next version: the comment above BUNDLE_LABEL in signer.ts still says cosign download signature passes over an artifact of another name."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Bundle files are removed after a run, a throw and a cancel; tests and mutation runs leave nothing in the temp directory."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Nothing of one organisation in the README change or elsewhere in the diff; deno fmt accepts README.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "No passthrough; every field of identification is written on every path."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Infinite, 10, as the other specs."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "The type drives a signing tool; identify is a read."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "key-usable passes on an empty key at validate time and fails before sign, attest and signBlob, which also refuse an empty key themselves; checked through swamp in the first review and unchanged since."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "identification-<repository>-<12 hex of the digest>, as verification."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads back stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Two upgrades entries; definitions of 2026.10.28.1 and 2026.11.10.1 run and are stamped 2026.11.10.2 in the smoke suite. verify, verifyAttestation, sign, attest, the blob methods and the two workflows are unchanged against the published version apart from the empty-key message."
+    }
+  ]
+}
