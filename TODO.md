@@ -57,6 +57,33 @@ What is open in this repository, checked against the code on 2026-11-10.
 10. **cosign: the build type of early `actions/attest-build-provenance`
     releases** is on the allowlist from its document; which releases wrote it is
     not confirmed.
+11. **signed-images: `verified-upstream-image` for a list.** It takes one `ref`
+    today, and runs for one reference must not overlap. A list input, each image
+    with its own identity, checks everything a repository pulls from others in
+    one run.
+12. **signed-images: provenance on our own signed builds.** The workflows ask
+    upstream for SLSA provenance and write none: `ko-signed-images` and
+    `signed-release` sign, and no workflow calls `attest` with where the build
+    came from. Write it at build, and have `verify-release` hold a release to
+    it.
+13. **signed-images: a signed build for an image from a Dockerfile.** Only Go
+    has one (`ko-signed-images`); any other image has `cosign-sign` alone, with
+    no build step before it.
+14. **cosign: state the signing key once.** Every signing workflow takes
+    `keyVault`, `keyKey` and `passphraseKey` on each run. A definition that
+    names them once would make a signing run as short as a verifying one.
+15. **cosign: a fault recorded as `verified: false`.** When the transparency log
+    or the network cannot be reached, `verify`, `verifyAttestation` and
+    `verifyBlob` record `verified: false`; the README says such a run fails.
+    About ten lines in `verifyOne`: judge the error line, not all of stderr, and
+    leave out fault words. It changes published behaviour: a workflow that
+    tolerates `verified: false` sees a failed step.
+16. **cosign: `identify`, for its next version.** The comment above
+    `BUNDLE_LABEL` in `signer.ts` still says cosign passes over an artifact of
+    another name. `identify` reads signatures only, and an attestation can be
+    signed by another identity. Rerun `smoke/survey.sh` with each new cosign:
+    `identify` reads `cosign tree` line by line and uses
+    `--new-bundle-format=false`, which cosign 3.1.4 no longer documents.
 
 ## Later
 
