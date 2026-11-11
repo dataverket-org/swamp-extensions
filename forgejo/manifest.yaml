@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.11.09.1"
+version: "2026.11.11.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in one model type, `@dataverket/forgejo`.
@@ -19,8 +19,10 @@ description: >
   org-scoped, write-only), a runner registration token, runner listing and
   pruning, a verify-first repository rename, push mirrors (ensure, list,
   delete, sync now), a pull mirror that sends only the settings it is given,
-  repository topics and units, pull-request assignment with every login
-  checked first, issues filed by title with labels by name, labels of an
+  repository topics and units, a repository's pull-request merge settings
+  (the merge styles offered, the default, update by rebase) read and
+  converged with only the given settings sent, pull-request assignment
+  with every login checked first, issues filed by title with labels by name, labels of an
   organization or a repository, and verify-first deletes of a repository and
   of an organization: one already gone is a no-op, one with commits or with
   repositories is refused unless asked for explicitly, because Forgejo has no
@@ -57,6 +59,7 @@ models:
   - pull_mirror.ts
   - topics.ts
   - units.ts
+  - merge_settings.ts
   - pr_assign.ts
   - repo_delete.ts
   - org_delete.ts

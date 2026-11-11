@@ -111,6 +111,15 @@ swamp model method run forge repo_topics_ensure \
 swamp model method run forge repo_units_ensure \
   --arg owner=example-org --arg name=tool --arg hasActions=true
 
+# merge settings: read them, then offer merge commits only
+swamp model method run forge repo_merge_settings_ensure \
+  --arg owner=example-org --arg name=tool
+swamp model method run forge repo_merge_settings_ensure \
+  --arg owner=example-org --arg name=tool \
+  --arg allowMergeCommits=true --arg defaultMergeStyle=merge \
+  --arg allowRebase=false --arg allowRebaseExplicit=false \
+  --arg allowSquashMerge=false --arg allowRebaseUpdate=false
+
 # pull requests: open (find-or-create on head and base), inspect, merge
 swamp model method run forge pr_ensure \
   --arg owner=apps --arg name=damson --arg head=feat/thing --arg base=main \
@@ -146,32 +155,33 @@ Read and audit:
 
 Idempotent provisioning:
 
-| Method                      | Does                                                                                                                 |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `org_ensure`                | Find-or-create an organization and converge visibility and description                                               |
-| `repo_ensure`               | Find-or-create a repository and converge its settings                                                                |
-| `collaborator_ensure`       | Give a user access to a repository; never removes one, refuses the owner                                             |
-| `branch_protection_ensure`  | Find-or-create a branch protection rule and converge what it enforces                                                |
-| `mirror_ensure`             | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description               |
-| `mirror_sync_now`           | Queue an immediate pull sync                                                                                         |
-| `pull_mirror_ensure`        | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest    |
-| `push_mirror_ensure`        | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address  |
-| `push_mirror_sync_now`      | Queue an immediate push of every push mirror of a repository                                                         |
-| `repo_topics_ensure`        | Give a repository topics; additive unless `exact`                                                                    |
-| `repo_units_ensure`         | Switch a repository's Actions, packages or projects unit; sends only what is given                                   |
-| `repo_rename`               | Rename a repository, verify-first                                                                                    |
-| `actions_secret_put`        | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value            |
-| `runner_registration_token` | A registration token for `forgejo-runner register`, vaulted; its endpoint is deprecated since Forgejo 15, see below  |
-| `pr_ensure`                 | Open a pull request, find-or-create on the head and base pair, converging title and body                             |
-| `pr_assign`                 | Assign a pull request, every login checked against the forge first                                                   |
-| `issue_ensure`              | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name |
-| `issue_labels_ensure`       | The labels of an issue or a pull request by name; additive unless `exact`                                            |
-| `label_ensure`              | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`           |
-| `webhook_retarget`          | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                  |
-| `pr_feedback`               | Read a pull request's comments, reviews with their state, and each review's inline comments                          |
-| `pr_comment`                | Post a comment on a pull request; every call posts a new one                                                         |
-| `pr_merge_state`            | A pull request's head and, once merged, its merge commit, time and merger                                            |
-| `work_item_sync`            | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                     |
+| Method                       | Does                                                                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `org_ensure`                 | Find-or-create an organization and converge visibility and description                                               |
+| `repo_ensure`                | Find-or-create a repository and converge its settings                                                                |
+| `collaborator_ensure`        | Give a user access to a repository; never removes one, refuses the owner                                             |
+| `branch_protection_ensure`   | Find-or-create a branch protection rule and converge what it enforces                                                |
+| `mirror_ensure`              | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description               |
+| `mirror_sync_now`            | Queue an immediate pull sync                                                                                         |
+| `pull_mirror_ensure`         | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest    |
+| `push_mirror_ensure`         | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address  |
+| `push_mirror_sync_now`       | Queue an immediate push of every push mirror of a repository                                                         |
+| `repo_topics_ensure`         | Give a repository topics; additive unless `exact`                                                                    |
+| `repo_units_ensure`          | Switch a repository's Actions, packages or projects unit; sends only what is given                                   |
+| `repo_merge_settings_ensure` | Read or converge a repository's pull-request merge settings; sends only what is given                                |
+| `repo_rename`                | Rename a repository, verify-first                                                                                    |
+| `actions_secret_put`         | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value            |
+| `runner_registration_token`  | A registration token for `forgejo-runner register`, vaulted; its endpoint is deprecated since Forgejo 15, see below  |
+| `pr_ensure`                  | Open a pull request, find-or-create on the head and base pair, converging title and body                             |
+| `pr_assign`                  | Assign a pull request, every login checked against the forge first                                                   |
+| `issue_ensure`               | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name |
+| `issue_labels_ensure`        | The labels of an issue or a pull request by name; additive unless `exact`                                            |
+| `label_ensure`               | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`           |
+| `webhook_retarget`           | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                  |
+| `pr_feedback`                | Read a pull request's comments, reviews with their state, and each review's inline comments                          |
+| `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                         |
+| `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                            |
+| `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                     |
 
 Lifecycle and deletes:
 
@@ -279,6 +289,44 @@ unit differs. It reads the forge's answer after the write: an instance with
 Actions disabled accepts `has_actions: true` and leaves it off, and that is
 reported as an error rather than as `updated`.
 
+## Merge settings
+
+`repo_merge_settings_ensure` reads and converges the settings that decide how a
+pull request is merged: which merge styles the merge button offers
+(`allowMergeCommits`, `allowRebase`, `allowRebaseExplicit`, `allowSquashMerge`,
+`allowFastForwardOnlyMerge`), the style it uses by default
+(`defaultMergeStyle`), whether a pull request's branch may be updated by rebase
+(`allowRebaseUpdate`) and the update style used by default
+(`defaultUpdateStyle`), and the defaults a new pull request starts with
+(`defaultDeleteBranchAfterMerge`, `defaultAllowMaintainerEdit`,
+`ignoreWhitespaceConflicts`). It holds no opinion on their values: it sends only
+the settings given, writes only when one differs, and with none given only
+reads. Every call records all eleven settings as the forge reports them, `null`
+for one it does not report.
+
+The forge keeps these settings with the pull requests unit: turning pull
+requests off and on again resets every one of them to the forge's defaults.
+While they are off the forge reports every setting as false and both default
+styles as `merge`, which a wish could match by chance. So the method refuses any
+setting on a repository whose pull requests are off, matching or not, rather
+than turning them on; a call with no setting still reads it; `repo_ensure` does
+that, and this method runs after it. Every write also carries
+`has_pull_requests: true`, which changes nothing where pull requests are on:
+Gitea's API reads the merge fields only inside that flag, and Forgejo applies
+them either way. After the write it compares the forge's answer with what was
+asked: a setting that did not apply, a setting not asked for that moved, or pull
+requests turned off is an error.
+
+`allow_manual_merge` and `autodetect_manual_merge` are not offered. Forgejo
+accepts them but does not return them when a repository is read, so a write
+could not be checked.
+
+A rebase, a rebase with a merge commit and a squash each make new commits on the
+forge, which the author did not sign. A repository whose commits must reach the
+default branch as they were pushed (signed, or tagged by hash) offers merge
+commits or fast-forward only, and turns `allowRebaseUpdate` off, because an
+update by rebase rewrites the pull request's head before the merge.
+
 ## Verify-first deletes
 
 `repo_delete` reads the repository before anything else. One that is already
@@ -356,6 +404,12 @@ deprecated since Forgejo 15 and still served by 17.0.1. Its replacement,
 runner's own token, which `forgejo-runner create-runner-file` takes, so moving
 to it is a new method rather than a change to this one.
 
+`repo_merge_settings_ensure` was run against Forgejo 17.0.1: each of its eleven
+settings written and read back, a second run with the same settings writing
+nothing, settings not named left as they were, a repository with pull requests
+off read as false and `merge` everywhere, and any setting asked of it refused
+with nothing sent, a missing repository and a wrong token refused.
+
 ## Secrets
 
 No secret value is written to a resource or a log. Two carry a credential and
@@ -394,6 +448,7 @@ swamp data query 'specName == "runner" && isLatest' --json
 | `pullMirror`         | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed   |
 | `repoTopics`         | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                 |
 | `repoUnits`          | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                |
+| `repoMergeSettings`  | `repo-merge-settings-<owner>-<repo>`         | A repository's merge settings, and which changed                       |
 | `prAssignment`       | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                    |
 | `userMatch`          | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d      |
 | `repoDelete`         | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                             |

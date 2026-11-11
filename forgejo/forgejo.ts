@@ -1166,7 +1166,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.11.09.1",
+  version: "2026.11.11.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1191,6 +1191,12 @@ export const model = {
       toVersion: "2026.11.09.1",
       description:
         "Records are stored under portable data names (repo-<owner>-<repo>, no ':'); no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.11.1",
+      description:
+        "repo_merge_settings_ensure joins the type; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

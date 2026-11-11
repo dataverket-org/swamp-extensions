@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.11.11.1",
+  "reviewedAt": "2026-11-11T18:58:32Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "merge_settings.ts reaches the token only through fetchCaller, which masks a token the forge echoes back. The record test now captures the written data and the log and asserts the planted token is in neither; a new test has a 401 echo the token and asserts the error is masked and keeps the forge message."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "One info line per call with the repository, the action and the changed setting names, or none. No body or header is logged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "A 404 names the repository, other 4xx/5xx on the read or the write carry the forge message, nothing is sent after a refused read or a refusal, and an unapplied setting, a setting not asked for that moved, or pull requests turned off by the write are errors. forgeError now uses body.raw for a body that is not JSON; no test tells raw from the JSON fallback (removing it in a scratch copy fails no test), which is cosmetic. A write that partly applied before an after-write error leaves no record; the error names the fields."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "21 unit tests on a strict fake. The new prOff fixture has the zero values the forge reports with pull requests off, and a wish that matches them is refused with only a GET. Switching off the new refusal in a scratch copy fails two tests; earlier mutations of the diff, has_pull_requests in the body, the unapplied, moved and pull-requests-off-after checks each fail a test. Planted-token checks on the record, the log and an echoed error are now present."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "The refusal of a repository whose pull requests are off now runs before the diff whenever any setting is given, so a wish that matches the zero values can no longer report unchanged; a call with no setting still reads. A second run with the same settings writes nothing, tested and reported from the live run on Forgejo 17.0.1."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "PATCH /api/v1/repos/{owner}/{repo} with only the differing merge fields plus has_pull_requests true, read back from the PATCH answer and compared with the request and the prior read. The author reports a live run on Forgejo 17.0.1 covering every setting, a repeat run, untouched settings, pull requests off (read as false and merge, refused with nothing sent), a missing repository and a wrong token. On Gitea default_update_style is not reported, so asking for it writes and then errors as unapplied, which is loud and consistent with the README."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One GET and at most one PATCH per call, each under the fetchCaller time limit and the run signal. No retries, no loops."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, manifest and descriptions are general, with no hostnames or local policy. The Merge settings section now says any setting is refused while pull requests are off, matching or not, and the code and a test support it. One sentence reads awkwardly: after the new clause about a call with no setting, repo_ensure does that no longer points clearly at turning pull requests on; wording only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Booleans are z.boolean, the styles are enums, and MERGE_STYLES now has only the five merge-button styles; manually-merged and rebase-update-only are refused (tested). The object is not strict: the author reports that swamp merges the global arguments into the method arguments, so .strict() rejects every call, and that swamp itself refuses an unknown input before the method runs (Unknown method input(s)), seen live. That was not reproduced in this review, which ran no swamp model; it is accepted as the author reported it."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "repoMergeSettings is infinite with garbageCollection 20, like repoUnits and repoTopics: one record per repository, overwritten each run."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "A settings resource that exists with its repository: read and converge in one method; turning pull requests on stays with repo_ensure, by design."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "No binary is run; the read before the write is the pre-flight and refuses a missing or unreadable repository, or pull requests off, before anything is sent."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "repo-merge-settings-<owner>-<repo> through dataName, predictable from the arguments, tested."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "The record carries every setting as the forge reports it, null for one not reported, hasPullRequests, changed by argument name and action, so a later step can reference it with data.latest."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Model version 2026.11.11.1 in forgejo.ts, manifest and test, with a no-op upgrades entry because global arguments did not change; the chain test passes."
+    }
+  ]
+}

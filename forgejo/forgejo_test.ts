@@ -8,6 +8,7 @@ import { extension as actions } from "./actions.ts";
 import { extension as checks } from "./checks.ts";
 import { extension as issues } from "./issues.ts";
 import { extension as labels } from "./labels.ts";
+import { extension as mergeSettings } from "./merge_settings.ts";
 import { extension as orgDelete } from "./org_delete.ts";
 import { extension as prAssign } from "./pr_assign.ts";
 import { extension as prComment } from "./pr_comment.ts";
@@ -53,6 +54,7 @@ const ADDED_METHODS = [
   "pull_mirror_ensure",
   "repo_topics_ensure",
   "repo_units_ensure",
+  "repo_merge_settings_ensure",
   "push_mirror_ensure",
   "push_mirror_list",
   "push_mirror_delete",
@@ -77,6 +79,7 @@ const MODULES = [
   checks,
   issues,
   labels,
+  mergeSettings,
   orgDelete,
   prAssign,
   prComment,
@@ -91,7 +94,7 @@ const MODULES = [
 
 Deno.test("the base owns the dataverket type at the published version", () => {
   assertEquals(model.type, "@dataverket/forgejo");
-  assertEquals(model.version, "2026.11.09.1");
+  assertEquals(model.version, "2026.11.11.1");
 });
 
 Deno.test("the upgrade chain ends at the model's version and is a no-op", () => {
