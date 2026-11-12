@@ -197,16 +197,16 @@ In order:
    issuance that hangs needs `trace`, not another trigger.
 3. The condition is patched, bound to the `resourceVersion` that was read. If
    the Certificate changed in between, the API server refuses the patch and
-   nothing is changed; run it again. This refusal is shown against the fake
-   `kubectl` of the unit tests only: the read and the patch follow each other
-   too closely to place a change between them on a real cluster without a test
-   hook. The patch is a merge patch of `status.conditions`, which replaces the
-   whole list, so every other condition is written back exactly as it was read.
-   The patch body is given to `kubectl` on standard input
-   (`--patch-file=/dev/stdin`): it is in no argument list. When the patch fails,
-   what `kubectl` said is repeated with every value the patch sent blanked, and
-   ends where a JSON body begins, because a server that calls a patch invalid
-   repeats it.
+   nothing is changed; run it again. No live test shows this refusal: the read
+   and the patch follow each other too closely to place a change between them on
+   a real cluster without a test hook. A unit test pins the message for a
+   stubbed `Conflict` answer. The patch is a merge patch of `status.conditions`,
+   which replaces the whole list, so every other condition is written back
+   exactly as it was read. The patch body is given to `kubectl` on standard
+   input (`--patch-file=/dev/stdin`): it is in no argument list. When the patch
+   fails, what `kubectl` said is repeated with every value the patch sent
+   blanked, and ends where a JSON body begins, because a server that calls a
+   patch invalid repeats it.
 4. The answer to the patch must show the condition. A change that was not
    applied is an error. When the answer did not arrive or cannot be read (no
    answer in time, a broken connection, a cancelled run, output that is not the
@@ -291,8 +291,14 @@ The types import the shared kubectl layer of this repository as `../lib/`, so
 the commands that package the extension take the repository root:
 `swamp extension push manifest.yaml --extensions-dir ..`.
 
-The unit tests run every method against a strict fake of `kubectl` that refuses
-any call, argument or order it was not told to expect, and spawn nothing.
+The unit tests cover the parsers, the records, names and the blanking of
+secrets, and run every method of every type through swamp's
+`createModelTestContext` with `kubectl` replaced by a stub that answers only the
+commands its test lists (`stub_test.ts`, installed through `__setSpawn` of
+`../lib/cli.ts`). Each method has a test that succeeds, asserting on the records
+it writes and its last log line, and one that fails, asserting on the error and
+that nothing was written. The stub is not a model of a cluster: what the methods
+do against a real one is tested by the live suite in `smoke/`.
 
 ## License
 

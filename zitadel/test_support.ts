@@ -1,28 +1,23 @@
 /**
- * Test helpers: a fake API caller and a fake method context, so every model can
- * be exercised without an instance to talk to.
+ * Test helpers: global arguments, a method context that records what a
+ * method writes, and the stub caller the method tests inject.
  *
  * @module
  */
-import {
-  __resetTokenCache,
-  __setCaller,
-  type ApiCall,
-  type Json,
-} from "./api.ts";
-import { __resetOrgCache } from "./lookup.ts";
-import { ORG } from "./fixtures.ts";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
+import { __setCaller, type ApiCall, type Json } from "./api.ts";
 import type { DataHandle, GlobalArgs, ModelContext } from "./common.ts";
+import { __resetOrgCache } from "./lookup.ts";
 
 /** One `writeResource` call a method made. */
-export interface Written {
+interface Written {
   spec: string;
   name: string;
   data: Record<string, unknown>;
 }
 
 /** A context plus the writes and log lines it collected. */
-export interface FakeContext {
+interface FakeContext {
   context: ModelContext;
   written: Written[];
   logs: string[];
@@ -75,79 +70,112 @@ export function makeContext(overrides: Partial<GlobalArgs> = {}): FakeContext {
   return { context, written, logs, forgotten };
 }
 
-/** What a fake handler may answer with. */
-export type FakeResponse = Json | { status: number; body: Json } | undefined;
-
-/** A fake API caller, with the calls it saw and a way to put the real one back. */
-export interface Fake {
-  calls: ApiCall[];
-  restore(): void;
-}
-
-/** One request as a handler matches it: `"POST /management/v1/projects"`. */
-export function line(call: ApiCall): string {
-  return `${call.method} ${call.path}`;
-}
-
 /**
- * Install a fake API caller. The handler answers each call by returning a body,
- * or `undefined` to fail the test with the call it did not expect — so a method
- * that talks to an endpoint it should not have is a failure, not a silent pass.
+ * The method tests' stub client, in the pattern of swamp's testing guide: a
+ * method's `execute` runs through `createModelTestContext` with a stub caller
+ * injected at the `__setCaller` seam. Each test lists the few answers it
+ * needs, keyed `"METHOD path"`; a list of answers is used in order, one per
+ * call. A call the test did not list is an error, so a test cannot pass on a
+ * call it never meant to make. The stub is not a model of Zitadel: the live
+ * suite in `smoke/` is the proof against a real instance.
  */
-export function installFake(
-  handler: (call: ApiCall, calls: readonly ApiCall[]) => FakeResponse,
-): Fake {
+export type Reply =
+  | Json
+  | { status: number; message: string }
+  | ((c: ApiCall) => Json);
+
+/** An answer that fails the call as the real caller fails it. */
+export function fail(
+  status: number,
+  message = "stub failure",
+): { status: number; message: string } {
+  return { status, message };
+}
+
+function isFailure(r: Reply): r is { status: number; message: string } {
+  return typeof r === "object" && r !== null && "status" in r &&
+    "message" in r && typeof r.status === "number" &&
+    Object.keys(r).length === 2;
+}
+
+/** A marker planted in the credential; no record or log may carry it. */
+export const PLANTED = "PLANTED-ZITADEL-KEY-7f3c9a";
+
+/** Global arguments for a method test; the credential carries {@link PLANTED}. */
+export const G = {
+  apiUrl: "https://zitadel.example.org",
+  keyJson: JSON.stringify({ keyId: "1", key: PLANTED, userId: "9" }),
+  httpTimeoutMs: 1000,
+  tokenScope: "openid",
+};
+
+/** A context with the stub caller installed, and what the method did. */
+export function harness(
+  routes: Record<string, Reply | Reply[]>,
+  globalArgs: Record<string, unknown> = {},
+) {
   const calls: ApiCall[] = [];
-  __resetTokenCache();
+  const queues = new Map<string, Reply[]>();
+  for (const [key, value] of Object.entries(routes)) {
+    queues.set(key, Array.isArray(value) ? [...value] : [value]);
+  }
   __resetOrgCache();
-  __setCaller((_globalArgs, call) => {
-    const seen = [...calls];
-    calls.push(call);
-    let answer = handler(call, seen);
-    // Resolving the organization is a step almost every v2 user call takes, so
-    // the fake answers it unless a test wants to say something else about it.
-    if (answer === undefined && line(call) === "GET /management/v1/orgs/me") {
-      answer = { org: ORG };
+  __setCaller((_g, c) => {
+    calls.push(c);
+    const key = `${c.method} ${c.path}`;
+    const queue = queues.get(key);
+    if (!queue || queue.length === 0) {
+      return Promise.reject(new Error(`the stub has no answer for ${key}`));
     }
-    if (answer === undefined) {
+    const reply = queue.length > 1 ? queue.shift()! : queue[0];
+    if (typeof reply === "function") {
+      return Promise.resolve({ status: 200, body: reply(c) });
+    }
+    if (isFailure(reply)) {
       return Promise.reject(
-        new Error(`unexpected call: ${line(call)}`),
+        new Error(
+          `Zitadel API ${key} -> HTTP ${reply.status}: ${reply.message}`,
+        ),
       );
     }
-    if (
-      typeof answer === "object" && answer !== null && "status" in answer &&
-      "body" in answer
-    ) {
-      const typed = answer as { status: number; body: Json };
-      if (typed.status >= 400) {
-        return Promise.reject(
-          new Error(
-            `Zitadel API ${line(call)} -> HTTP ${typed.status}: ${
-              String(typed.body.message ?? "")
-            }`,
-          ),
-        );
-      }
-      return Promise.resolve(typed);
-    }
-    return Promise.resolve({ status: 200, body: answer as Json });
+    return Promise.resolve({ status: 200, body: reply as Json });
   });
-  return {
-    calls,
-    restore() {
-      __setCaller(null);
-      __resetTokenCache();
-      __resetOrgCache();
+  const t = createModelTestContext({
+    globalArgs: { ...G, ...globalArgs },
+  });
+  const deleted: string[] = [];
+  const context = {
+    ...t.context,
+    deleteResource: (name: string) => {
+      deleted.push(name);
+      return Promise.resolve();
     },
+  } as unknown as ModelContext;
+  return {
+    context,
+    calls,
+    /** Calls that change something. */
+    writes: () =>
+      calls.filter((c) => c.method !== "GET" && !/[/_]search$/.test(c.path)),
+    written: () =>
+      t.getWrittenResources().map((w) => ({
+        spec: w.specName,
+        name: w.name,
+        data: w.data as Record<string, unknown>,
+      })),
+    logs: () =>
+      t.getLogs().map((l) =>
+        `${l.level}: ${l.message} ${JSON.stringify(l.args ?? [])}`
+      ),
+    /** Instance names the method tombstoned. */
+    forgotten: deleted,
   };
 }
 
-/** A v1 `_search` response page. */
-export function page(rows: Json[]): Json {
-  return { result: rows, details: { totalResult: String(rows.length) } };
-}
-
-/** An HTTP 404 the lookups treat as "not there". */
-export function notFound(what: string): { status: number; body: Json } {
-  return { status: 404, body: { message: `${what} not found` } };
+/** Assert that nothing a method wrote or logged carries the planted key. */
+export function assertNoPlanted(h: ReturnType<typeof harness>): void {
+  const seen = JSON.stringify(h.written()) + h.logs().join("\n");
+  if (seen.includes(PLANTED)) {
+    throw new Error("the planted credential reached a record or a log");
+  }
 }

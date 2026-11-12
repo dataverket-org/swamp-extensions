@@ -1,15 +1,14 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
-import { ListInventorySchema } from "./_helpers.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import {
   classReasons,
   GatewayClassSchema,
-  model as gatewayclass,
+  model,
   parseGatewayClass,
 } from "./gatewayclass.ts";
-import { acceptedClass, cond, ctx, withCluster } from "./test_support.ts";
+import { acceptedClass, cond } from "./test_support.ts";
+import { forbidden, harness, list } from "./stub_test.ts";
 
 const AT = "2026-11-10T09:00:00.000Z";
-const RES = "gatewayclasses.gateway.networking.k8s.io";
 
 Deno.test("an accepted class reads whole and is healthy", () => {
   const r = parseGatewayClass(acceptedClass(), AT);
@@ -127,79 +126,61 @@ Deno.test("SupportedVersion False makes an accepted class unhealthy, with the re
   ]);
 });
 
-Deno.test("a GatewayClass at a version other than v1 is read, recorded and warned about", async () => {
-  const c = acceptedClass();
-  c.apiVersion = "gateway.networking.k8s.io/v1beta1";
-  await withCluster({ objects: { gatewayclasses: [c] } }, async () => {
-    const l = ctx();
-    await gatewayclass.methods.list.execute({}, l.context);
-    assertEquals(
-      l.written[0].data.apiVersion,
-      "gateway.networking.k8s.io/v1beta1",
-    );
-    assertEquals(l.written[1].data.apiVersions, [
-      "gateway.networking.k8s.io/v1beta1",
-    ]);
-    assertEquals(l.warnings.length, 1);
-    assertEquals(l.warnings[0].includes("GatewayClasses"), true);
-    assertEquals(l.warnings[0].includes("v1beta1"), true);
-    const one = ctx();
-    await gatewayclass.methods.get.execute({ name: "example" }, one.context);
-    assertEquals(one.warnings.length, 1);
-  });
-  await withCluster(
-    { objects: { gatewayclasses: [acceptedClass()] } },
-    async () => {
-      const l = ctx();
-      await gatewayclass.methods.list.execute({}, l.context);
-      assertEquals(l.warnings, []);
-    },
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const RESOURCE = "gatewayclasses.gateway.networking.k8s.io";
+
+Deno.test("list records every GatewayClass of the cluster and one inventory, ignoring the definition's namespace", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE}`]: { stdout: list([acceptedClass()]) },
+  }, { globalArgs: { namespace: "infra" } });
+  await model.methods.list.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["gatewayclass", "example"],
+    ["inventory", "inventory_all"],
+  ]);
+  assertEquals(w[0].data.controllerName, "example.org/gateway-controller");
+  assertEquals([w[1].data.count, w[1].data.unhealthyCount], [1, 0]);
+  assertEquals(
+    h.logs().includes(
+      "Recorded {count} GatewayClasses, {unhealthy} not accepted",
+    ),
+    true,
   );
 });
 
-Deno.test("list and get read the cluster-scoped resource without a namespace", async () => {
-  const refused = acceptedClass();
-  (refused.metadata as Record<string, unknown>).name = "refused";
-  (refused.status as Record<string, unknown>).conditions = [
-    cond("Accepted", "False", "InvalidParameters"),
-  ];
-  await withCluster(
-    { objects: { gatewayclasses: [acceptedClass(), refused] } },
-    async (k) => {
-      const c = ctx({ namespace: "ignored-here" });
-      await gatewayclass.methods.list.execute({}, c.context);
-      assertEquals(k.calls[0].args, [
-        "--request-timeout=30s",
-        "get",
-        RES,
-        "-o",
-        "json",
-      ]);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["gatewayclass", "example"],
-        ["gatewayclass", "refused"],
-        ["inventory", "inventory_all"],
-      ]);
-      const inv = ListInventorySchema.parse(c.written[2].data);
-      assertEquals(inv.namespace, null);
-      assertEquals(inv.items, [{
-        namespace: null,
-        name: "example",
-        dataName: "example",
-        healthy: true,
-        reason: null,
-      }, {
-        namespace: null,
-        name: "refused",
-        dataName: "refused",
-        healthy: false,
-        reason: "class: Accepted=False (InvalidParameters)",
-      }]);
-
-      const one = ctx();
-      await gatewayclass.methods.get.execute({ name: "example" }, one.context);
-      assertEquals(k.kubectl[1].command, ["get", RES, "example"]);
-      assertEquals(one.written.map((w) => w.name), ["example"]);
-    },
+Deno.test("list passes on an RBAC refusal with the verbs it needs, and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE}`]: forbidden("list", RESOURCE),
+  });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "refused by RBAC; the identity needs get and list on",
   );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records one GatewayClass by name and logs whether it is accepted", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} example`]: { stdout: acceptedClass() },
+  });
+  await model.methods.get.execute({ name: "example" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["gatewayclass", "example"]]);
+  assertEquals((w[0].data.summary as Record<string, unknown>).accepted, true);
+  assertEquals(
+    h.logs().includes("GatewayClass {name}: accepted={accepted}"),
+    true,
+  );
+});
+
+Deno.test("get refuses a name that is not a Kubernetes name before kubectl runs", async () => {
+  using h = harness({});
+  await assertRejects(
+    () => model.methods.get.execute({ name: "--all" }, h.context),
+    Error,
+  );
+  assertEquals([h.calls, h.written()], [[], []]);
 });

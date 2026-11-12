@@ -34,7 +34,7 @@ The suite was run on 2026-11-10 on Linux x86_64 with:
 - Every model of the suite sets the `kubeconfig` argument. The mode without it,
   where kind writes to the default kubeconfig, is not run live by this suite and
   was not run live at all: a live run of it would write to the operator's own
-  kubeconfig. It is covered by the unit tests only, against the fakes.
+  kubeconfig. It is not covered by any test.
 - `life.sh` refuses to start when a kind cluster named `CLUSTER` already exists,
   so it never deletes a cluster it did not make. It lists the other kind
   clusters before and checks afterwards that each is still there.

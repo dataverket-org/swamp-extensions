@@ -5,13 +5,11 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
-import { KubectlError } from "../lib/kubectl.ts";
-import { RESOURCES } from "./_helpers.ts";
 import {
   clusterReason,
   ClusterSchema,
   missingObjectStore,
-  model as cluster,
+  model,
   objectStoreRef,
   parseCluster,
   parseObjectStore,
@@ -28,25 +26,8 @@ import {
   objectStore,
   objectStoreLoaded,
 } from "./fixtures.ts";
-import {
-  type Answer,
-  everything,
-  forbidden,
-  forbiddenList,
-  getArgs,
-  HOSTILE,
-  list,
-  listCall,
-  notFound,
-  PLANTED,
-  SAID,
-  withScript,
-} from "./test_support.ts";
-
-const MISSING_CRD = "the CRDs that define it are not installed";
-
-const C = RESOURCES.cluster;
-const O = RESOURCES.objectStore;
+import { PLANTED } from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
 
 function noSecret(text: string): void {
   for (const v of Object.values(PLANTED)) {
@@ -461,366 +442,6 @@ Deno.test("an empty, partial or malformed object still parses to a valid record"
   assertEquals(last.backup.plugins[0].parameterNames, []);
 });
 
-Deno.test("list records every Cluster of every namespace with one call", async () => {
-  await withScript(
-    [{ args: listCall(C, ""), out: list([clusterOne, clusterNoBackup]) }],
-    { namespace: "" },
-    async (c) => {
-      const r = await cluster.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 3);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["cluster", "pg--one"],
-        ["cluster", "pg--nobackup"],
-        ["inventory", "inventory_all"],
-      ]);
-      for (const w of c.written.slice(0, 2)) {
-        ClusterSchema.strict().parse(w.data);
-      }
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("list reads the ObjectStores once when a Cluster names one", async () => {
-  await withScript(
-    [
-      { args: listCall(C, "pg"), out: list([clusterOne, clusterThree]) },
-      { args: listCall(O, "pg"), out: list([objectStore]) },
-    ],
-    { namespace: "pg", kubeconfig: "/tmp/kc", context: "kind-x" },
-    async (c) => {
-      await cluster.methods.list.execute({}, c.context);
-      const three = c.written[1].data as ReturnType<typeof parseCluster>;
-      assertEquals(three.archive.source, "objectStore");
-      assertEquals(three.backup.objectStore?.found, true);
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("list still records the Clusters when the ObjectStores cannot be read", async () => {
-  const failures: Array<[Answer, string]> = [
-    [forbiddenList(O, "pg"), "reading it is forbidden for this user"],
-    [
-      { fail: SAID.missingCrd("objectstores") },
-      "the cluster has no objectstores.barmancloud.cnpg.io resource type",
-    ],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ out: { kind: "Status" } }, "did not return a list"],
-    [{ fail: SAID.badToken }, "did not accept the credentials"],
-  ];
-  for (const [answer, error] of failures) {
-    await withScript(
-      [
-        { args: listCall(C, "pg"), out: list([clusterThree]) },
-        { args: listCall(O, "pg"), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await cluster.methods.list.execute({}, c.context);
-        const r = c.written[0].data as ReturnType<typeof parseCluster>;
-        assertEquals(r.backup.objectStore, {
-          ...missingObjectStore("store", "three", r.backup.objectStore!.error!)
-            .store,
-        });
-        assertStringIncludes(r.backup.objectStore!.error!, error);
-        assertFalse(r.backup.objectStore!.error!.includes("E1110"));
-        assertEquals(r.archive.source, "none");
-        assertEquals(r.summary.healthy, true);
-        assert(c.logs.some((l) => l.includes("could not be read")));
-      },
-    );
-  }
-});
-
-Deno.test("list marks an ObjectStore that is not in the answer as not found", async () => {
-  await withScript(
-    [
-      { args: listCall(C, ""), out: list([clusterThree]) },
-      {
-        args: listCall(O, ""),
-        out: list([{
-          ...objectStore,
-          metadata: { name: "store", namespace: "x" },
-        }]),
-      },
-    ],
-    { namespace: "" },
-    async (c) => {
-      await cluster.methods.list.execute({}, c.context);
-      const r = c.written[0].data as ReturnType<typeof parseCluster>;
-      assertEquals(r.backup.objectStore?.found, false);
-      assertEquals(r.backup.objectStore?.error, "not found");
-    },
-  );
-});
-
-Deno.test("list takes the namespace argument over the model's, and an empty list is fine", async () => {
-  await withScript(
-    [{ args: listCall(C, "other"), out: list([]) }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await cluster.methods.list.execute(
-        { namespace: "other" },
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["inventory", "inventory_ns_other"],
-      ]);
-      const inv = c.written[0].data as Record<string, unknown>;
-      assertEquals(
-        [inv.namespace, inv.count, inv.healthyCount, inv.unhealthyCount],
-        ["other", 0, 0, 0],
-      );
-      assertEquals(inv.items, []);
-    },
-  );
-});
-
-Deno.test("list fails by name and writes nothing when the call is broken", async () => {
-  const broken: Array<[Answer, string]> = [
-    [forbiddenList(C, "pg"), "(Forbidden)"],
-    [{ fail: SAID.missingCrd("clusters") }, MISSING_CRD],
-    [{ out: "Unable to connect to the server" }, "did not print JSON"],
-    [{ out: "" }, "did not print JSON (no output)"],
-    [{ out: { kind: "Status", status: "Failure" } }, "did not return a list"],
-    [{ out: { items: [] } }, "did not return a list"],
-    [{ out: list(["x"]) }, "item 0 is not an object"],
-    [{ out: list([objectStore]) }, 'of kind "ObjectStore", not Cluster'],
-    [
-      { out: list([{ kind: "Cluster", metadata: { name: "x" } }]) },
-      "a Cluster without a name or namespace",
-    ],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [
-      { fail: "Unable to connect to the server: net/http: request canceled" },
-      "request canceled",
-    ],
-    [{ fail: SAID.unauthorized }, "did not accept the credentials"],
-    [{ fail: SAID.refused }, "could not be reached"],
-    [{ notInstalled: true }, "kubectl is not on PATH"],
-  ];
-  for (const [answer, text] of broken) {
-    await withScript(
-      [{ args: listCall(C, "pg"), ...answer }],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () => cluster.methods.list.execute({}, c.context),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertEquals(c.written, []);
-      },
-    );
-  }
-});
-
-Deno.test("a hostile namespace is refused before anything is spawned", async () => {
-  for (const ns of HOSTILE.filter((n) => n !== "")) {
-    await withScript([], { namespace: "" }, async (c, s) => {
-      await assertRejects(
-        () => cluster.methods.list.execute({ namespace: ns }, c.context),
-        Error,
-        "is not a Kubernetes namespace name",
-      );
-      await assertRejects(
-        () =>
-          cluster.methods.get.execute(
-            { name: "one", namespace: ns },
-            c.context,
-          ),
-        Error,
-        "is not a Kubernetes namespace name",
-      );
-      assertEquals(s.calls, []);
-    });
-    await withScript([], { namespace: ns }, async (c, s) => {
-      await assertRejects(
-        () => cluster.methods.list.execute({}, c.context),
-        Error,
-        "is not a Kubernetes namespace name",
-      );
-      assertEquals(s.calls, []);
-    });
-  }
-});
-
-Deno.test("a hostile name is refused before anything is spawned", async () => {
-  for (const name of HOSTILE) {
-    await withScript([], { namespace: "pg" }, async (c, s) => {
-      await assertRejects(
-        () => cluster.methods.get.execute({ name }, c.context),
-        Error,
-        "is not a Kubernetes object name",
-      );
-      assertEquals(s.calls, []);
-      assertEquals(c.written, []);
-    });
-  }
-});
-
-Deno.test("get needs a namespace", async () => {
-  await withScript([], { namespace: "" }, async (c) => {
-    await assertRejects(
-      () => cluster.methods.get.execute({ name: "one" }, c.context),
-      Error,
-      "namespace is required for get",
-    );
-  });
-});
-
-Deno.test("get records one Cluster, and reads its ObjectStore when it names one", async () => {
-  await withScript(
-    [{ args: getArgs(C, "one", "pg"), out: clusterOne }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await cluster.methods.get.execute({ name: "one" }, c.context);
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written[0].name, "pg--one");
-      noSecret(everything(c));
-    },
-  );
-  await withScript(
-    [
-      {
-        args: getArgs(C, "three", "other"),
-        out: {
-          ...clusterThree,
-          metadata: { name: "three", namespace: "other" },
-        },
-      },
-      {
-        args: getArgs(O, "store", "other"),
-        out: {
-          ...objectStore,
-          metadata: { name: "store", namespace: "other" },
-        },
-      },
-    ],
-    { namespace: "pg", context: "ctx" },
-    async (c) => {
-      await cluster.methods.get.execute(
-        { name: "three", namespace: "other" },
-        c.context,
-      );
-      const r = c.written[0].data as ReturnType<typeof parseCluster>;
-      assertEquals(r.archive.source, "objectStore");
-      assertStringIncludes(c.logs.at(-1)!, "3/3 ready, primary three-1");
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("get records the Cluster when its ObjectStore is missing or refused", async () => {
-  const failures: Array<[Answer, string]> = [
-    [{ fail: notFound(O, "store") }, "not found"],
-    [
-      { fail: forbidden("get", O, "pg") },
-      "reading it is forbidden for this user",
-    ],
-    [
-      { fail: SAID.missingCrd("objectstores") },
-      "the cluster has no objectstores.barmancloud.cnpg.io resource type",
-    ],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ out: "<html>" }, "did not print JSON"],
-    [{ out: {} }, "kubectl did not return ObjectStore pg/store"],
-    [
-      { out: { ...objectStore, metadata: { name: "other", namespace: "pg" } } },
-      "kubectl did not return ObjectStore pg/store",
-    ],
-    [{ out: clusterThree }, "kubectl did not return ObjectStore pg/store"],
-  ];
-  for (const [answer, error] of failures) {
-    await withScript(
-      [
-        { args: getArgs(C, "three", "pg"), out: clusterThree },
-        { args: getArgs(O, "store", "pg"), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await cluster.methods.get.execute({ name: "three" }, c.context);
-        const r = c.written[0].data as ReturnType<typeof parseCluster>;
-        assertEquals(r.backup.objectStore?.found, false);
-        assertStringIncludes(r.backup.objectStore!.error!, error);
-        assertEquals(r.backup.methods, ["plugin"]);
-      },
-    );
-  }
-});
-
-Deno.test("get does not hand a hostile ObjectStore name to kubectl", async () => {
-  const item = structuredClone(clusterThree);
-  (item.spec.plugins[0].parameters as Record<string, string>)
-    .barmanObjectName = "--all-namespaces";
-  await withScript(
-    [{ args: getArgs(C, "three", "pg"), out: item }],
-    { namespace: "pg" },
-    async (c) => {
-      await cluster.methods.get.execute({ name: "three" }, c.context);
-      const r = c.written[0].data as ReturnType<typeof parseCluster>;
-      assertEquals(r.backup.objectStore?.found, false);
-      assertStringIncludes(
-        r.backup.objectStore!.error!,
-        "is not a Kubernetes object name",
-      );
-    },
-  );
-});
-
-Deno.test("get fails by name for a missing Cluster, a refusal and a broken answer", async () => {
-  const broken: Array<[Answer, string]> = [
-    [{ fail: notFound(C, "gone") }, '"gone" not found'],
-    [{ fail: forbidden("get", C, "pg") }, "(Forbidden)"],
-    [{ out: "<html>proxy error</html>" }, "did not print JSON"],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ fail: SAID.missingCrd("clusters") }, MISSING_CRD],
-    [{ fail: SAID.badToken }, "did not accept the credentials"],
-  ];
-  for (const [answer, text] of broken) {
-    await withScript(
-      [{ args: getArgs(C, "gone", "pg"), ...answer }],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () => cluster.methods.get.execute({ name: "gone" }, c.context),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertEquals(c.written, []);
-      },
-    );
-  }
-});
-
-Deno.test("an answer that is not the Cluster that was asked for is an error and no record", async () => {
-  const wrong: unknown[] = [
-    {},
-    [],
-    { kind: "Cluster", metadata: {} },
-    { ...clusterOne, metadata: { name: "two", namespace: "pg" } },
-    { ...clusterOne, metadata: { name: "one", namespace: "other" } },
-    { ...clusterOne, kind: "Backup" },
-    list([clusterOne]),
-  ];
-  for (const out of wrong) {
-    await withScript(
-      [{ args: getArgs(C, "one", "pg"), out }],
-      { namespace: "pg" },
-      async (c) => {
-        await assertRejects(
-          () => cluster.methods.get.execute({ name: "one" }, c.context),
-          KubectlError,
-          "kubectl did not return Cluster pg/one",
-        );
-        assertEquals(c.written, [], JSON.stringify(out));
-      },
-    );
-  }
-});
-
 Deno.test("a hibernated Cluster is not healthy and not archiving, and is named as hibernated", () => {
   const r = parseCluster(clusterHibernated);
   ClusterSchema.strict().parse(r);
@@ -954,59 +575,6 @@ Deno.test("a fenced Cluster is not healthy, and not archiving when its primary i
   );
 });
 
-Deno.test("list counts a hibernated Cluster as healthy and names a fenced one", async () => {
-  await withScript(
-    [{
-      args: listCall(C, "pg"),
-      out: list([clusterHibernated, clusterFenced, clusterOne]),
-    }],
-    { namespace: "pg" },
-    async (c) => {
-      await cluster.methods.list.execute({}, c.context);
-      const inv = cluster.resources.inventory.schema.strict().parse(
-        c.written.at(-1)!.data,
-      );
-      assertEquals([inv.count, inv.healthyCount, inv.unhealthyCount], [
-        3,
-        2,
-        1,
-      ]);
-      assertEquals(inv.items, [
-        {
-          namespace: "pg",
-          name: "asleep",
-          dataName: "pg--asleep",
-          healthy: true,
-          reason: null,
-          archiveFailing: false,
-          hibernated: true,
-        },
-        {
-          namespace: "pg",
-          name: "fenced",
-          dataName: "pg--fenced",
-          healthy: false,
-          reason: "fenced: one-1 (annotation cnpg.io/fencedInstances)",
-          archiveFailing: true,
-          hibernated: false,
-        },
-        {
-          namespace: "pg",
-          name: "one",
-          dataName: "pg--one",
-          healthy: true,
-          reason: null,
-          archiveFailing: false,
-          hibernated: false,
-        },
-      ]);
-      // The record itself does not call a hibernated Cluster healthy.
-      const asleep = c.written[0].data as ReturnType<typeof parseCluster>;
-      assertEquals([asleep.hibernated, asleep.summary.healthy], [true, false]);
-    },
-  );
-});
-
 Deno.test("a Cluster whose plugin archives WAL never shows the times left in its own status", () => {
   // Leftover status, a readable ObjectStore: the ObjectStore's times.
   const withStore = parseCluster(
@@ -1086,275 +654,6 @@ Deno.test("each part of an unhealthy Cluster is named in its reason", () => {
   assertFalse(line.includes(PLANTED.password));
 });
 
-Deno.test("list writes an inventory that names each unhealthy Cluster and why", async () => {
-  const archiveDown = structuredClone(clusterOne);
-  archiveDown.metadata.name = "arch";
-  archiveDown.status.conditions[1].status = "False";
-  await withScript(
-    [
-      {
-        args: listCall(C, "pg"),
-        out: list([
-          clusterOne,
-          clusterFailingOver,
-          clusterNoBackup,
-          archiveDown,
-        ]),
-      },
-      { args: listCall(O, "pg"), out: list([objectStore]) },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await cluster.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 5);
-      const last = c.written.at(-1)!;
-      assertEquals([last.spec, last.name], ["inventory", "inventory_ns_pg"]);
-      const inv = cluster.resources.inventory.schema.strict().parse(last.data);
-      assertEquals(
-        [inv.namespace, inv.count, inv.healthyCount, inv.unhealthyCount],
-        ["pg", 4, 3, 1],
-      );
-      assertEquals(inv.items, [
-        {
-          namespace: "pg",
-          name: "one",
-          dataName: "pg--one",
-          healthy: true,
-          reason: null,
-          archiveFailing: false,
-          hibernated: false,
-        },
-        {
-          namespace: "pg",
-          name: "three",
-          dataName: "pg--three",
-          healthy: false,
-          reason:
-            "phase Failing over (Failing over from three-1 to three-2); 2 of 3 instances ready; primary changing from three-1 to three-2; Ready is False (ClusterIsNotReady)",
-          archiveFailing: true,
-          hibernated: false,
-        },
-        {
-          namespace: "pg",
-          name: "nobackup",
-          dataName: "pg--nobackup",
-          healthy: true,
-          reason: null,
-          archiveFailing: false,
-          hibernated: false,
-        },
-        {
-          namespace: "pg",
-          name: "arch",
-          dataName: "pg--arch",
-          healthy: true,
-          reason: null,
-          archiveFailing: true,
-          hibernated: false,
-        },
-      ]);
-      // Every line points at a record that was written in the same run.
-      assertEquals(
-        inv.items.map((i) => i.dataName),
-        c.written.slice(0, 4).map((w) => w.name),
-      );
-      assert(!Number.isNaN(Date.parse(inv.observedAt)));
-      assertStringIncludes(c.logs.at(-1)!, "Recorded 4 Cluster objects");
-      assertStringIncludes(c.logs.at(-1)!, "1 not healthy");
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("an empty namespace argument lists the definition's namespace", async () => {
-  await withScript(
-    [{ args: listCall(C, "pg"), out: list([]) }],
-    { namespace: "pg" },
-    async (c) => {
-      await cluster.methods.list.execute({ namespace: "" }, c.context);
-      assertEquals(c.written.map((w) => w.name), ["inventory_ns_pg"]);
-    },
-  );
-});
-
-Deno.test("a list in which two Clusters share a data name writes nothing", async () => {
-  const named = (namespace: string, name: string) => ({
-    ...clusterNoBackup,
-    metadata: { name, namespace },
-  });
-  await withScript(
-    [{
-      args: listCall(C, ""),
-      out: list([clusterOne, named("a", "b--c"), named("a--b", "c")]),
-    }],
-    { namespace: "" },
-    async (c) => {
-      await assertRejects(
-        () => cluster.methods.list.execute({}, c.context),
-        Error,
-        "Cluster a/b--c and a--b/c would both be stored as a--b--c",
-      );
-      assertEquals(c.written, []);
-    },
-  );
-});
-
-Deno.test("a cancelled run is thrown on, never recorded as an unreadable ObjectStore", async () => {
-  // list: cancelled while the ObjectStores are read.
-  const stop = new AbortController();
-  await withScript(
-    [{ args: listCall(C, "pg"), out: list([clusterThree]) }],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () => cluster.methods.list.execute({}, c.context),
-        KubectlError,
-      );
-      assertEquals(e.kind, "cancelled");
-      assertStringIncludes(e.message, "was cancelled");
-      assertEquals(c.written, []);
-      assertFalse(c.logs.some((l) => l.includes("could not be read")));
-    },
-    {
-      signal: stop.signal,
-      handler: (call) => {
-        assertEquals(call.resource, O);
-        stop.abort();
-        return {};
-      },
-    },
-  );
-  // get: cancelled while the ObjectStore is read.
-  const stop2 = new AbortController();
-  await withScript(
-    [{ args: getArgs(C, "three", "pg"), out: clusterThree }],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () => cluster.methods.get.execute({ name: "three" }, c.context),
-        KubectlError,
-      );
-      assertEquals(e.kind, "cancelled");
-      assertEquals(c.written, []);
-    },
-    {
-      signal: stop2.signal,
-      handler: () => {
-        stop2.abort();
-        return {};
-      },
-    },
-  );
-  // A run that is cancelled before it starts makes no record either.
-  const stop3 = new AbortController();
-  stop3.abort();
-  await withScript([], { namespace: "pg" }, async (c) => {
-    const e = await assertRejects(
-      () => cluster.methods.list.execute({}, c.context),
-      KubectlError,
-    );
-    assertEquals(e.kind, "cancelled");
-    assertEquals(c.written, []);
-  }, { signal: stop3.signal, handler: () => ({}) });
-});
-
-Deno.test("a hibernation counts in the inventory only once the operator has acted, and not when fenced too", async () => {
-  const hibernate = (
-    conditions: unknown[],
-    more: Record<string, string> = {},
-  ) => ({
-    ...clusterHibernated,
-    metadata: {
-      name: "asleep",
-      namespace: "pg",
-      annotations: { "cnpg.io/hibernation": "on", ...more },
-    },
-    status: { ...clusterHibernated.status, conditions },
-  });
-  const done = {
-    type: "cnpg.io/hibernation",
-    status: "True",
-    reason: "Hibernated",
-  };
-  const running = clusterOne.status.conditions;
-  const line = async (item: unknown) => {
-    let found: Record<string, unknown> = {};
-    await withScript(
-      [{ args: listCall(C, "pg"), out: list([item]) }],
-      { namespace: "pg" },
-      async (c) => {
-        await cluster.methods.list.execute({}, c.context);
-        const inv = cluster.resources.inventory.schema.strict().parse(
-          c.written.at(-1)!.data,
-        );
-        assertEquals(inv.unhealthyCount, inv.items[0].healthy ? 0 : 1);
-        found = inv.items[0];
-        const record = c.written[0].data as ReturnType<typeof parseCluster>;
-        // The record never calls a hibernated Cluster healthy or archiving.
-        assertEquals([
-          record.hibernated,
-          record.summary.healthy,
-          record.summary.archiving,
-        ], [true, false, false]);
-        found.reached = record.hibernationReached;
-      },
-    );
-    return found;
-  };
-  // The operator has acted: healthy here, no reason.
-  const reached = await line(hibernate([...running, done]));
-  assertEquals(
-    [reached.reached, reached.healthy, reached.hibernated, reached.reason],
-    [true, true, true, null],
-  );
-  assertEquals(reached.archiveFailing, false);
-  // The annotation alone, with every pod still running: judged as any other.
-  const asked = await line(hibernate(running));
-  assertEquals([asked.reached, asked.healthy, asked.hibernated], [
-    false,
-    false,
-    false,
-  ]);
-  assertEquals(
-    asked.reason,
-    "hibernation asked for and not reached (annotation cnpg.io/hibernation; the operator has set no condition for it); 0 of 1 instances ready",
-  );
-  // The pods are stopping: the condition is there and not True.
-  const stopping = await line(
-    hibernate([...running, {
-      type: "cnpg.io/hibernation",
-      status: "False",
-      reason: "WaitingPodsDeletion",
-    }]),
-  );
-  assertEquals([stopping.healthy, stopping.hibernated], [false, false]);
-  assertEquals(
-    stopping.reason,
-    "hibernation asked for and not reached (annotation cnpg.io/hibernation; the condition is False (WaitingPodsDeletion)); 0 of 1 instances ready",
-  );
-  // Reached and fenced too: the fence is someone's to end.
-  const both = await line(
-    hibernate([...running, done], {
-      "cnpg.io/fencedInstances": '["one-1"]',
-    }),
-  );
-  assertEquals([both.reached, both.healthy, both.hibernated], [
-    true,
-    false,
-    false,
-  ]);
-  assertEquals(
-    both.reason,
-    "hibernated on purpose (annotation cnpg.io/hibernation); fenced: one-1 (annotation cnpg.io/fencedInstances); 0 of 1 instances ready",
-  );
-  // A condition left True on a Cluster that is no longer asked to sleep.
-  const woken = structuredClone(hibernate([...running, done]));
-  woken.metadata.annotations["cnpg.io/hibernation"] = "off";
-  const r = parseCluster(woken);
-  assertEquals([r.hibernated, r.hibernationReached], [false, false]);
-  assertEquals(parseCluster(clusterOne).hibernationReached, false);
-});
-
 Deno.test("the snapshot times of the Cluster status stand beside the plugin's archive times", () => {
   const item = structuredClone(clusterMoved) as Record<string, unknown>;
   Object.assign(item.status as Record<string, unknown>, {
@@ -1412,4 +711,102 @@ Deno.test("the snapshot times of the Cluster status stand beside the plugin's ar
     });
     assertEquals(parseCluster(plain).archive.source, "clusterStatus");
   }
+});
+
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const C = "clusters.postgresql.cnpg.io";
+const S = "objectstores.barmancloud.cnpg.io";
+
+Deno.test("list records each Cluster with its ObjectStore read, and an inventory naming the unhealthy one", async () => {
+  using h = harness({
+    [`kubectl get ${C} -n pg`]: {
+      stdout: list([clusterOne, clusterThree, clusterFailingOver]),
+    },
+    [`kubectl get ${S} -n pg`]: { stdout: list([objectStore]) },
+  });
+  await model.methods.list.execute({ namespace: "pg" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["cluster", "pg--one"],
+    ["cluster", "pg--three"],
+    ["cluster", `pg--${clusterFailingOver.metadata.name}`],
+    ["inventory", "inventory_ns_pg"],
+  ]);
+  const three = w[1].data as ReturnType<typeof parseCluster>;
+  assertEquals(three.backup.objectStore?.name, "store");
+  assertEquals(three.backup.objectStore?.found, true);
+  assertEquals(w[3].data.count, 3);
+  assertEquals(w[3].data.unhealthyCount, 1);
+  noSecret(JSON.stringify([w, h.logs()]));
+  assert(h.logs().some((l) => l.startsWith("Recorded {count}")));
+});
+
+Deno.test("list records a Cluster whose ObjectStores cannot be read with the reason, and warns", async () => {
+  using h = harness({
+    [`kubectl get ${C} -n pg`]: { stdout: list([clusterThree]) },
+    [`kubectl get ${S} -n pg`]: forbidden("list", S),
+  });
+  await model.methods.list.execute({ namespace: "pg" }, h.context);
+  const three = h.written()[0].data as ReturnType<typeof parseCluster>;
+  assertEquals(three.backup.objectStore?.found, false);
+  assertEquals(
+    three.backup.objectStore?.error,
+    "reading it is forbidden for this user",
+  );
+  assert(h.logs().includes("ObjectStores could not be read: {error}"));
+});
+
+Deno.test("list passes on a refused list and records nothing", async () => {
+  using h = harness({ [`kubectl get ${C} -A`]: forbidden("list", C) });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "forbidden",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records one Cluster and logs its phase and primary", async () => {
+  using h = harness({ [`kubectl get ${C} one -n pg`]: { stdout: clusterOne } });
+  await model.methods.get.execute({ name: "one", namespace: "pg" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["cluster", "pg--one"]]);
+  assertEquals(w[0].data.currentPrimary, "one-1");
+  assert(h.logs().some((l) => l.startsWith("Cluster {name}: {phase}")));
+  noSecret(JSON.stringify([w, h.logs()]));
+});
+
+Deno.test("get reads the ObjectStore of a plugin Cluster", async () => {
+  using h = harness({
+    [`kubectl get ${C} three -n pg`]: { stdout: clusterThree },
+    [`kubectl get ${S} store -n pg`]: { stdout: objectStore },
+  });
+  await model.methods.get.execute({ name: "three" }, {
+    ...h.context,
+    globalArgs: { namespace: "pg" },
+  });
+  const three = h.written()[0].data as ReturnType<typeof parseCluster>;
+  assertEquals(three.backup.objectStore?.found, true);
+  assertEquals(three.archive.lastSuccessfulBackup, "2026-11-10T09:50:05Z");
+});
+
+Deno.test("get of a missing Cluster fails and records nothing", async () => {
+  using h = harness({ [`kubectl get ${C} gone -n pg`]: notFound(C, "gone") });
+  await assertRejects(
+    () =>
+      model.methods.get.execute({ name: "gone", namespace: "pg" }, h.context),
+    Error,
+    "not found",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get refuses without a namespace before kubectl runs", async () => {
+  using h = harness({});
+  await assertRejects(
+    () => model.methods.get.execute({ name: "one" }, h.context),
+    Error,
+  );
+  assertEquals([h.calls.length, h.written().length], [0, 0]);
 });

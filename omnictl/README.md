@@ -184,6 +184,18 @@ allNodes: ${{ data.findBySpec("omni", "node") }}
 totalNodes: ${{ data.latest("omni", "summary").attributes.totalNodes }}
 ```
 
+## Tests
+
+`deno task test` runs unit tests of the pure parts (scopes, role labels, patch
+files, the reading of omnictl's output, the pre-flight checks) and of every
+method: each runs through `createModelTestContext` from
+`@swamp-club/swamp-testing` with a stub `omnictl` runner that answers only the
+calls its test lists, once where the method succeeds and once where it fails or
+refuses. They check the records each method writes or deletes and the commands
+it runs, that no join token is stored or logged, that the talosconfig is logged
+nowhere, and that the service-account key is redacted from an error. There is no
+live suite against an Omni instance.
+
 ## License
 
 AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;

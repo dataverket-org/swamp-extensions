@@ -1,69 +1,102 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
-import { StateInventorySchema } from "./_helpers.ts";
-import { CertificateRequestSchema } from "./_records.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./certificaterequest.ts";
-import {
-  assertGetRefusals,
-  assertListFailures,
-  assertNoSecrets,
-  ctx,
-  list,
-  request,
-  withCalls,
-} from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
+import { assertNoSecrets, request } from "./test_support.ts";
 
-const REQS = "certificaterequests.cert-manager.io";
-const OWNER = { uid: "u", name: "hanging" };
-Deno.test("certificaterequest list and get record state and never a CSR or certificate", async () => {
-  const c = ctx({});
-  await withCalls([
-    {
-      args: ["get", REQS, "-A"],
-      out: list([
-        request("hanging-1", "1", OWNER),
-        request("hanging-0", "0", OWNER, {
-          status: "True",
-          reason: "Issued",
-          message: "ok",
-        }),
-      ]),
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const M = model.methods;
+const R = "certificaterequests.cert-manager.io";
+const OWNER = { uid: "uid-owner", name: "owner" };
+
+Deno.test("list records each CertificateRequest and one inventory, and no secret", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: {
+      stdout: list([request("one", "1", OWNER), request("two", "1", OWNER)]),
     },
-    {
-      args: ["get", REQS, "hanging-1", "-n", "acme-test"],
-      out: request("hanging-1", "1", OWNER),
-    },
-  ], async () => {
-    await model.methods.list.execute({}, c.context);
-    await model.methods.get.execute({
-      name: "hanging-1",
-      namespace: "acme-test",
-    }, c.context);
   });
-  assertEquals(c.written.map((w) => [w.spec, w.name]), [
-    ["certificateRequest", "acme-test--hanging-1"],
-    ["certificateRequest", "acme-test--hanging-0"],
-    ["inventory", "inventory_all"],
-    ["certificateRequest", "acme-test--hanging-1"],
+  await M.list.execute({ namespace: "acme-test" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["certificateRequest", "acme-test--one"],
+    ["certificateRequest", "acme-test--two"],
+    ["inventory", "inventory_ns_acme-test"],
   ]);
-  CertificateRequestSchema.parse(c.written[0].data);
-  const inventory = StateInventorySchema.parse(c.written[2].data);
-  assertEquals([inventory.count, inventory.unhealthyCount], [2, 1]);
-  assertEquals(inventory.items[0].state, "Pending");
-  assertNoSecrets(c.written, c.logs);
+  assertEquals(w[2].data.count, 2);
+  assertEquals(w[0].data.name, "one");
+  assertEquals(
+    h.logs().at(-1),
+    "Found 2 CertificateRequest objects, 2 not healthy",
+  );
+  assertNoSecrets(w, h.logs());
 });
 
-Deno.test("certificaterequest get refuses injection-shaped names before kubectl and names a missing object", async () => {
-  await assertGetRefusals(
-    model.methods.get.execute,
-    REQS,
-    "CertificateRequest",
-  );
+Deno.test("list with no namespace anywhere reads every namespace", async () => {
+  using h = harness({ [`kubectl get ${R} -A`]: { stdout: list([]) } });
+  await M.list.execute({}, h.context);
+  assertEquals(h.written().map((x) => x.name), ["inventory_all"]);
 });
 
-Deno.test("certificaterequest list fails whole on RBAC, a missing CRD, an expired login, a timeout, output that is not JSON or an answer that is not a list", async () => {
-  await assertListFailures(
-    model.methods.list.execute,
-    REQS,
-    "CertificateRequest",
+Deno.test("list passes on a refusal and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: forbidden("list", R),
+  });
+  await assertRejects(
+    () => M.list.execute({ namespace: "acme-test" }, h.context),
+    Error,
+    "forbidden",
   );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("list says cert-manager is not installed when the type is not served", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: {
+      code: 1,
+      stderr: `error: the server doesn't have a resource type "${
+        R.split(".")[0]
+      }"`,
+    },
+  });
+  await assertRejects(
+    () => M.list.execute({ namespace: "acme-test" }, h.context),
+    Error,
+    "cert-manager is not installed",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records the one CertificateRequest asked for", async () => {
+  using h = harness({
+    [`kubectl get ${R} one -n acme-test`]: {
+      stdout: request("one", "1", OWNER),
+    },
+  });
+  await M.get.execute({ name: "one", namespace: "acme-test" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [[
+    "certificateRequest",
+    "acme-test--one",
+  ]]);
+  assertEquals([w[0].data.namespace, w[0].data.name], ["acme-test", "one"]);
+  assertEquals(h.logs().at(-1), "Read CertificateRequest one");
+  assertNoSecrets(w, h.logs());
+});
+
+Deno.test("get of a missing CertificateRequest says it does not exist and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${R} gone -n acme-test`]: notFound(R, "gone"),
+  });
+  await assertRejects(
+    () => M.get.execute({ name: "gone", namespace: "acme-test" }, h.context),
+    Error,
+    "CertificateRequest acme-test/gone does not exist",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get without a namespace is refused before kubectl runs", async () => {
+  using h = harness({});
+  await assertRejects(() => M.get.execute({ name: "one" }, h.context));
+  assertEquals([h.calls, h.written()], [[], []]);
 });

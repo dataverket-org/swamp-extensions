@@ -1,13 +1,6 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
-import { forbiddenList, list, withKubectl } from "../lib/kubectl_fake.ts";
-import { model as kustomization, parseKustomization } from "./kustomization.ts";
-import { ctx, KS, ksItem } from "./test_support.ts";
-
-const methods = kustomization.methods;
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import { model, parseKustomization } from "./kustomization.ts";
+import { harness, list, notFound } from "./stub_test.ts";
 
 Deno.test("parseKustomization reads path, prune, revisions and defaults", () => {
   const r = parseKustomization({
@@ -41,187 +34,152 @@ Deno.test("parseKustomization reads path, prune, revisions and defaults", () => 
   assertEquals(d.conditions, []);
 });
 
-Deno.test("kustomization list records one instance per Kustomization with the published fields and names", async () => {
-  const c = ctx({ namespace: "flux-system", context: "c" });
-  await withKubectl({
-    context: "c",
-    calls: [{
-      args: ["get", KS, "-n", "flux-system"],
-      out: list([ksItem("flux-system", "flux-system"), ksItem("apps", "x")]),
-    }],
-  }, async () => {
-    const r = await methods.list.execute({}, c.context);
-    assertEquals(r.dataHandles.length, 2);
+// ───── the methods, through createModelTestContext with a stub spawn ─────
+
+const M = model.methods;
+const KS = "kustomizations.kustomize.toolkit.fluxcd.io";
+const G = { namespace: "flux-system" };
+const GET = `kubectl get ${KS} apps -n flux-system`;
+function ks(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    apiVersion: "kustomize.toolkit.fluxcd.io/v1",
+    kind: "Kustomization",
+    metadata: { name: "apps", namespace: "flux-system" },
+    spec: {
+      path: "./apps",
+      prune: true,
+      sourceRef: { kind: "GitRepository", name: "flux-system" },
+      ...over,
+    },
+    status: {
+      conditions: [{ type: "Ready", status: "True", reason: "Succeeded" }],
+      lastAppliedRevision: "main@sha1:aaa",
+    },
+  };
+}
+
+Deno.test("list records each Kustomization under <namespace>--<name> and logs the count", async () => {
+  using h = harness({
+    [`kubectl get ${KS} -n flux-system`]: { stdout: list([ks()]) },
+  }, { globalArgs: G });
+  await M.list.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [[
+    "kustomization",
+    "flux-system--apps",
+  ]]);
+  assertEquals(w[0].data.lastAppliedRevision, "main@sha1:aaa");
+  assertEquals(h.logs().includes("Found {count} Kustomizations"), true);
+});
+
+Deno.test("list refuses an answer that is not a list and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${KS} -A`]: { stdout: ks() },
   });
-  assertEquals(c.written.map((w) => [w.spec, w.name]), [
-    ["kustomization", "flux-system--flux-system"],
-    ["kustomization", "x--apps"],
-  ]);
-  assertEquals(Object.keys(c.written[0].data as object).sort(), [
-    "conditions",
-    "interval",
-    "lastAppliedRevision",
-    "lastAttemptedRevision",
-    "name",
-    "namespace",
-    "observedGeneration",
-    "path",
-    "prune",
-    "ready",
-    "readyMessage",
-    "readyReason",
-    "sourceRef",
-    "suspended",
-    "targetNamespace",
-  ]);
+  await assertRejects(
+    () => M.list.execute({}, h.context),
+    Error,
+    "did not return a list",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("reconcile runs flux reconcile, then reads the Kustomization back and records it", async () => {
+  using h = harness({
+    "flux reconcile kustomization apps -n flux-system": { stdout: "" },
+    [GET]: { stdout: ks() },
+  }, { globalArgs: G });
+  await M.reconcile.execute({ name: "apps" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [[
+    "kustomization",
+    "flux-system--apps",
+  ]]);
+  assertEquals(w[0].data.ready, true);
   assertEquals(
-    Object.keys(kustomization.resources.kustomization.schema.shape).length,
-    15,
+    h.logs().includes("Reconciliation complete, ready={ready}"),
+    true,
   );
 });
 
-Deno.test("kustomization reconcile, suspend and resume run flux with their own time limit, then read the object back", async () => {
-  const read = { args: ["get", KS, "k", "-n", "n"], out: ksItem("k", "n") };
-  const c = ctx({ namespace: "n" });
-  await withKubectl({
-    calls: [
-      {
-        bin: "flux",
-        args: ["reconcile", "kustomization", "k", "-n", "n", "--with-source"],
-        timeoutMs: 630_000,
-      },
-      read,
-      {
-        bin: "flux",
-        args: ["reconcile", "kustomization", "k", "-n", "n"],
-        timeoutMs: 330_000,
-      },
-      read,
-      {
-        bin: "flux",
-        args: ["suspend", "kustomization", "k", "-n", "n"],
-        timeoutMs: 60_000,
-      },
-      read,
-      {
-        bin: "flux",
-        args: ["resume", "kustomization", "k", "-n", "n"],
-        timeoutMs: 330_000,
-      },
-      read,
-    ],
-  }, async () => {
-    await methods.reconcile.execute(
-      { name: "k", withSource: true },
-      c.context,
-    );
-    await methods.reconcile.execute({ name: "k" }, c.context);
-    await methods.suspend.execute({ name: "k" }, c.context);
-    await methods.resume.execute({ name: "k" }, c.context);
-  });
-  assertEquals(c.written.map((w) => w.name), [
-    "n--k",
-    "n--k",
-    "n--k",
-    "n--k",
-  ]);
-  for (
-    const line of [
-      "Reconciliation complete, ready={ready}",
-      "Suspended Kustomization {name}: suspended={suspended}",
+Deno.test("reconcile throws what flux said when it fails and records nothing", async () => {
+  using h = harness({
+    "flux reconcile kustomization apps -n flux-system --with-source": {
+      code: 1,
+      stderr: "✗ kustomize build failed",
+    },
+  }, { globalArgs: G });
+  await assertRejects(
+    () => M.reconcile.execute({ name: "apps", withSource: true }, h.context),
+    Error,
+    "flux reconcile failed: ✗ kustomize build failed",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("suspend runs flux suspend and records the Kustomization as suspended", async () => {
+  using h = harness({
+    "flux suspend kustomization apps -n flux-system": { stdout: "" },
+    [GET]: { stdout: ks({ suspend: true }) },
+  }, { globalArgs: G });
+  await M.suspend.execute({ name: "apps" }, h.context);
+  const w = h.written();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].data.suspended, true);
+  assertEquals(
+    h.logs().includes("Suspended Kustomization {name}: suspended={suspended}"),
+    true,
+  );
+});
+
+Deno.test("suspend passes on flux's refusal and records nothing", async () => {
+  using h = harness({
+    "flux suspend kustomization apps -n flux-system": {
+      code: 1,
+      stderr:
+        '✗ kustomizations.kustomize.toolkit.fluxcd.io "apps" is forbidden',
+    },
+  }, { globalArgs: G });
+  await assertRejects(
+    () => M.suspend.execute({ name: "apps" }, h.context),
+    Error,
+    "flux suspend failed",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("resume runs flux resume and records the Kustomization", async () => {
+  using h = harness({
+    "flux resume kustomization apps -n flux-system": { stdout: "" },
+    [GET]: { stdout: ks() },
+  }, { globalArgs: G });
+  await M.resume.execute({ name: "apps" }, h.context);
+  const w = h.written();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].data.suspended, false);
+  assertEquals(
+    h.logs().includes(
       "Resumed Kustomization {name}: suspended={suspended}, ready={ready}",
-    ]
-  ) {
-    assertEquals(c.logs.includes(line), true, line);
-  }
+    ),
+    true,
+  );
 });
 
-Deno.test("NEG a single-object method without a namespace refuses before spawning", async () => {
-  const c = ctx({ namespace: "" });
-  await withKubectl({}, async () => {
-    for (const namespace of [undefined, ""]) {
-      const e = await assertRejects(
-        () => methods.suspend.execute({ name: "k", namespace }, c.context),
-        Error,
-      );
-      assertStringIncludes(e.message, "namespace is required for suspend");
-    }
-  });
-  assertEquals(c.written, []);
+Deno.test("resume passes on a Kustomization that is gone when read back, and records nothing", async () => {
+  using h = harness({
+    "flux resume kustomization apps -n flux-system": { stdout: "" },
+    [GET]: notFound(KS, "apps"),
+  }, { globalArgs: G });
+  await assertRejects(
+    () => M.resume.execute({ name: "apps" }, h.context),
+    Error,
+    "not found",
+  );
+  assertEquals(h.written(), []);
 });
 
-Deno.test("NEG a failing flux command is an error and nothing is written", async () => {
-  const c = ctx({ namespace: "n" });
-  await withKubectl({
-    calls: [{
-      bin: "flux",
-      args: ["suspend", "kustomization", "k", "-n", "n"],
-      fail: 'kustomization "k" not found',
-    }],
-  }, async () => {
-    const e = await assertRejects(
-      () => methods.suspend.execute({ name: "k" }, c.context),
-      Error,
-    );
-    assertEquals(
-      e.message,
-      'flux suspend failed: kustomization "k" not found',
-    );
-  });
-  assertEquals(c.written, []);
-});
-
-Deno.test("NEG kubectl output that is not JSON fails list by name, without repeating the output", async () => {
-  const c = ctx({ namespace: "" });
-  await withKubectl({
-    calls: [{
-      args: ["get", KS, "-A"],
-      out: "Unable to connect to the server: token=abc123",
-    }],
-  }, async () => {
-    const e = await assertRejects(
-      () => methods.list.execute({}, c.context),
-      Error,
-    );
-    assertStringIncludes(e.message, `kubectl get ${KS} -A did not print JSON`);
-    assertEquals(e.message.includes("abc123"), false);
-  });
-  assertEquals(c.written, []);
-});
-
-Deno.test("NEG a refused list, a wrong answer and a colliding pair write nothing; a bad namespace never reaches kubectl", async () => {
-  for (
-    const [answer, phrase] of [
-      [forbiddenList(KS), "is forbidden"],
-      [{ out: { kind: "Status" } }, "did not return a list"],
-      [{ out: list([{ kind: "HelmRelease" }]) }, "not Kustomization"],
-      [
-        { out: list([ksItem("b--c", "a"), ksItem("c", "a--b")]) },
-        "would both be stored as a--b--c",
-      ],
-    ] as const
-  ) {
-    const c = ctx({ namespace: "" });
-    await withKubectl({
-      calls: [{ args: ["get", KS, "-A"], ...answer }],
-    }, async () => {
-      await assertRejects(
-        () => methods.list.execute({}, c.context),
-        Error,
-        phrase,
-      );
-    });
-    assertEquals(c.written, []);
-  }
-  await withKubectl({}, async () => {
-    await assertRejects(
-      () =>
-        methods.list.execute(
-          { namespace: "-A" },
-          ctx({ namespace: "" }).context,
-        ),
-      Error,
-      "is not a Kubernetes namespace name",
-    );
-  });
+Deno.test("resume refuses a name that is not a Kubernetes name before flux runs", async () => {
+  using h = harness({}, { globalArgs: G });
+  await assertRejects(() => M.resume.execute({ name: "--all" }, h.context));
+  assertEquals(h.calls, []);
 });

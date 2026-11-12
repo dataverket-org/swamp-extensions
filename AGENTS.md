@@ -14,8 +14,8 @@ and extension-publish guides.
 2. **A process is started in `lib/cli.ts` and nowhere else.** An extension that
    runs a command imports `../lib/cli.ts`, and `../lib/kubectl.ts` for kubectl.
    No second spawn helper, no private name check, no private redaction. When
-   `lib/` lacks something, change `lib/`, with a test and a mutation, and say
-   which extensions' content hashes that moves.
+   `lib/` lacks something, change `lib/`, with a unit test, and say which
+   extensions' content hashes that moves.
 3. **Search before you build.** `swamp extension search` and
    `swamp behavior type search` first. A community extension that covers the
    domain but lacks methods is forked here, with its license notice kept, not
@@ -26,8 +26,8 @@ and extension-publish guides.
    ours in a schema, a description or a README. Offer each credential form on
    its merits and say how to choose.
 6. **A credential never reaches an argument, a record, a log line or an error.**
-   Pass a value that could appear to `secrets`. Tests plant a marker and look
-   for it afterwards.
+   Pass a value that could appear to `secrets`. The live suite plants a marker
+   and looks for it afterwards.
 7. **No command that waits longer than 180 s** in a test or a session. Poll. A
    method gives each long call a time limit that fits it; the 60 s default must
    never cut real work.
@@ -57,17 +57,26 @@ and extension-publish guides.
 
 ## Tests
 
-- Unit tests on the strict fakes in `lib/` (`cli_fake.ts`, `kubectl_fake.ts`):
-  an unexpected call or an unknown flag fails the test.
-- A negative suite beside the happy path, written first and seen to fail:
-  missing objects, refused access, an expired login, output that is not JSON or
-  not the object asked for, a command that hangs, a cancelled run, names shaped
-  like flags, and the planted secret. Then switch off each check in a scratch
-  copy and see a test fail.
-- A live suite in `smoke/`, run through swamp from a scratch repository that
-  loads the extension from source. Scripts take a kubeconfig file as input and
-  refuse a context that is not `kind-*`. `smoke/README.md` has an "Environment"
-  section; claim nothing there that was not run.
+- Testing follows the swamp skill's extension guidance,
+  `references/model/testing.md` and `references/model/smoke_testing.md`, and
+  only that.
+- Every model file has a sibling `_test.ts`, as swamp's publish gate asks, with
+  a success and a failure path for each method. A method's test runs its
+  `execute` through `createModelTestContext` from `@swamp-club/swamp-testing`
+  with a stub client injected, or calls the extracted function with one, as
+  `testing.md` shows. A stub answers what its test needs and nothing more: it is
+  not a model of the service, and no shared fake service is kept.
+- The live suite is the proof. Behaviour, refusals, negative cases and the
+  planted secret are tested live, in
+  the extension's `smoke/` suite, against throwaway environments in rootless
+  Podman or kind, as `versitygw/smoke/` and `forgejo/smoke/` do. A fault that no
+  real service produces on demand is injected at the client seam over the real
+  service, never by a fake service.
+- The live suite runs through swamp from a scratch repository that loads the
+  extension from source. Scripts take a kubeconfig file as input and refuse a
+  context that is not `kind-*`. `smoke/README.md` has an "Environment" section;
+  claim nothing there that was not run.
+- No command in a test or a smoke script waits longer than 180 s (rule 7).
 - The tested environment is rootless Podman and kind (README "Testing
   environment").
 

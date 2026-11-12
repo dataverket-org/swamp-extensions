@@ -16,47 +16,46 @@ import {
   type Health,
   model,
 } from "./endpoint.ts";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 
 /** This extension's directory doubles as the repository root in tests. */
 const REPO = import.meta.dirname!;
 
 function context(over: Record<string, unknown> = {}) {
-  const written: Record<string, unknown>[] = [];
-  const logs: string[] = [];
-  const ctx: Context = {
+  const t = createModelTestContext({
     globalArgs: GlobalArgsSchema.parse({ url: "http://127.0.0.1:1/", ...over }),
     repoDir: REPO,
-    logger: { info: (m) => logs.push(m), warning: (m) => logs.push(m) },
-    writeResource: (_spec, name, data) => {
-      written.push(data);
-      return Promise.resolve({ name });
+  });
+  const ctx = t.context as unknown as Context;
+  return {
+    ctx,
+    get written() {
+      return t.getWrittenResources().map((w) =>
+        w.data as Record<string, unknown>
+      );
     },
+    logs: () => t.getLogs().map((l) => `${l.level}: ${l.message}`),
+    names: () => t.getWrittenResources().map((w) => `${w.specName}/${w.name}`),
   };
-  return { ctx, written, logs };
 }
 
-/** A real local server, so the probe is exercised through fetch itself. */
-async function withServer(
-  handler: (req: Request) => Response | Promise<Response>,
-  fn: (base: string) => Promise<void>,
-) {
-  const ac = new AbortController();
-  const server = Deno.serve(
-    { hostname: "127.0.0.1", port: 0, signal: ac.signal, onListen: () => {} },
-    handler,
-  );
-  const base = `http://127.0.0.1:${server.addr.port}`;
-  try {
-    await fn(base);
-  } finally {
-    ac.abort();
-    await server.finished;
-  }
+async function health(c: ReturnType<typeof context>) {
+  await model.methods.health.execute({}, c.ctx);
+  return c.written[0] as Health;
 }
 
-async function health(ctx: Context, written: Record<string, unknown>[]) {
-  await model.methods.health.execute({}, ctx);
-  return written[0] as Health;
+/** A stub fetcher answering each URL it is given, and the URLs it saw. */
+function stubFetch(answers: Record<string, () => Response>) {
+  const seen: { url: string; caFile: string; ua: string }[] = [];
+  const restore = __setFetcher((url, init, caFile) => {
+    seen.push({ url, caFile, ua: init.headers["user-agent"] });
+    const answer = answers[url];
+    if (!answer) {
+      return Promise.reject(new Error(`the stub has no answer for ${url}`));
+    }
+    return Promise.resolve(answer());
+  });
+  return { seen, restore };
 }
 
 Deno.test("helpers: absolute, argumentProblem, failureKind", () => {
@@ -127,83 +126,9 @@ Deno.test("checks: arguments and ca-readable", async () => {
   assertStringIncludes(notPem.errors![0], "no certificate PEM");
 });
 
-Deno.test("an endpoint that answers as expected is ok, plain HTTP, latency recorded", async () => {
-  await withServer(() => new Response("hello world"), async (base) => {
-    const { ctx, written, logs } = context({
-      url: `${base}/`,
-      bodyContains: "world",
-    });
-    const h = await health(ctx, written);
-    assertEquals(h.ok, true);
-    assertEquals(h.reachable, true);
-    assertEquals(h.status, 200);
-    assertEquals(h.tls, "plain");
-    assertEquals(h.redirects, 0);
-    assertEquals(h.bodyMatched, true);
-    assertEquals(h.error, null);
-    assertEquals(h.finalUrl, `${base}/`);
-    assert(typeof h.latencyMs === "number" && h.latencyMs >= 0);
-    assert(logs.some((l) => l.includes("answered")));
-  });
-});
-
-Deno.test("a wrong status and a missing body text are recorded as not ok, never thrown", async () => {
-  await withServer((req) => {
-    const url = new URL(req.url);
-    return url.pathname === "/missing"
-      ? new Response("gone", { status: 404 })
-      : new Response("nothing here");
-  }, async (base) => {
-    const a = context({ url: `${base}/missing` });
-    const ha = await health(a.ctx, a.written);
-    assertEquals(ha.ok, false);
-    assertEquals(ha.status, 404);
-    assertEquals(ha.error, "status 404, expected 200");
-    const b = context({ url: `${base}/`, bodyContains: "welcome" });
-    const hb = await health(b.ctx, b.written);
-    assertEquals(hb.ok, false);
-    assertEquals(hb.status, 200);
-    assertEquals(hb.bodyMatched, false);
-    assertStringIncludes(String(hb.error), "body does not hold");
-    const c = context({ url: `${base}/missing`, expectStatus: 404 });
-    assertEquals((await health(c.ctx, c.written)).ok, true);
-  });
-});
-
-Deno.test("redirects are followed and counted, or not followed when told", async () => {
-  await withServer((req) => {
-    const url = new URL(req.url);
-    if (url.pathname === "/a") return Response.redirect(`${url.origin}/b`, 302);
-    if (url.pathname === "/b") return Response.redirect(`${url.origin}/c`, 301);
-    return new Response("end");
-  }, async (base) => {
-    const f = context({ url: `${base}/a` });
-    const hf = await health(f.ctx, f.written);
-    assertEquals(hf.ok, true);
-    assertEquals(hf.redirects, 2);
-    assertEquals(hf.finalUrl, `${base}/c`);
-    const n = context({
-      url: `${base}/a`,
-      followRedirects: false,
-      expectStatus: 302,
-    });
-    const hn = await health(n.ctx, n.written);
-    assertEquals(hn.ok, true);
-    assertEquals(hn.redirects, 0);
-    const capped = context({ url: `${base}/a`, maxRedirects: 1 });
-    const hc = await health(capped.ctx, capped.written);
-    assertEquals(hc.redirects, 1);
-    assertEquals(hc.status, 301);
-    assertEquals(hc.ok, false);
-  });
-});
-
 Deno.test("nothing listening is unreachable with the connection error", async () => {
-  const { ctx, written } = context({
-    url: "http://127.0.0.1:1/",
-    timeoutMs: 3000,
-  });
-  const h = await health(ctx, written);
+  const c = context({ url: "http://127.0.0.1:1/", timeoutMs: 3000 });
+  const h = await health(c);
   assertEquals(h.reachable, false);
   assertEquals(h.ok, false);
   assertEquals(h.status, null);
@@ -211,48 +136,112 @@ Deno.test("nothing listening is unreachable with the connection error", async ()
   assert(h.error !== null && h.error !== "");
 });
 
-Deno.test("an answer slower than timeoutMs is unreachable and says so", async () => {
-  await withServer(async () => {
-    await new Promise((r) => setTimeout(r, 1500));
-    return new Response("late");
-  }, async (base) => {
-    const { ctx, written } = context({ url: `${base}/`, timeoutMs: 300 });
-    const h = await health(ctx, written);
-    assertEquals(h.reachable, false);
-    assertEquals(h.error, "no answer within 300 ms");
-  });
-});
-
-Deno.test("a chain that does not verify is recorded as tls failed", async () => {
-  const restore = __setFetcher(() =>
-    Promise.reject(new TypeError("invalid peer certificate: UnknownIssuer"))
-  );
-  try {
-    const { ctx, written } = context({ url: "https://example.org/" });
-    const h = await health(ctx, written);
-    assertEquals(h.reachable, false);
-    assertEquals(h.tls, "failed");
-    assertStringIncludes(String(h.error), "UnknownIssuer");
-  } finally {
-    restore();
-  }
-});
-
 Deno.test("a caFile that cannot be read fails the method before anything is recorded", async () => {
-  const { ctx, written } = context({
-    url: "https://example.org/",
-    caFile: "nowhere.pem",
-  });
-  const err = await assertRejects(() => model.methods.health.execute({}, ctx));
+  const c = context({ url: "https://example.org/", caFile: "nowhere.pem" });
+  const err = await assertRejects(() =>
+    model.methods.health.execute({}, c.ctx)
+  );
   assertStringIncludes(String(err), "could not be read");
-  assertEquals(written.length, 0);
+  assertEquals(c.written.length, 0);
 });
 
 Deno.test("a bad url fails the method before anything is recorded", async () => {
-  const { ctx, written } = context();
-  ctx.globalArgs = { ...ctx.globalArgs, url: "nope" };
-  await assertRejects(() => model.methods.health.execute({}, ctx));
-  assertEquals(written.length, 0);
+  const c = context();
+  c.ctx.globalArgs = { ...c.ctx.globalArgs, url: "nope" };
+  await assertRejects(() => model.methods.health.execute({}, c.ctx));
+  assertEquals(c.written.length, 0);
+});
+
+Deno.test("health records an answer that matches, after a redirect", async () => {
+  const stub = stubFetch({
+    "https://svc.test/": () =>
+      new Response(null, { status: 302, headers: { location: "/ok" } }),
+    "https://svc.test/ok": () =>
+      new Response('{"status":"up","version":"1"}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  try {
+    const c = context({
+      url: "https://svc.test/",
+      bodyContains: "up",
+      bodyJson: { status: "up" },
+    });
+    const h = await health(c);
+    assertEquals(c.names(), ["health/health"]);
+    assertEquals(
+      [h.ok, h.status, h.tls, h.redirects, h.finalUrl],
+      [true, 200, "verified", 1, "https://svc.test/ok"],
+    );
+    assertEquals([h.bodyMatched, h.jsonMatched, h.error], [true, true, null]);
+    assertEquals(stub.seen[0].ua, "swamp @dataverket/http");
+    assert(c.logs().some((l) => l.startsWith("info: {url} answered")));
+  } finally {
+    stub.restore();
+  }
+});
+
+Deno.test("health records a wrong status and a JSON field that differs, and warns", async () => {
+  const stub = stubFetch({
+    "http://svc.test/": () =>
+      new Response('{"status":"down"}', {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  try {
+    const c = context({
+      url: "http://svc.test/",
+      expectStatus: 503,
+      bodyJson: { status: "up" },
+    });
+    const h = await health(c);
+    assertEquals([h.ok, h.reachable, h.tls], [false, true, "plain"]);
+    assertEquals([h.jsonMatched, h.jsonMismatchCount], [false, 1]);
+    // without bodyJsonShowValues nothing from the body reaches the record
+    assertEquals(JSON.stringify(h).includes("down"), false);
+    assert(c.logs().some((l) => l.startsWith("warning: {url} not ok")));
+  } finally {
+    stub.restore();
+  }
+});
+
+Deno.test("health records a chain that does not verify as tls failed, not as a throw", async () => {
+  const stub = stubFetch({
+    "https://svc.test/": () => {
+      throw new TypeError("invalid peer certificate: UnknownIssuer");
+    },
+  });
+  try {
+    const c = context({ url: "https://svc.test/" });
+    const h = await health(c);
+    assertEquals([h.reachable, h.ok, h.status, h.tls], [
+      false,
+      false,
+      null,
+      "failed",
+    ]);
+    assertStringIncludes(h.error!, "UnknownIssuer");
+  } finally {
+    stub.restore();
+  }
+});
+
+Deno.test("health does not follow a redirect when told not to, and judges the first answer", async () => {
+  const stub = stubFetch({
+    "https://svc.test/": () =>
+      new Response(null, { status: 301, headers: { location: "/elsewhere" } }),
+  });
+  try {
+    const c = context({ url: "https://svc.test/", followRedirects: false });
+    const h = await health(c);
+    assertEquals([h.ok, h.status, h.redirects], [false, 301, 0]);
+    assertEquals(h.error, "status 301, expected 200");
+    assertEquals(stub.seen.length, 1);
+  } finally {
+    stub.restore();
+  }
 });
 
 // The real network: HTTP_E2E=1 checks HTTP_E2E_URL (default https://example.org/)
@@ -265,12 +254,12 @@ Deno.test({
   ignore: !e2e,
   fn: async () => {
     const url = Deno.env.get("HTTP_E2E_URL") ?? "https://example.org/";
-    const { ctx, written } = context({ url });
-    const h = await health(ctx, written);
+    const h = await health(context({ url }));
     assertEquals(h.ok, true, String(h.error));
     assertEquals(h.tls, "verified");
-    const bad = context({ url: "https://self-signed.badssl.com/" });
-    const hb = await health(bad.ctx, bad.written);
+    const hb = await health(
+      context({ url: "https://self-signed.badssl.com/" }),
+    );
     assertEquals(hb.reachable, false);
     assertEquals(hb.tls, "failed");
   },

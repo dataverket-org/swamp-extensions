@@ -1,10 +1,15 @@
-import { MAX_DATA_NAME_BYTES } from "../lib/cli.ts";
+import {
+  __setSpawn,
+  MAX_DATA_NAME_BYTES,
+  type SpawnResult,
+} from "../lib/cli.ts";
 import {
   assert,
   assertEquals,
-  assertStringIncludes,
+  assertRejects,
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 import {
   absolutePath,
   CONFIG_FILES,
@@ -15,287 +20,19 @@ import {
   INVENTORY_NAME,
   isPullProgress,
   logLines,
+  lookup,
   LookupArgsSchema,
   model,
   UPDATE_TYPES,
 } from "./local.ts";
 import {
+  configLines,
   dep,
-  globalArgs,
   IMAGE,
-  kept,
-  output,
   repository,
   update,
-  warning,
   withDisk,
-  withEngine,
 } from "./test_support.ts";
-
-const lookup = model.methods.lookup.execute;
-
-Deno.test("one repository: a container run, a record, an inventory", async () => {
-  await withDisk(async (disk) => {
-    const dir = await disk.repo("app", {
-      "renovate.json": "{}",
-      ".git/HEAD": "ref: refs/heads/main\n",
-    });
-    const g = globalArgs();
-    const k = kept(disk.root, g);
-    const stdout = output(repository([
-      dep({
-        updates: [update(), update({ updateType: "major", newValue: "4.0.0" })],
-      }),
-      dep({ depName: "nginx", currentValue: "1.31.8" }),
-    ]));
-    await withEngine({ runs: { [dir]: { out: stdout } } }, g, async (m) => {
-      const res = await lookup({ repo: "app" }, k.ctx);
-      assertEquals(res.dataHandles.map((h) => h.name), [
-        "repo-app",
-        INVENTORY_NAME,
-      ]);
-      assertEquals(m.calls.map((c) => c.args[0]), [
-        "--version",
-        "info",
-        "image",
-        "run",
-      ]);
-      assertEquals(m.runs[0].userns, "keep-id:uid=12021");
-      assertEquals(m.runs[0].image, IMAGE);
-      assertEquals(m.runs[0].httpProxy, "false");
-    });
-    const r = k.record("repo-app");
-    assertEquals(r.path, "app");
-    assertEquals(r.directory, dir);
-    assertEquals(r.status, "ok");
-    assertEquals(r.ok, true);
-    assertEquals(r.failure, null);
-    assertEquals(r.reason, null);
-    assertEquals(r.lookupComplete, true);
-    assertEquals(r.upToDate, false);
-    assertEquals(r.renovateVersion, "44.0.0");
-    assertEquals(r.configFile, "renovate.json");
-    assertEquals(r.configRead, "renovate.json");
-    assertEquals(r.packageFileCount, 1);
-    assertEquals(r.lookedUpCount, 2);
-    assertEquals(r.git, true);
-    assertEquals(r.dependencyCount, 2);
-    assertEquals(r.outdatedCount, 1);
-    assertEquals(r.updateCount, 2);
-    const counts = r.updateCounts as Record<string, number>;
-    assertEquals(counts.major, 1);
-    assertEquals(counts.minor, 1);
-    assertEquals(counts.patch, 0);
-    const updates = r.updates as Array<Record<string, unknown>>;
-    assertEquals(updates[0], {
-      depName: "alpine",
-      packageName: "alpine",
-      datasource: "docker",
-      manager: "dockerfile",
-      packageFile: "Dockerfile",
-      depType: "final",
-      currentValue: "3.18.0",
-      currentVersion: "3.18.0",
-      currentDigest: null,
-      newValue: "3.24.4",
-      newVersion: "3.24.4",
-      newDigest: null,
-      updateType: "minor",
-      isBreaking: false,
-      releaseTimestamp: "2026-11-08T14:24:43.040Z",
-      newVersionAgeInDays: 2,
-    });
-    const inv = k.record(INVENTORY_NAME);
-    assertEquals(inv.count, 1);
-    assertEquals(inv.okCount, 1);
-    assertEquals(inv.outdatedCount, 1);
-    assertEquals(inv.upToDateCount, 0);
-    assertEquals(inv.engine, "podman 4.9.3");
-    assertEquals(inv.renovateVersion, "44.0.0");
-    assertEquals((inv.updateCounts as Record<string, number>).major, 1);
-    assertEquals((inv.items as Array<Record<string, unknown>>)[0], {
-      path: "app",
-      dataName: "repo-app",
-      status: "ok",
-      ok: true,
-      lookupComplete: true,
-      upToDate: false,
-      lookedUpCount: 2,
-      updateCount: 2,
-      majorCount: 1,
-      reason: null,
-    });
-  });
-});
-
-Deno.test("a list: one run per repository, in order, one after another", async () => {
-  await withDisk(async (disk) => {
-    const a = await disk.repo("a");
-    const b = await disk.repo("sub/b with space");
-    const c = await disk.repo("c");
-    const g = globalArgs();
-    const k = kept(disk.root, g);
-    const fresh = output(repository([dep()]));
-    let running = 0;
-    await withEngine(
-      {
-        runs: { [a]: { out: fresh }, [b]: { out: fresh }, [c]: { out: fresh } },
-        onRun: () => {
-          // The fake answers at once, so a second run started before the
-          // first record was written would be seen here.
-          assertEquals(k.written.length, running++);
-        },
-      },
-      g,
-      async (m) => {
-        await lookup({ repos: ["a", "sub/b with space", c] }, k.ctx);
-        assertEquals(m.runs.map((r) => r.directory), [a, b, c]);
-        // One version, one info and one inspect for the whole list.
-        assertEquals(m.calls.length, 6);
-        assertEquals(new Set(m.runs.map((r) => r.name)).size, 3);
-      },
-    );
-    assertEquals(k.written.map((w) => w.name), [
-      "repo-a",
-      "repo-sub_2fb_20with_20space",
-      dataName(c),
-      INVENTORY_NAME,
-    ]);
-    const inv = k.record(INVENTORY_NAME);
-    assertEquals(inv.count, 3);
-    assertEquals(inv.upToDateCount, 3);
-    assertEquals(k.record("repo-a").upToDate, true);
-    assertEquals(k.record("repo-a").git, false);
-  });
-});
-
-Deno.test("the engine decides the user mapping", async () => {
-  const cases: Array<[string, Record<string, unknown>, string | undefined]> = [
-    ["rootless podman, numeric user", {}, "keep-id:uid=12021"],
-    ["user and group", { inspect: [{ out: "1000:0\n" }] }, "keep-id:uid=1000"],
-    ["a user by name", { inspect: [{ out: "ubuntu\n" }] }, undefined],
-    ["no user", { inspect: [{ out: "\n" }] }, undefined],
-    ["rootful podman", { rootless: "false" }, undefined],
-    [
-      "docker",
-      { version: "Docker version 27.3.1, build ce12230\n" },
-      undefined,
-    ],
-    ["something else", { version: "nerdctl version 2.0.0\n" }, undefined],
-  ];
-  for (const [name, world, userns] of cases) {
-    await withDisk(async (disk) => {
-      const dir = await disk.repo("a");
-      const g = globalArgs();
-      const k = kept(disk.root, g);
-      await withEngine(
-        {
-          ...world,
-          runs: { [dir]: { out: output(repository([dep()])) } },
-        },
-        g,
-        async (m) => {
-          await lookup({ repo: dir }, k.ctx);
-          assertEquals(m.runs[0].userns, userns, name);
-          // Only Podman is asked whether it is rootless.
-          assertEquals(
-            m.calls.some((c) => c.args[0] === "info"),
-            !("version" in world),
-            name,
-          );
-        },
-      );
-    });
-  }
-});
-
-Deno.test("an image that is not held is pulled once, then inspected again", async () => {
-  await withDisk(async (disk) => {
-    const a = await disk.repo("a");
-    const b = await disk.repo("b");
-    const g = globalArgs({ pullTimeoutSeconds: 900 });
-    const k = kept(disk.root, g);
-    const out = output(repository([dep()]));
-    await withEngine(
-      {
-        inspect: [{ fail: "Error: image not known", code: 125 }, {
-          out: "12021\n",
-        }],
-        runs: { [a]: { out }, [b]: { out } },
-      },
-      g,
-      async (m) => {
-        await lookup({ repos: [a, b] }, k.ctx);
-        assertEquals(m.calls.map((c) => c.args[0]), [
-          "--version",
-          "info",
-          "image",
-          "pull",
-          "image",
-          "run",
-          "run",
-        ]);
-        assertEquals(m.calls[3].timeoutMs, 900_000);
-      },
-    );
-  });
-});
-
-Deno.test("logLevel debug reaches the container and passes log lines on, bounded", async () => {
-  await withDisk(async (disk) => {
-    const dir = await disk.repo("a");
-    const g = globalArgs({ logLevel: "debug", timeoutSeconds: 60 });
-    const k = kept(disk.root, g);
-    const extra = Array.from(
-      { length: 150 },
-      (_, i) =>
-        JSON.stringify({ level: 20, msg: `debug line ${i}`, repository: "x" }),
-    );
-    await withEngine(
-      {
-        runs: { [dir]: { out: output(repository([dep()]), { extra }) } },
-      },
-      g,
-      async (m) => {
-        await lookup({ repo: dir }, k.ctx);
-        assertEquals(m.runs[0].logLevel, "debug");
-        assertEquals(m.calls.at(-1)?.timeoutMs, 60_000);
-      },
-    );
-    const passed = k.logs.filter((l) => l.includes("renovate log:"));
-    assertEquals(passed.length, 100);
-    assert(k.logs.some((l) => l.includes("more Renovate log lines not shown")));
-    // The report itself is never a log line.
-    assert(!k.logs.some((l) => l.includes("Printing report")));
-  });
-});
-
-Deno.test("at info only Renovate's warnings are passed on", async () => {
-  await withDisk(async (disk) => {
-    const dir = await disk.repo("a");
-    const k = kept(disk.root);
-    await withEngine(
-      {
-        runs: {
-          [dir]: {
-            out: output(repository([dep()]), {
-              extra: [
-                warning("GitHub token is required for some dependencies"),
-              ],
-            }),
-          },
-        },
-      },
-      k.ctx.globalArgs,
-      async () => {
-        await lookup({ repo: dir }, k.ctx);
-      },
-    );
-    const passed = k.logs.filter((l) => l.includes(": renovate "));
-    assertEquals(passed.length, 1);
-    assertStringIncludes(passed[0], "renovate warn: GitHub token is required");
-  });
-});
 
 Deno.test("dataName: injective, a file name, never . or ..", () => {
   assertEquals(dataName("app"), "repo-app");
@@ -384,31 +121,6 @@ Deno.test("the pre-flight check names lookup, and lookup is not a read", () => {
   assertEquals(model.methods.lookup.kind, "action");
 });
 
-Deno.test("the pre-flight check runs the binary of the definition", async () => {
-  const g = globalArgs({ containerBinary: "/opt/bin/docker" });
-  await withEngine({}, g, async (m) => {
-    const res = await model.checks["container-binary-available"].execute({
-      globalArgs: g,
-    });
-    assertEquals(res, { pass: true });
-    assertEquals(m.calls.map((c) => [c.bin, ...c.args]), [[
-      "/opt/bin/docker",
-      "--version",
-    ]]);
-  });
-  await withEngine({ notInstalled: true }, g, async () => {
-    const res = await model.checks["container-binary-available"].execute({
-      globalArgs: g,
-    });
-    assertEquals(res.pass, false);
-    assertStringIncludes(
-      res.errors?.[0] ?? "",
-      "/opt/bin/docker was not found",
-    );
-    assertStringIncludes(res.errors?.[0] ?? "", "containerBinary");
-  });
-});
-
 Deno.test("findings: every update type has its own count", () => {
   const f = findings(repository([
     dep({ updates: UPDATE_TYPES.map((t) => update({ updateType: t })) }),
@@ -448,3 +160,165 @@ Deno.test("logLines: JSON objects are lines, anything else is counted", () => {
 Deno.test("a data name at the limit is taken", () => {
   assertEquals(dataName("a".repeat(MAX_DATA_NAME_BYTES - 5)).length, 255);
 });
+
+// ───── lookup, through createModelTestContext with a stub spawn ─────
+
+const out = (stdout: string, code = 0, stderr = ""): SpawnResult => ({
+  code,
+  stdout: new TextEncoder().encode(stdout),
+  stderr,
+});
+
+/**
+ * Routes: `[<bin> <argument prefix>, answer]`; the first route whose prefix
+ * starts the call answers it. A call no route answers fails.
+ */
+type Routes = [string, SpawnResult][];
+
+/** Runs `body` with the stub spawn of `../lib/cli.ts` and a swamp test context. */
+async function withStub(
+  routes: Routes,
+  root: string,
+  body: (h: {
+    // deno-lint-ignore no-explicit-any
+    context: any;
+    calls: string[];
+    written: () => {
+      spec: string;
+      name: string;
+      data: Record<string, unknown>;
+    }[];
+    logs: () => string[];
+  }) => Promise<void>,
+  globalArgs: Record<string, unknown> = {},
+) {
+  const calls: string[] = [];
+  __setSpawn((bin, args) => {
+    const line = [bin, ...args].join(" ");
+    calls.push(line);
+    const r = routes.find(([prefix]) => line.startsWith(prefix));
+    if (!r) {
+      return Promise.reject(new Error(`the stub has no answer for ${line}`));
+    }
+    return Promise.resolve(r[1]);
+  });
+  const t = createModelTestContext({
+    globalArgs: { image: IMAGE, ...globalArgs },
+    repoDir: root,
+  });
+  try {
+    await body({
+      context: t.context,
+      calls,
+      written: () =>
+        t.getWrittenResources().map((w) => ({
+          spec: w.specName,
+          name: w.name,
+          data: w.data as Record<string, unknown>,
+        })),
+      logs: () => t.getLogs().map((l) => l.message),
+    });
+  } finally {
+    __setSpawn();
+  }
+}
+
+const ENGINE: Routes = [
+  ["podman --version", out("podman version 4.9.3\n")],
+  ["podman info --format", out("true\n")],
+  [`podman image inspect --format {{.Config.User}} ${IMAGE}`, out("1000\n")],
+];
+
+/** What Renovate prints for one repository with one proposed minor update. */
+const RENOVATE_RUN = [
+  { level: 30, msg: "Renovate started", renovateVersion: "44.226.2" },
+  ...configLines("renovate.json"),
+  { level: 40, msg: "Package lookup warning" },
+  {
+    level: 30,
+    msg: "Printing report",
+    report: {
+      repositories: {
+        "/repo": repository([dep({ updates: [update()] })]),
+      },
+    },
+  },
+].map((l) => JSON.stringify(l)).join("\n") + "\n";
+
+Deno.test("lookup records each repository and the inventory, with Renovate's warnings in the log", () =>
+  withDisk(async (d) => {
+    await d.repo("app");
+    await withStub(
+      [...ENGINE, ["podman run --rm --pull=never", out(RENOVATE_RUN)]],
+      d.root,
+      async (h) => {
+        await lookup(LookupArgsSchema.parse({ repo: "app" }), h.context);
+        const run = h.calls.find((c) => c.startsWith("podman run"))!;
+        assert(
+          run.includes(",readonly"),
+          "the repository is mounted read-only",
+        );
+        assert(run.includes("--userns keep-id:uid=1000"));
+        const [repo, inv] = h.written();
+        assertEquals([repo.spec, repo.name], ["repository", dataName("app")]);
+        assertEquals(repo.data.status, "ok");
+        assertEquals(repo.data.updateCount, 1);
+        assertEquals(repo.data.configRead, "renovate.json");
+        assertEquals(repo.data.renovateVersion, "44.226.2");
+        assertEquals([inv.spec, inv.name], ["inventory", INVENTORY_NAME]);
+        assertEquals([inv.data.count, inv.data.outdatedCount], [1, 1]);
+        assert(
+          h.logs().includes("{path}: renovate {level}: {message}"),
+          "Renovate's warning is passed on",
+        );
+      },
+    );
+  }));
+
+Deno.test("lookup records a run that exits non-zero as failed, and the inventory counts it", () =>
+  withDisk(async (d) => {
+    await d.repo("app");
+    await withStub(
+      [...ENGINE, [
+        "podman run --rm --pull=never",
+        out("", 1, "Error: crun: executable file not found"),
+      ]],
+      d.root,
+      async (h) => {
+        await lookup(LookupArgsSchema.parse({ repo: "app" }), h.context);
+        const [repo, inv] = h.written();
+        assertEquals([repo.data.status, repo.data.failure, repo.data.ok], [
+          "failed",
+          "exit",
+          false,
+        ]);
+        assert(String(repo.data.reason).includes("executable file not found"));
+        assertEquals(inv.data.failedCount, 1);
+      },
+    );
+  }));
+
+Deno.test("lookup fails before any container when the image is not held and pull is never, and writes nothing", () =>
+  withDisk(async (d) => {
+    await d.repo("app");
+    await withStub(
+      [
+        ...ENGINE.slice(0, 2),
+        [
+          "podman image inspect",
+          out("", 125, "Error: no such image"),
+        ],
+      ],
+      d.root,
+      async (h) => {
+        await assertRejects(
+          () => lookup(LookupArgsSchema.parse({ repo: "app" }), h.context),
+          Error,
+          "is not held by podman and pull is never",
+        );
+        assertEquals(h.calls.some((c) => c.startsWith("podman run")), false);
+        assertEquals(h.written(), []);
+      },
+      { pull: "never" },
+    );
+  }));

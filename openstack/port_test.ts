@@ -1,9 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model, normalizePort } from "./port.ts";
-import { idRows, PORT_SHOW } from "./fixtures.ts";
-import { installFake, line, makeContext, notFound } from "./test_support.ts";
-
-const ID = PORT_SHOW.id;
+import { fail, NOT_FOUND, withStub } from "./test_support.ts";
+import { PORT_SHOW } from "./fixtures.ts";
 
 Deno.test("normalizePort flattens fixed IPs and allowed address pairs", () => {
   const p = normalizePort(PORT_SHOW);
@@ -21,142 +19,147 @@ Deno.test("normalizePort flattens fixed IPs and allowed address pairs", () => {
   assertEquals(p.securityGroupIds, ["0ae8b48c-7db0-4903-ba95-5a2a081ea6c9"]);
 });
 
-Deno.test("an unnamed port is stored under its id", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "port list -c ID --server web-01") return idRows(ID);
-    if (l === `port show ${ID}`) return { ...PORT_SHOW, name: "" };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({ server: "web-01" }, context);
-    assertEquals(written[0].name, `port-${ID}`);
-  } finally {
-    fake.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub runner ─────
 
-Deno.test("create passes fixed IPs, security groups and allowed addresses", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "port show web-01-eth0") return notFound("port", "web-01-eth0");
-    if (
-      l ===
-        "port create --network private-net --fixed-ip subnet=private-subnet,ip-address=192.0.2.10 --security-group ssh --enable-port-security --allowed-address ip-address=192.0.2.198 web-01-eth0"
-    ) return PORT_SHOW;
-    if (l === `port show ${ID}`) return PORT_SHOW;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.create.execute({
+const M = model.methods;
+const ID = PORT_SHOW.id;
+const NAME = "port-web-01-eth0";
+
+Deno.test("list shows each port of a server and writes one record each", () =>
+  withStub([
+    ["port list -c ID --server web-01 --status ACTIVE", { json: [{ ID }] }],
+    [`port show ${ID}`, { json: PORT_SHOW }],
+  ], async (h) => {
+    await M.list.execute({ server: "web-01", status: "ACTIVE" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.ipAddresses]), [
+      ["port", NAME, ["192.0.2.10"]],
+    ]);
+    assertEquals(h.logs().at(-1)?.message, "stored {count} ports");
+  }));
+
+Deno.test("list fails when the CLI does, and writes nothing", () =>
+  withStub([["port list", fail("Unauthorized (HTTP 401)")]], async (h) => {
+    await assertRejects(
+      () => M.list.execute({}, h.context),
+      Error,
+      "port list failed (exit 1)",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("get writes the port it reads", () =>
+  withStub([["port show web-01-eth0", { json: PORT_SHOW }]], async (h) => {
+    await M.get.execute({ port: "web-01-eth0" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.id]), [[
+      "port",
+      NAME,
+      ID,
+    ]]);
+  }));
+
+Deno.test("get fails on a missing port, and writes nothing", () =>
+  withStub([["port show nope", NOT_FOUND]], async (h) => {
+    await assertRejects(
+      () => M.get.execute({ port: "nope" }, h.context),
+      Error,
+      "port show nope failed",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("create makes a port with a fixed IP and no security group", () =>
+  withStub([
+    ["port show web-01-eth0", NOT_FOUND],
+    [
+      "port create --network private-net --fixed-ip subnet=private-subnet,ip-address=192.0.2.10 --no-security-group --allowed-address ip-address=192.0.2.198 web-01-eth0",
+      { json: { id: ID } },
+    ],
+    [`port show ${ID}`, { json: PORT_SHOW }],
+  ], async (h) => {
+    await M.create.execute({
       name: "web-01-eth0",
       network: "private-net",
       fixedIps: [{ subnet: "private-subnet", ipAddress: "192.0.2.10" }],
-      securityGroups: ["ssh"],
-      portSecurity: true,
-      allowedAddresses: [{ ipAddress: "192.0.2.198" }],
-    }, context);
-    assertEquals(written[0].name, "port-web-01-eth0");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("create with an empty security group list means no security group", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "port show lb-vip") return notFound("port", "lb-vip");
-    if (
-      l ===
-        "port create --network private-net --no-security-group --disable-port-security lb-vip"
-    ) return PORT_SHOW;
-    if (l === `port show ${ID}`) return PORT_SHOW;
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.create.execute({
-      name: "lb-vip",
-      network: "private-net",
       securityGroups: [],
-      portSecurity: false,
-    }, context);
-  } finally {
-    fake.restore();
-  }
-});
+      allowedAddresses: [{ ipAddress: "192.0.2.198" }],
+    }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name]), [["port", NAME]]);
+  }));
 
-Deno.test("create rejects a fixedIp with neither subnet nor address, and comma-carrying values", async () => {
-  const fake = installFake((
-    args,
-  ) => (line({ args, env: {} }) === "port show p"
-    ? notFound("port", "p")
-    : undefined)
-  );
-  const { context } = makeContext();
-  try {
+Deno.test("create fails on an address in use, and writes nothing", () =>
+  withStub([
+    ["port show web-01-eth0", NOT_FOUND],
+    [
+      "port create",
+      fail("IP address 192.0.2.10 already allocated in subnet (HTTP 409)"),
+    ],
+  ], async (h) => {
     await assertRejects(
       () =>
-        model.methods.create.execute({
-          name: "p",
-          network: "n",
-          fixedIps: [{}],
-        }, context),
+        M.create.execute({
+          name: "web-01-eth0",
+          network: "private-net",
+          fixedIps: [{ ipAddress: "192.0.2.10" }],
+        }, h.context),
       Error,
-      "needs a subnet or an ipAddress",
+      "already allocated",
     );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("update replaces security groups, renames and drops the old record", () =>
+  withStub([
+    ["port show web-01-eth0", { json: PORT_SHOW }],
+    [
+      `port set --name web-01-lan --no-security-group --security-group ssh ${ID}`,
+      { stdout: "" },
+    ],
+    [`port show ${ID}`, { json: { ...PORT_SHOW, name: "web-01-lan" } }],
+  ], async (h) => {
+    await M.update.execute(
+      { port: "web-01-eth0", name: "web-01-lan", securityGroups: ["ssh"] },
+      h.context,
+    );
+    assertEquals(h.deleted(), [NAME]);
+    assertEquals(h.written().map((w) => w.name), ["port-web-01-lan"]);
+  }));
+
+Deno.test("update fails when the set fails, and writes nothing", () =>
+  withStub([
+    ["port show web-01-eth0", { json: PORT_SHOW }],
+    ["port set", fail("Forbidden (HTTP 403)")],
+  ], async (h) => {
     await assertRejects(
       () =>
-        model.methods.create.execute({
-          name: "p",
-          network: "n",
-          fixedIps: [{ ipAddress: "1,2" }],
-        }, context),
+        M.update.execute(
+          { port: "web-01-eth0", portSecurity: false },
+          h.context,
+        ),
       Error,
-      "must not contain a comma",
+      "port set failed",
     );
-  } finally {
-    fake.restore();
-  }
-});
+    assertEquals(h.deleted(), []);
+    assertEquals(h.written(), []);
+  }));
 
-Deno.test("update replaces security groups and allowed addresses by clearing first", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === `port show ${ID}`) return PORT_SHOW;
-    if (
-      l ===
-        `port set --no-security-group --security-group a --security-group b --no-allowed-address ${ID}`
-    ) return "";
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.update.execute({
-      port: ID,
-      securityGroups: ["a", "b"],
-      allowedAddresses: [],
-    }, context);
-    assertEquals(fake.calls.length, 3);
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("delete deletes the port and drops its stored resource", () =>
+  withStub([
+    ["port show web-01-eth0", { json: PORT_SHOW }],
+    [`port delete ${ID}`, { stdout: "" }],
+  ], async (h) => {
+    await M.delete.execute({ port: "web-01-eth0" }, h.context);
+    assertEquals(h.deleted(), [NAME]);
+  }));
 
-Deno.test("delete drops the resource", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === `port show ${ID}`) return PORT_SHOW;
-    if (l === `port delete ${ID}`) return "";
-    return undefined;
-  });
-  const { context, deleted } = makeContext();
-  try {
-    await model.methods.delete.execute({ port: ID }, context);
-    assertEquals(deleted, ["port-web-01-eth0"]);
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("delete fails when the CLI refuses, and drops nothing", () =>
+  withStub([
+    ["port show web-01-eth0", { json: PORT_SHOW }],
+    ["port delete", fail("Forbidden (HTTP 403)")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.delete.execute({ port: "web-01-eth0" }, h.context),
+      Error,
+      `port delete ${ID} failed (exit 1): Forbidden`,
+    );
+    assertEquals(h.deleted(), []);
+  }));

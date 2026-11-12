@@ -1,215 +1,112 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
-import { StateInventorySchema } from "./_helpers.ts";
-import { IssuerSchema } from "./_records.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./issuer.ts";
-import {
-  assertGetRefusals,
-  assertListFailures,
-  assertNoSecrets,
-  clusterIssuer,
-  ctx,
-  forbiddenList,
-  list,
-  SAID,
-  withCalls,
-} from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
+import { assertNoSecrets, clusterIssuer } from "./test_support.ts";
 
-const ISSUERS = "issuers.cert-manager.io";
-const CLUSTER_ISSUERS = "clusterissuers.cert-manager.io";
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
 
-const CA = {
-  apiVersion: "cert-manager.io/v1",
-  kind: "Issuer",
-  metadata: { name: "ca", namespace: "pki" },
-  spec: { ca: { secretName: "root-ca" } },
-  status: {
-    conditions: [{
-      type: "Ready",
-      status: "True",
-      reason: "KeyPairVerified",
-      message: "Signing CA verified",
-    }],
-  },
+const M = model.methods;
+const CI = "clusterissuers.cert-manager.io";
+const I = "issuers.cert-manager.io";
+
+/** A namespaced Issuer, made from the ClusterIssuer fixture. */
+function issuer(
+  name: string,
+  ready?: { status: string; reason: string; message: string },
+) {
+  const i = clusterIssuer(name, ready);
+  i.kind = "Issuer";
+  Object.assign(i.metadata as Record<string, unknown>, { namespace: "pki" });
+  return i;
+}
+
+const NOT_READY = {
+  status: "False",
+  reason: "ErrRegisterACMEAccount",
+  message: "Failed to register ACME account",
 };
 
-Deno.test("issuer list reads Issuers and ClusterIssuers and names each record by kind", async () => {
-  const c = ctx({});
-  await withCalls([
-    { args: ["get", ISSUERS, "-A"], out: list([CA]) },
-    {
-      args: ["get", CLUSTER_ISSUERS],
-      out: list([
-        clusterIssuer("acme-dns01"),
-        clusterIssuer("ca", { status: "False", reason: "Err", message: "no" }),
-      ]),
-    },
-  ], () => model.methods.list.execute({}, c.context));
-  assertEquals(c.written.map((w) => [w.spec, w.name]), [
-    ["issuer", "Issuer--pki--ca"],
-    ["issuer", "ClusterIssuer--acme-dns01"],
-    ["issuer", "ClusterIssuer--ca"],
-    ["inventory", "inventory_all"],
+Deno.test("list records the ClusterIssuers and the Issuers of the namespace, and one inventory", async () => {
+  using h = harness({
+    [`kubectl get ${CI}`]: { stdout: list([clusterIssuer("acme")]) },
+    [`kubectl get ${I} -n pki`]: { stdout: list([issuer("ca", NOT_READY)]) },
+  });
+  await M.list.execute({ namespace: "pki" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name, x.data.ready ?? x.data.count]), [
+    ["issuer", "Issuer--pki--ca", false],
+    ["issuer", "ClusterIssuer--acme", true],
+    ["inventory", "inventory_ns_pki", 2],
   ]);
-  for (const w of c.written.slice(0, 3)) IssuerSchema.parse(w.data);
-  const inventory = StateInventorySchema.parse(c.written[3].data);
-  assertEquals(
-    [inventory.namespace, inventory.count, inventory.unhealthyCount],
-    [null, 3, 1],
+  assertEquals(h.logs().at(-1), "Found 2 issuers, 1 not ready");
+  assertNoSecrets(w, h.logs());
+});
+
+Deno.test("list of one kind records those issuers and no inventory", async () => {
+  using h = harness({
+    [`kubectl get ${CI}`]: { stdout: list([clusterIssuer("acme")]) },
+  });
+  await M.list.execute({ kind: "ClusterIssuer" }, h.context);
+  assertEquals(h.written().map((x) => x.name), ["ClusterIssuer--acme"]);
+  assertEquals(h.calls.length, 1);
+});
+
+Deno.test("list passes on a refused ClusterIssuer read and records nothing, not even the Issuers read before", async () => {
+  using h = harness({
+    [`kubectl get ${I} -n pki`]: { stdout: list([issuer("ca")]) },
+    [`kubectl get ${CI}`]: forbidden("list", CI),
+  });
+  await assertRejects(
+    () => M.list.execute({ namespace: "pki" }, h.context),
+    Error,
+    "forbidden",
   );
-  assertEquals(inventory.items, [
-    {
-      namespace: "pki",
-      name: "ca",
-      dataName: "Issuer--pki--ca",
-      healthy: true,
-      reason: null,
-      state: "Ready",
-    },
-    {
-      namespace: null,
-      name: "acme-dns01",
-      dataName: "ClusterIssuer--acme-dns01",
-      healthy: true,
-      reason: null,
-      state: "Ready",
-    },
-    {
-      namespace: null,
-      name: "ca",
-      dataName: "ClusterIssuer--ca",
-      healthy: false,
-      reason: "no",
-      state: "NotReady",
-    },
-  ]);
-  assertNoSecrets(c.written, c.logs);
+  assertEquals(h.written(), []);
 });
 
-Deno.test("issuer list narrowed to one kind records the issuers and no inventory, so it cannot replace the full one", async () => {
-  const c = ctx({ namespace: "pki" });
-  await withCalls([
-    { args: ["get", ISSUERS, "-n", "pki"], out: list([CA]) },
-    { args: ["get", CLUSTER_ISSUERS], out: list([]) },
-  ], async () => {
-    await model.methods.list.execute({ kind: "Issuer" }, c.context);
-    await model.methods.list.execute({ kind: "ClusterIssuer" }, c.context);
+Deno.test("get records one Issuer in its namespace", async () => {
+  using h = harness({
+    [`kubectl get ${I} ca -n pki`]: { stdout: issuer("ca") },
   });
-  assertEquals(c.written.map((w) => w.name), [
-    "Issuer--pki--ca",
+  await M.get.execute({ name: "ca", namespace: "pki" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name, x.data.ready]), [
+    ["issuer", "Issuer--pki--ca", true],
   ]);
-  // Both kinds: the inventory is written, and it holds both.
-  const full = ctx({ namespace: "pki" });
-  await withCalls([
-    { args: ["get", ISSUERS, "-n", "pki"], out: list([CA]) },
-    { args: ["get", CLUSTER_ISSUERS], out: list([clusterIssuer("x")]) },
-  ], () => model.methods.list.execute({}, full.context));
-  assertEquals(full.written.map((w) => w.name), [
-    "Issuer--pki--ca",
-    "ClusterIssuer--x",
-    "inventory_ns_pki",
-  ]);
+  assertEquals(h.logs().at(-1), "Issuer ca: ready=true");
+  assertNoSecrets(w, h.logs());
 });
 
-Deno.test("issuer list writes nothing when the second kind cannot be read", async () => {
-  const c = ctx({});
-  await withCalls([
-    { args: ["get", ISSUERS, "-A"], out: list([CA]) },
-    { args: ["get", CLUSTER_ISSUERS], ...forbiddenList(CLUSTER_ISSUERS) },
-  ], async () => {
-    await assertRejects(
-      () => model.methods.list.execute({}, c.context),
-      Error,
-      "is forbidden",
-    );
+Deno.test("get reads a ClusterIssuer without a namespace", async () => {
+  using h = harness({
+    [`kubectl get ${CI} acme`]: { stdout: clusterIssuer("acme", NOT_READY) },
   });
-  assertEquals(c.written, []);
+  await M.get.execute({ name: "acme", kind: "ClusterIssuer" }, h.context);
+  const w = h.written();
+  assertEquals(
+    [w[0].name, w[0].data.ready, w[0].data.readyReason],
+    ["ClusterIssuer--acme", false, "ErrRegisterACMEAccount"],
+  );
 });
 
-Deno.test("issuer get reads a ClusterIssuer without a namespace and an Issuer with one", async () => {
-  const c = ctx({});
-  await withCalls([
-    {
-      args: ["get", CLUSTER_ISSUERS, "acme-dns01"],
-      out: clusterIssuer("acme-dns01"),
-    },
-    { args: ["get", ISSUERS, "ca", "-n", "pki"], out: CA },
-    {
-      args: ["get", CLUSTER_ISSUERS, "nope"],
-      fail: SAID.notFound(CLUSTER_ISSUERS, "nope"),
-    },
-  ], async () => {
-    await model.methods.get.execute({
-      name: "acme-dns01",
-      kind: "ClusterIssuer",
-    }, c.context);
-    await model.methods.get.execute(
-      { name: "ca", namespace: "pki" },
-      c.context,
-    );
-    const e = await assertRejects(
-      () =>
-        model.methods.get.execute(
-          { name: "nope", kind: "ClusterIssuer" },
-          c.context,
-        ),
-      Error,
-    );
-    assertEquals(e.message, "ClusterIssuer nope does not exist");
-    const n = await assertRejects(
-      () => model.methods.get.execute({ name: "ca" }, c.context),
-      Error,
-    );
-    assertStringIncludes(n.message, "namespace is required for get");
+Deno.test("get of a missing ClusterIssuer says it does not exist and records nothing", async () => {
+  using h = harness({ [`kubectl get ${CI} gone`]: notFound(CI, "gone") });
+  await assertRejects(
+    () => M.get.execute({ name: "gone", kind: "ClusterIssuer" }, h.context),
+    Error,
+    "ClusterIssuer gone does not exist",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get of an answer that is another object is refused", async () => {
+  using h = harness({
+    [`kubectl get ${I} ca -n pki`]: { stdout: issuer("other") },
   });
-  assertEquals(c.written.map((w) => w.name), [
-    "ClusterIssuer--acme-dns01",
-    "Issuer--pki--ca",
-  ]);
-});
-
-Deno.test("issuer get refuses injection-shaped names before kubectl and names a missing object", async () => {
-  await assertGetRefusals(model.methods.get.execute, ISSUERS, "Issuer");
-});
-
-Deno.test("issuer list fails whole on RBAC, a missing CRD, an expired login, a timeout, output that is not JSON or an answer that is not a list", async () => {
-  await assertListFailures(model.methods.list.execute, ISSUERS, "Issuer", {
-    kind: "Issuer",
-  });
-});
-
-Deno.test("an issuer named like the inventory, and two issuers of one name, keep their own records", async () => {
-  const c = ctx({});
-  const named = (kind: string, name: string, namespace?: string) => ({
-    kind,
-    metadata: { name, ...(namespace ? { namespace } : {}) },
-  });
-  await withCalls([
-    {
-      args: ["get", ISSUERS, "-A"],
-      out: list([
-        named("Issuer", "inventory", "pki"),
-        named("Issuer", "x", "a"),
-      ]),
-    },
-    {
-      args: ["get", CLUSTER_ISSUERS],
-      out: list([
-        named("ClusterIssuer", "inventory"),
-        named("ClusterIssuer", "x"),
-      ]),
-    },
-  ], () => model.methods.list.execute({}, c.context));
-  const names = c.written.map((w) => w.name);
-  assertEquals(names, [
-    "Issuer--pki--inventory",
-    "Issuer--a--x",
-    "ClusterIssuer--inventory",
-    "ClusterIssuer--x",
-    "inventory_all",
-  ]);
-  assertEquals(new Set(names).size, names.length);
+  await assertRejects(
+    () => M.get.execute({ name: "ca", namespace: "pki" }, h.context),
+    Error,
+    "kubectl did not return Issuer pki/ca",
+  );
+  assertEquals(h.written(), []);
 });

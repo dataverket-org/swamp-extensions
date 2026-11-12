@@ -336,9 +336,15 @@ swamp extension quality manifest.yaml --json
 swamp extension push manifest.yaml --dry-run
 ```
 
-The unit tests install a fake API caller through the `__setCaller` seam, so
-nothing reaches an instance: a method that calls an endpoint the test did not
-expect fails rather than passing quietly.
+The unit tests run every method of the nine types through swamp's
+`createModelTestContext`, with a stub caller injected at the `__setCaller` seam
+(`test_support.ts`): each test lists the few answers it needs, and a call it did
+not list fails it. Each method has a success and a failure path, and the tests
+assert on the records written, the calls that change something, the instances
+tombstoned and, where a method promises one, the log line. A key planted in the
+credential reaches no record or log, and a secret a method emits lands only in
+its sensitive record. The pure parts are tested too: the key and token handling,
+the arguments, the enums and the records. Nothing in them reaches an instance.
 
 `smoke/` runs the models against a throwaway Zitadel in podman, and spends most
 of its effort on what should not happen — a `confirm` that does not match, a

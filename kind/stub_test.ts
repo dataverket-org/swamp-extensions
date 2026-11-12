@@ -1,0 +1,111 @@
+/**
+ * The unit tests' stub, in the pattern of swamp's testing guide: a method
+ * runs its `execute` through `createModelTestContext`, and kind and kubectl
+ * are a stub spawn installed through `__setSpawn` of `../lib/cli.ts`. Each test lists
+ * the few commands it needs and what each answers; a command it did not list
+ * is an error, so a test cannot pass on a call it never meant to make. The
+ * stub is not a model of kind or of a cluster. The live suite in `smoke/` is the
+ * proof against a real one; these tests pin what a method writes and
+ * refuses.
+ *
+ * @module
+ */
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
+import { __setSpawn, type SpawnOptions } from "../lib/cli.ts";
+
+/** One command as the stub saw it. */
+export interface Call {
+  /** The binary and its arguments without the runner's own flags. */
+  key: string;
+  args: string[];
+  stdin?: string;
+}
+
+/**
+ * One answer: what the command prints and how it exits, or a function of
+ * the call. A `stdout` that is not a string is printed as JSON.
+ */
+export type Reply =
+  | { stdout?: unknown; stderr?: string; code?: number }
+  | ((c: Call) => { stdout?: unknown; stderr?: string; code?: number });
+
+/**
+ * The command as a test names it: the binary and its arguments. For kubectl
+ * the flags its runner adds to every call are left out (the request timeout,
+ * the cluster flags and the trailing `-o json`); kind's own arguments are
+ * kept whole, `--kubeconfig` with them.
+ */
+export function keyOf(bin: string, args: string[]): string {
+  if (bin !== "kubectl") return [bin, ...args].join(" ");
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--request-timeout=")) continue;
+    if (a === "--kubeconfig" || a === "--context") {
+      i++;
+      continue;
+    }
+    rest.push(a);
+  }
+  if (rest.at(-2) === "-o" && rest.at(-1) === "json") rest.splice(-2);
+  return [bin, ...rest].join(" ");
+}
+
+/**
+ * A swamp method context with the stub spawn installed, and what the method
+ * wrote and logged. Declare it with `using`: the real spawn is put back when
+ * the test ends.
+ */
+export function harness(
+  routes: Record<string, Reply>,
+  opts: {
+    globalArgs?: Record<string, unknown>;
+    storedResources?: Record<string, Record<string, unknown>>;
+  } = {},
+) {
+  const calls: Call[] = [];
+  __setSpawn((bin: string, args: string[], o: SpawnOptions) => {
+    const key = keyOf(bin, args);
+    const call = { key, args, stdin: o.stdin };
+    calls.push(call);
+    const r = routes[key];
+    if (r === undefined) {
+      return Promise.reject(new Error(`the stub has no answer for ${key}`));
+    }
+    const a = typeof r === "function" ? r(call) : r;
+    const out = a.stdout === undefined
+      ? ""
+      : typeof a.stdout === "string"
+      ? a.stdout
+      : JSON.stringify(a.stdout);
+    return Promise.resolve({
+      code: a.code ?? 0,
+      stdout: new TextEncoder().encode(out),
+      stderr: a.stderr ?? "",
+    });
+  });
+  const t = createModelTestContext({
+    globalArgs: opts.globalArgs ?? {},
+    storedResources: opts.storedResources ?? {},
+  });
+  return {
+    // deno-lint-ignore no-explicit-any
+    context: t.context as any,
+    calls,
+    written: () =>
+      t.getWrittenResources().map((w) => ({
+        spec: w.specName,
+        name: w.name,
+        data: w.data as Record<string, unknown>,
+      })),
+    logs: () =>
+      t.getLogs().map((l) => {
+        const values = (l.args?.[0] ?? {}) as Record<string, unknown>;
+        return l.message.replace(
+          /\{(\w+)\}/g,
+          (m, k: string) => k in values ? String(values[k]) : m,
+        );
+      }),
+    [Symbol.dispose]: () => __setSpawn(),
+  };
+}

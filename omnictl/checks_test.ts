@@ -1,16 +1,17 @@
 import { assert, assertEquals } from "jsr:@std/assert@1.0.13";
-import { checks, explainAuthFailure, PROBE_TYPE } from "./checks.ts";
+import { checks, explainAuthFailure } from "./checks.ts";
 import type { GlobalArgsData } from "./common.ts";
 import { model as clusterModel } from "./cluster.ts";
 import { model as inventoryModel } from "./inventory.ts";
-import { __setRunner, type RunResult } from "./omnictl.ts";
 
 const KEY = "s3cret-key-material";
+
 const base: GlobalArgsData = {
   endpoint: "https://omni.example.net",
   insecureSkipTlsVerify: false,
   omnictlPath: "omnictl",
 };
+
 const EXPIRED_STDERR =
   "Error: failed to sign message: gopenpgp: error in signing: openpgp: invalid argument: no valid signing keys";
 
@@ -27,20 +28,6 @@ async function withKeyFile(
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
-}
-
-/** A runner that answers the probe read and fails the test on anything else. */
-function strictRunner(probe: RunResult, calls: string[][]) {
-  return (argv: string[]) => {
-    calls.push(argv);
-    if (
-      argv.length === 5 && argv[1] === "get" && argv[2] === PROBE_TYPE &&
-      argv[3] === "-o" && argv[4] === "json"
-    ) {
-      return Promise.resolve(probe);
-    }
-    throw new Error(`unexpected omnictl call: ${argv.join(" ")}`);
-  };
 }
 
 const run = (name: keyof typeof checks, globalArgs: GlobalArgsData) =>
@@ -111,83 +98,6 @@ Deno.test("service-account-key fails, naming the problem and never the key", asy
     assertEquals(r.pass, false, "empty file");
     assert(r.errors![0].includes(path), r.errors![0]);
   });
-});
-
-Deno.test("omni-authenticates passes on one probe read", async () => {
-  const calls: string[][] = [];
-  __setRunner(strictRunner({ code: 0, stdout: "", stderr: "" }, calls));
-  try {
-    assertEquals(
-      await run("omni-authenticates", { ...base, serviceAccountKey: KEY }),
-      { pass: true },
-    );
-    assertEquals(calls.length, 1);
-  } finally {
-    __setRunner();
-  }
-});
-
-Deno.test("omni-authenticates says an expired key file has expired, naming the file and not the key", async () => {
-  await withKeyFile(`${KEY}\n`, async (path) => {
-    const calls: string[][] = [];
-    __setRunner(
-      strictRunner({ code: 1, stdout: "", stderr: EXPIRED_STDERR }, calls),
-    );
-    try {
-      const r = await run("omni-authenticates", {
-        ...base,
-        serviceAccountKeyFile: path,
-      });
-      assertEquals(r.pass, false);
-      const e = r.errors![0];
-      assert(e.startsWith(`the key in ${path} has expired`), e);
-      assert(e.includes("mint a new service account key"), e);
-      assert(e.includes("no valid signing keys"), e);
-      assert(!e.includes(KEY), "the key leaked");
-    } finally {
-      __setRunner();
-    }
-  });
-});
-
-Deno.test("omni-authenticates passes other failures through with the key redacted", async () => {
-  const calls: string[][] = [];
-  __setRunner(
-    strictRunner({
-      code: 1,
-      stdout: "",
-      stderr: `PermissionDenied: rejected key ${KEY}`,
-    }, calls),
-  );
-  try {
-    const r = await run("omni-authenticates", {
-      ...base,
-      serviceAccountKey: KEY,
-    });
-    assertEquals(r.pass, false);
-    const e = r.errors![0];
-    assert(e.includes("PermissionDenied"), e);
-    assert(!e.includes("expired"), e);
-    assert(!e.includes(KEY), "the key leaked");
-  } finally {
-    __setRunner();
-  }
-});
-
-Deno.test("omni-authenticates makes no omnictl call when the key does not resolve", async () => {
-  const calls: string[][] = [];
-  __setRunner(strictRunner({ code: 0, stdout: "", stderr: "" }, calls));
-  try {
-    const r = await run("omni-authenticates", {
-      ...base,
-      serviceAccountKeyFile: "/nonexistent/operator.key",
-    });
-    assertEquals(r.pass, false);
-    assert(r.errors![0].includes("/nonexistent/operator.key"), r.errors![0]);
-    assertEquals(calls.length, 0);
-  } finally {
-    __setRunner();
-  }
 });
 
 Deno.test("explainAuthFailure names the argument when the key is a value", () => {

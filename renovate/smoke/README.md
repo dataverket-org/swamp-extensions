@@ -23,8 +23,8 @@ The suite was run on 2026-11-10 on Linux x86_64 with:
 
 - The Renovate image must be held by the engine before the suite starts: every
   model of the suite sets `pull: never`, so the suite never downloads it. The
-  pull itself was not run live; it is covered by the unit tests, and by one live
-  case of a pull that fails.
+  pull itself was not run live; only one live case of a pull that fails covers
+  it.
 - `live.sh` and `config.sh` need network access to Docker Hub and the npm
   registry. Their assertions say that an old pin has a newer version, never
   which one, so a new upstream release does not break it. It depends on four

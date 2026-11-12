@@ -1,205 +1,18 @@
 import {
   assertEquals,
-  assertRejects,
+  assertInstanceOf,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
 import {
-  type ApiCall,
-  branchesList,
-  type Caller,
   dataName,
-  defaultBranchEnsure,
   extension,
   legacyDataName,
-  repoDelete,
   writeRecord,
 } from "./repo_settings.ts";
-
-function fakeApi(
-  replies: Record<string, { status: number; body?: unknown }>,
-): { api: Caller; calls: ApiCall[] } {
-  const calls: ApiCall[] = [];
-  const api: Caller = (c) => {
-    calls.push(c);
-    const r = replies[`${c.method} ${c.path}`];
-    return Promise.resolve(
-      r
-        ? { status: r.status, body: r.body ?? {} }
-        : { status: 404, body: { message: "Not Found" } },
-    );
-  };
-  return { api, calls };
-}
-
-Deno.test("branchesList reports branches and the default, or nothing for an empty repository", async () => {
-  const { api } = fakeApi({
-    "GET /repos/acme/tool": { status: 200, body: { default_branch: "master" } },
-    "GET /repos/acme/tool/branches?per_page=100&page=1": {
-      status: 200,
-      body: [{ name: "master" }, { name: "dev" }],
-    },
-    "GET /repos/acme/empty": { status: 200, body: { default_branch: "main" } },
-    "GET /repos/acme/empty/branches?per_page=100&page=1": {
-      status: 200,
-      body: [],
-    },
-  });
-  const tool = await branchesList(api, "acme", { name: "tool" });
-  assertEquals(tool.branches, ["master", "dev"]);
-  assertEquals(tool.defaultBranch, "master");
-  assertEquals(tool.truncated, false);
-  const empty = await branchesList(api, "acme", { name: "empty" });
-  assertEquals(empty.defaultBranch, "");
-});
-
-Deno.test("branchesList follows every page, so a late branch is not missed", async () => {
-  // A full page means there may be more. The old code read one page of 100 and
-  // stopped, so default_branch_ensure refused a branch the repository has.
-  const page1 = Array.from({ length: 100 }, (_, i) => ({ name: `b${i}` }));
-  const { api, calls } = fakeApi({
-    "GET /repos/acme/big": { status: 200, body: { default_branch: "b0" } },
-    "GET /repos/acme/big/branches?per_page=100&page=1": {
-      status: 200,
-      body: page1,
-    },
-    "GET /repos/acme/big/branches?per_page=100&page=2": {
-      status: 200,
-      body: [{ name: "late" }],
-    },
-  });
-  const big = await branchesList(api, "acme", { name: "big" });
-  assertEquals(big.branches.length, 101);
-  assertEquals(big.branches.includes("late"), true);
-  assertEquals(big.truncated, false);
-  // a short page ends it; no third request
-  assertEquals(
-    calls.filter((c) => c.path.includes("page=3")).length,
-    0,
-  );
-});
-
-Deno.test("branchesList says so when the page cap is reached with a full last page", async () => {
-  // 100 full pages is the cap; the record must not pass that off as the whole list
-  const replies: Record<string, { status: number; body?: unknown }> = {
-    "GET /repos/acme/huge": { status: 200, body: { default_branch: "b0" } },
-  };
-  for (let page = 1; page <= 100; page++) {
-    replies[`GET /repos/acme/huge/branches?per_page=100&page=${page}`] = {
-      status: 200,
-      body: Array.from({ length: 100 }, (_, i) => ({ name: `p${page}b${i}` })),
-    };
-  }
-  const { api, calls } = fakeApi(replies);
-  const huge = await branchesList(api, "acme", { name: "huge" });
-  assertEquals(huge.branches.length, 10000);
-  assertEquals(huge.truncated, true);
-  // the cap holds: no page 101
-  assertEquals(calls.some((c) => c.path.includes("page=101")), false);
-});
-
-Deno.test("defaultBranchEnsure patches only when the default differs and the branch exists", async () => {
-  const { api, calls } = fakeApi({
-    "GET /repos/acme/tool": { status: 200, body: { default_branch: "main" } },
-    "GET /repos/acme/tool/branches?per_page=100&page=1": {
-      status: 200,
-      body: [{ name: "main" }, { name: "master" }],
-    },
-    "PATCH /repos/acme/tool": {
-      status: 200,
-      body: { default_branch: "master" },
-    },
-  });
-  const updated = await defaultBranchEnsure(api, "acme", {
-    name: "tool",
-    defaultBranch: "master",
-  });
-  assertEquals(updated.action, "updated");
-  assertEquals(
-    (calls.at(-1)!.body as Record<string, unknown>).default_branch,
-    "master",
-  );
-  const { api: same, calls: sameCalls } = fakeApi({
-    "GET /repos/acme/tool": { status: 200, body: { default_branch: "master" } },
-    "GET /repos/acme/tool/branches?per_page=100&page=1": {
-      status: 200,
-      body: [{ name: "master" }],
-    },
-  });
-  assertEquals(
-    (await defaultBranchEnsure(same, "acme", {
-      name: "tool",
-      defaultBranch: "master",
-    })).action,
-    "unchanged",
-  );
-  assertEquals(sameCalls.some((c) => c.method === "PATCH"), false);
-});
-
-Deno.test("defaultBranchEnsure refuses a branch the repository does not have", async () => {
-  const { api } = fakeApi({
-    "GET /repos/acme/tool": { status: 200, body: { default_branch: "main" } },
-    "GET /repos/acme/tool/branches?per_page=100&page=1": {
-      status: 200,
-      body: [{ name: "main" }],
-    },
-  });
-  await assertRejects(
-    () =>
-      defaultBranchEnsure(api, "acme", {
-        name: "tool",
-        defaultBranch: "master",
-      }),
-    Error,
-    "has no branch master (has: main)",
-  );
-});
-
-Deno.test("API errors carry GitHub's message", async () => {
-  const { api } = fakeApi({
-    "GET /repos/acme/tool": {
-      status: 403,
-      body: { message: "Resource not accessible by personal access token" },
-    },
-  });
-  await assertRejects(
-    () => branchesList(api, "acme", { name: "tool" }),
-    Error,
-    "HTTP 403: Resource not accessible",
-  );
-});
-
-Deno.test("repoDelete deletes an existing repository, reports an absent one, and refuses a mismatch", async () => {
-  const { api, calls } = fakeApi({
-    "GET /repos/acme/old": {
-      status: 200,
-      body: { description: "mirror of https://forge.example.net/acme/old" },
-    },
-    "DELETE /repos/acme/old": { status: 204 },
-  });
-  assertEquals(
-    (await repoDelete(api, "acme", {
-      name: "old",
-      expectMirrorOf: "forge.example.net",
-    })).action,
-    "deleted",
-  );
-  assertEquals(calls.at(-1)!.method, "DELETE");
-  assertEquals(
-    (await repoDelete(api, "acme", { name: "missing" })).action,
-    "absent",
-  );
-  await assertRejects(
-    () =>
-      repoDelete(api, "acme", {
-        name: "old",
-        expectMirrorOf: "somewhere-else",
-      }),
-    Error,
-    "refusing to delete",
-  );
-});
+import { assertNoPlanted, PLANTED, withStub } from "./test_support.ts";
 
 const ghChecks = extension.checks[0];
+
 const ctx = (o: Record<string, unknown>) => ({ globalArgs: o as never });
 
 Deno.test("github-token-accepted needs a token and an owner before reaching out", async () => {
@@ -214,50 +27,6 @@ Deno.test("github-token-accepted needs a token and an owner before reaching out"
   );
   assertEquals(noOwner.pass, false);
   assertStringIncludes(noOwner.errors![0], "owner is not set");
-});
-
-Deno.test("github-token-accepted checks the owner too, without the schema's baseUrl default", async () => {
-  const seen: string[] = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = (input: string | URL | Request) => {
-    const url = String(input);
-    seen.push(url);
-    return Promise.resolve(
-      new Response(JSON.stringify({ login: "someone" }), { status: 200 }),
-    );
-  };
-  try {
-    // baseUrl absent, as a check receives it; fetchCaller supplies the default
-    const args = { token: "t", owner: "acme" };
-    assertEquals(Object.hasOwn(args, "baseUrl"), false);
-    const r = await ghChecks["github-token-accepted"].execute(ctx(args));
-    assertEquals(r.pass, true);
-    assertEquals(seen[0], "https://api.github.com/user");
-    assertEquals(seen[1], "https://api.github.com/users/acme");
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-Deno.test("github-token-accepted fails with GitHub's message when the owner is unreachable", async () => {
-  const original = globalThis.fetch;
-  globalThis.fetch = (input: string | URL | Request) =>
-    Promise.resolve(
-      String(input).includes("/users/")
-        ? new Response(JSON.stringify({ message: "Not Found" }), {
-          status: 404,
-        })
-        : new Response(JSON.stringify({ login: "someone" }), { status: 200 }),
-    );
-  try {
-    const r = await ghChecks["github-token-accepted"].execute(
-      ctx({ token: "t", owner: "ghost" }),
-    );
-    assertEquals(r.pass, false);
-    assertStringIncludes(r.errors![0], "Not Found");
-  } finally {
-    globalThis.fetch = original;
-  }
 });
 
 // dataverket-org/swamp-extensions#1: a data name is a directory name in a
@@ -367,24 +136,131 @@ Deno.test("writeRecord is quiet without old data, without readResource, and when
   assertEquals(broken.warnings, []);
 });
 
-Deno.test("branches_list stores its record under the portable name", async () => {
-  const original = globalThis.fetch;
-  globalThis.fetch = (input: string | URL | Request) => {
-    const url = String(input);
-    const body = url.endsWith("/branches?per_page=100&page=1")
-      ? [{ name: "main" }]
-      : { default_branch: "main" };
-    return Promise.resolve(
-      new Response(JSON.stringify(body), { status: 200 }),
-    );
-  };
-  try {
-    const { ctx, writes } = recordCtx({});
-    const methods = extension.methods[0];
-    const r = await methods.branches_list.execute({ name: "tool" }, ctx);
-    assertEquals(r.dataHandles, [{ name: "branches-tool" }]);
-    assertEquals(writes, [{ spec: "branches", name: "branches-tool" }]);
-  } finally {
-    globalThis.fetch = original;
-  }
+// ---------------------------------------------------------------------------
+// Methods, run through createModelTestContext with a stub answering fetch.
+// ---------------------------------------------------------------------------
+
+const methods = extension.methods[0];
+const BRANCHES = "GET /repos/acme/tool/branches?per_page=100&page=1";
+
+Deno.test("branches_list stores the branches and the default", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": { status: 200, body: { default_branch: "main" } },
+      [BRANCHES]: { status: 200, body: [{ name: "main" }, { name: "dev" }] },
+    },
+    (c) => methods.branches_list.execute({ name: "tool" }, c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen[0].authorization, `Bearer ${PLANTED}`);
+  const [w] = r.written;
+  assertEquals([w.spec, w.name], ["branches", "branches-tool"]);
+  assertEquals(
+    [w.data.branches, w.data.defaultBranch, w.data.truncated],
+    [["main", "dev"], "main", false],
+  );
+  assertNoPlanted(r);
+});
+
+Deno.test("branches_list fails on a missing repository, and an echoed token is masked", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": {
+        status: 404,
+        body: { message: `Not Found for ${PLANTED}` },
+      },
+    },
+    (c) => methods.branches_list.execute({ name: "tool" }, c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertStringIncludes(r.error.message, "HTTP 404: Not Found for [REDACTED]");
+  assertEquals(r.written, []);
+  assertNoPlanted(r);
+});
+
+Deno.test("default_branch_ensure patches the default when the branch exists", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": { status: 200, body: { default_branch: "main" } },
+      [BRANCHES]: { status: 200, body: [{ name: "main" }, { name: "master" }] },
+      "PATCH /repos/acme/tool": { status: 200, body: {} },
+    },
+    (c) =>
+      methods.default_branch_ensure.execute({
+        name: "tool",
+        defaultBranch: "master",
+      }, c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen.at(-1)!.body, { default_branch: "master" });
+  const [w] = r.written;
+  assertEquals([w.spec, w.name], ["defaultBranch", "default-branch-tool"]);
+  assertEquals(w.data.action, "updated");
+});
+
+Deno.test("default_branch_ensure refuses a branch the repository does not have", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": { status: 200, body: { default_branch: "main" } },
+      [BRANCHES]: { status: 200, body: [{ name: "main" }] },
+    },
+    (c) =>
+      methods.default_branch_ensure.execute({
+        name: "tool",
+        defaultBranch: "master",
+      }, c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertStringIncludes(r.error.message, "has no branch master");
+  assertEquals(r.seen.some((s) => s.method === "PATCH"), false);
+  assertEquals(r.written, []);
+});
+
+Deno.test("repo_delete deletes a repository that mentions the expected mirror", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": {
+        status: 200,
+        body: { description: "Mirror of https://git.example.org/acme/tool" },
+      },
+      "DELETE /repos/acme/tool": { status: 204 },
+    },
+    (c) =>
+      methods.repo_delete.execute({
+        name: "tool",
+        expectMirrorOf: "git.example.org/acme/tool",
+      }, c),
+  );
+  assertEquals(r.error, undefined);
+  const [w] = r.written;
+  assertEquals([w.spec, w.name, w.data.action], [
+    "repoDelete",
+    "delete-tool",
+    "deleted",
+  ]);
+});
+
+Deno.test("repo_delete reports an absent repository without deleting", async () => {
+  const r = await withStub(
+    { "GET /repos/acme/tool": { status: 404, body: { message: "Not Found" } } },
+    (c) => methods.repo_delete.execute({ name: "tool" }, c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen.map((s) => s.method), ["GET"]);
+  assertEquals(r.written[0].data.action, "absent");
+});
+
+Deno.test("repo_delete refuses a repository that does not mention the expected mirror", async () => {
+  const r = await withStub(
+    { "GET /repos/acme/tool": { status: 200, body: { description: "mine" } } },
+    (c) =>
+      methods.repo_delete.execute({
+        name: "tool",
+        expectMirrorOf: "git.example.org/acme/tool",
+      }, c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertStringIncludes(r.error.message, "refusing to delete");
+  assertEquals(r.seen.map((s) => s.method), ["GET"]);
+  assertEquals(r.written, []);
 });

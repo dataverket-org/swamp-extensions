@@ -1,10 +1,10 @@
 # Live smoke test
 
-`delete-kind.sh` checks against a real cloud what the unit tests check against a
-fake: deleting one member of a collection model leaves its siblings readable
-through swamp. It creates three 1 GiB volumes and three private images from a
-small disk image, deletes one of each, reads the other two back, deletes the one
-already gone again, and removes everything, also when a check fails.
+`delete-kind.sh` checks against a real cloud that deleting one member of a
+collection model leaves its siblings readable through swamp. It creates three 1
+GiB volumes and three private images from a small disk image, deletes one of
+each, reads the other two back, deletes the one already gone again, and removes
+everything, also when a check fails.
 
 ```sh
 mkdir /tmp/os-smoke && cd /tmp/os-smoke

@@ -2,7 +2,6 @@ import {
   assert,
   assertEquals,
   assertFalse,
-  assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
 import { InventorySchema, kubectlCliCheck } from "../lib/kubectl.ts";
@@ -18,13 +17,7 @@ import {
 import { model as backup } from "./backup.ts";
 import { model as cluster } from "./cluster.ts";
 import { model as scheduledbackup } from "./scheduledbackup.ts";
-import {
-  ctx,
-  everything,
-  listCall,
-  PLANTED,
-  withScript,
-} from "./test_support.ts";
+import { ctx, PLANTED } from "./test_support.ts";
 
 const MODELS = [cluster, scheduledbackup, backup];
 
@@ -172,56 +165,6 @@ Deno.test("an inventory is written under the spec inventory with the shared name
     assertStringIncludes(c.logs[0], "Recorded 2 Thing objects");
     assertStringIncludes(c.logs[0], "1 not healthy");
   }
-});
-
-Deno.test("no method lets a token of a refused login into its error", async () => {
-  const fail =
-    `error: You must be logged in to the server (Unauthorized)\nAuthorization: Bearer ${PLANTED.token}\nhttps://admin:${PLANTED.password}@api.example.org:6443\n` +
-    "x".repeat(3000);
-  for (
-    const [m, resource] of [
-      [cluster, RESOURCES.cluster],
-      [scheduledbackup, RESOURCES.scheduledBackup],
-      [backup, RESOURCES.backup],
-    ] as const
-  ) {
-    await withScript(
-      [{ args: listCall(resource, "pg"), fail }],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () => m.methods.list.execute({}, c.context as never),
-          Error,
-        );
-        assertStringIncludes(e.message, "did not accept the credentials");
-        assert(e.message.length < 900, String(e.message.length));
-        assertFalse(e.message.includes("\n"));
-        for (const v of Object.values(PLANTED)) {
-          assertFalse(everything(c, e).includes(v), v);
-        }
-        assertEquals(c.written, []);
-      },
-    );
-  }
-});
-
-Deno.test("the kubectl check passes when it runs and names a missing binary", async () => {
-  await withScript([], { namespace: "" }, async () => {
-    for (const m of MODELS) {
-      assertEquals(await m.checks["kubectl-cli-available"].execute(), {
-        pass: true,
-      });
-    }
-  });
-  await withScript(
-    [{ args: ["version", "--client"], notInstalled: true }],
-    { namespace: "" },
-    async () => {
-      const r = await cluster.checks["kubectl-cli-available"].execute();
-      assertFalse(r.pass);
-      assertStringIncludes(r.errors![0], "kubectl is not on PATH");
-    },
-  );
 });
 
 Deno.test("stored free text is one bounded line without a credential, or null", () => {

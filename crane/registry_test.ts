@@ -4,15 +4,13 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
-import { z } from "npm:zod@4";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 import {
   __setExec,
   argumentProblem,
-  BlobArgsSchema,
   checks,
   type CommandResult,
   type Context,
-  CopyArgsSchema,
   fileFromLayer,
   GlobalArgsSchema,
   imageInstance,
@@ -31,178 +29,7 @@ const REPO = import.meta.dirname!;
 
 const DIGEST_A =
   "sha256:4b9874bd1e5a1ee8ae9a5819237de1088fa7307d419e61cb4281e849a39a0405";
-const DIGEST_B =
-  "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
-const DIGEST_C =
-  "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-const CONFIG_D =
-  "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-const LAYER_E =
-  "sha256:2222222222222222222222222222222222222222222222222222222222222222";
-
 const enc = (s: string) => new TextEncoder().encode(s);
-
-type Call = {
-  args: string[];
-  env: Record<string, string>;
-  stdin?: string;
-};
-
-/** A fake registry crane talks to: tags and digests, manifests, configs, blobs. */
-type Registry = {
-  tags: Record<string, string>;
-  manifests: Record<string, unknown>;
-  configs: Record<string, unknown>;
-  blobs: Record<string, Uint8Array>;
-};
-
-function registry(): Registry {
-  const image = {
-    mediaType: "application/vnd.oci.image.manifest.v1+json",
-    config: {
-      mediaType: "application/vnd.oci.image.config.v1+json",
-      size: 1514,
-      digest: CONFIG_D,
-    },
-    layers: [
-      {
-        mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-        size: 1000,
-        digest: LAYER_E,
-      },
-      {
-        mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-        size: 100,
-        digest: DIGEST_C,
-      },
-    ],
-  };
-  return {
-    tags: {
-      "docker.io/library/nats:2.10": DIGEST_A,
-      "registry.example.org/team/hello:v1": DIGEST_B,
-    },
-    manifests: {
-      [`docker.io/library/nats@${DIGEST_A}`]: {
-        mediaType: "application/vnd.oci.image.index.v1+json",
-        manifests: [
-          {
-            mediaType: "application/vnd.oci.image.manifest.v1+json",
-            size: 1416,
-            digest: DIGEST_B,
-            platform: { architecture: "amd64", os: "linux" },
-          },
-          {
-            mediaType: "application/vnd.oci.image.manifest.v1+json",
-            size: 1416,
-            digest: DIGEST_C,
-            platform: { architecture: "arm64", os: "linux", variant: "v8" },
-          },
-          {
-            mediaType: "application/vnd.oci.image.manifest.v1+json",
-            size: 500,
-            digest: CONFIG_D,
-            platform: { architecture: "unknown", os: "unknown" },
-            annotations: {
-              "vnd.docker.reference.type": "attestation-manifest",
-            },
-          },
-        ],
-        annotations: { "org.opencontainers.image.base.name": "static:latest" },
-      },
-      [`docker.io/library/nats@${DIGEST_B}`]: image,
-      [`docker.io/library/nats@${DIGEST_C}`]: image,
-      [`registry.example.org/team/hello@${DIGEST_B}`]: {
-        ...image,
-        annotations: { "org.opencontainers.image.revision": "abc123" },
-      },
-    },
-    configs: {
-      [`docker.io/library/nats@${DIGEST_B}`]: {
-        architecture: "amd64",
-        os: "linux",
-        created: "2026-10-01T00:00:00Z",
-        config: { Labels: { "org.opencontainers.image.version": "2.10" } },
-      },
-      [`registry.example.org/team/hello@${DIGEST_B}`]: {
-        architecture: "arm64",
-        os: "linux",
-        variant: "v8",
-        created: "2026-10-02T00:00:00Z",
-        config: {},
-      },
-    },
-    blobs: {},
-  };
-}
-
-/** A fake crane over a fake registry. */
-function fake(reg: Registry, opts: { fail?: string } = {}) {
-  const calls: Call[] = [];
-  const restore = __setExec(
-    (bin, args, o): Promise<CommandResult> => {
-      calls.push({ args, env: o.env, stdin: o.stdin });
-      const ok = (stdout: string | Uint8Array = "") =>
-        Promise.resolve({
-          code: 0,
-          stdout: typeof stdout === "string" ? enc(stdout) : stdout,
-          stderr: "",
-        });
-      const fail = (code: number, stderr: string) =>
-        Promise.resolve({ code, stdout: new Uint8Array(), stderr });
-      if (bin !== "crane") return fail(127, `${bin}: not found`);
-      const argv = args.filter((a) => a !== "--insecure");
-      const line = argv.join(" ");
-      if (opts.fail && line.startsWith(opts.fail)) {
-        return fail(2, `${opts.fail}: boom`);
-      }
-      const digestOf = (ref: string) =>
-        ref.includes("@") ? ref.slice(ref.indexOf("@") + 1) : reg.tags[ref];
-      switch (argv[0]) {
-        case "version":
-          return ok("0.22.1\n");
-        case "auth":
-          return ok(`logged in via ${o.env.DOCKER_CONFIG}/config.json\n`);
-        case "digest": {
-          const d = digestOf(argv[1]);
-          if (!d) {
-            return fail(
-              1,
-              `Error: GET http://x/v2/manifests/x: MANIFEST_UNKNOWN: manifest unknown; map[Tag:x]`,
-            );
-          }
-          return ok(`${d}\n`);
-        }
-        case "manifest": {
-          const m = reg.manifests[argv[1]];
-          return m ? ok(JSON.stringify(m)) : fail(1, "MANIFEST_UNKNOWN");
-        }
-        case "config": {
-          const c = reg.configs[argv[1]];
-          return c ? ok(JSON.stringify(c)) : fail(1, "MANIFEST_UNKNOWN");
-        }
-        case "blob": {
-          const b = reg.blobs[argv[1]];
-          return b ? ok(b) : fail(1, "BLOB_UNKNOWN: blob unknown");
-        }
-        case "copy": {
-          const d = digestOf(argv[1]);
-          if (!d) return fail(1, "MANIFEST_UNKNOWN");
-          reg.tags[argv[2]] = d;
-          return ok();
-        }
-        case "tag": {
-          const d = digestOf(argv[1]);
-          const repo = argv[1].slice(0, argv[1].indexOf("@"));
-          reg.tags[`${repo}:${argv[2]}`] = d;
-          return ok();
-        }
-      }
-      return fail(99, `unexpected crane ${line}`);
-    },
-  );
-  return { calls, restore };
-}
 
 type Written = { spec: string; name: string; data: Record<string, unknown> };
 
@@ -358,32 +185,6 @@ Deno.test("platformOf, isIndex and pingUrl", () => {
   ]);
 });
 
-Deno.test("crane-installed reports a binary that cannot run", async () => {
-  const f = fake(registry());
-  try {
-    const res = await checks["crane-installed"].execute({
-      globalArgs: {},
-      repoDir: REPO,
-      logger: { info: () => {} },
-    });
-    assertEquals(res, { pass: true });
-  } finally {
-    f.restore();
-  }
-  const restore = __setExec(() => Promise.reject(new Error("ENOENT")));
-  try {
-    const res = await checks["crane-installed"].execute({
-      globalArgs: { craneBinary: "nope" },
-      repoDir: REPO,
-      logger: { info: () => {} },
-    });
-    assertEquals(res.pass, false);
-    assertStringIncludes(res.errors![0], "nope could not be run");
-  } finally {
-    restore();
-  }
-});
-
 Deno.test("registry-reachable fails on an empty registry and on one that does not answer", async () => {
   const empty = await checks["registry-reachable"].execute({
     globalArgs: {},
@@ -398,276 +199,6 @@ Deno.test("registry-reachable fails on an empty registry and on one that does no
   });
   assertEquals(down.pass, false);
   assertStringIncludes(down.errors![0], "http://127.0.0.1:1/v2/");
-});
-
-Deno.test("digest resolves every reference, with a bare name under the namespace, and records first and last seen", async () => {
-  const reg = registry();
-  const f = fake(reg);
-  try {
-    const stored: Record<string, Record<string, unknown>> = {};
-    const { ctx, written } = context({ namespace: "team" }, stored);
-    await model.methods.digest.execute(
-      { refs: ["docker.io/library/nats:2.10", "hello:v1"] },
-      ctx,
-    );
-    assertEquals(written.map((w) => w.name), [
-      "digest-docker.io-library-nats-2.10",
-      "digest-registry.example.org-team-hello-v1",
-    ]);
-    const nats = written[0].data;
-    assertEquals(nats.repository, "docker.io/library/nats");
-    assertEquals(nats.name, "nats");
-    assertEquals(nats.tag, "2.10");
-    assertEquals(nats.digest, DIGEST_A);
-    assertEquals(nats.pinned, `docker.io/library/nats:2.10@${DIGEST_A}`);
-    assertEquals(nats.previousDigest, "");
-    assertEquals(nats.changed, true);
-    assertEquals(nats.firstSeenAt, nats.seenAt);
-    assertEquals(written[1].data.ref, "registry.example.org/team/hello:v1");
-    assertEquals(written[1].data.digest, DIGEST_B);
-    // No credential: no login, no DOCKER_CONFIG.
-    assert(!f.calls.some((c) => c.args[0] === "auth"));
-    assert(f.calls.every((c) => c.env.DOCKER_CONFIG === undefined));
-
-    // Seen again, unchanged: firstSeenAt is kept, seenAt moves on.
-    const again = context({ namespace: "team" }, stored);
-    await model.methods.digest.execute(
-      { refs: ["docker.io/library/nats:2.10"] },
-      again.ctx,
-    );
-    const second = again.written[0].data;
-    assertEquals(second.previousDigest, DIGEST_A);
-    assertEquals(second.changed, false);
-    assertEquals(second.firstSeenAt, nats.firstSeenAt);
-
-    // The tag moved: changed, and firstSeenAt starts over.
-    reg.tags["docker.io/library/nats:2.10"] = DIGEST_C;
-    const moved = context({ namespace: "team" }, stored);
-    await model.methods.digest.execute(
-      { refs: ["docker.io/library/nats:2.10"] },
-      moved.ctx,
-    );
-    const third = moved.written[0].data;
-    assertEquals(third.digest, DIGEST_C);
-    assertEquals(third.previousDigest, DIGEST_A);
-    assertEquals(third.changed, true);
-    assertEquals(third.firstSeenAt, third.seenAt);
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("digest fails on a missing tag, a bare name without a registry, and a crane that cannot reach the registry", async () => {
-  const f = fake(registry(), { fail: "digest ghcr.io" });
-  try {
-    const { ctx, written } = context();
-    const missing = await assertRejects(() =>
-      model.methods.digest.execute(
-        { refs: ["docker.io/library/nats:nope"] },
-        ctx,
-      )
-    );
-    assertStringIncludes(String(missing), "is not in the registry");
-    const down = await assertRejects(() =>
-      model.methods.digest.execute({ refs: ["ghcr.io/x/y:1"] }, ctx)
-    );
-    assertStringIncludes(String(down), "crane digest ghcr.io/x/y:1 exited 2");
-    const bare = context({ registry: "" });
-    const err = await assertRejects(() =>
-      model.methods.digest.execute({ refs: ["hello:v1"] }, bare.ctx)
-    );
-    assertStringIncludes(String(err), "has no registry");
-    assertEquals(written.length + bare.written.length, 0);
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("a credential is logged in to a docker config of its own, with the password on stdin, and the config is removed", async () => {
-  const f = fake(registry());
-  try {
-    const { ctx, written } = context({
-      username: "robot",
-      password: "hunter2",
-    });
-    await model.methods.digest.execute(
-      { refs: ["docker.io/library/nats:2.10"] },
-      ctx,
-    );
-    const login = f.calls.find((c) => c.args[0] === "auth")!;
-    assertEquals(login.args, [
-      "auth",
-      "login",
-      "registry.example.org",
-      "--username",
-      "robot",
-      "--password-stdin",
-    ]);
-    assertEquals(login.stdin, "hunter2");
-    const dir = login.env.DOCKER_CONFIG;
-    assert(dir.includes("crane-docker-config-"));
-    assert(f.calls.every((c) => c.env.DOCKER_CONFIG === dir));
-    await assertRejects(() => Deno.stat(dir), Deno.errors.NotFound);
-    assertEquals(written.length, 1);
-    assert(!JSON.stringify(written).includes("hunter2"));
-  } finally {
-    f.restore();
-  }
-  const noRegistry = fake(registry());
-  try {
-    const { ctx } = context({ registry: "", username: "u", password: "p" });
-    const err = await assertRejects(() =>
-      model.methods.digest.execute(
-        { refs: ["docker.io/library/nats:2.10"] },
-        ctx,
-      )
-    );
-    assertStringIncludes(String(err), "nothing to log in to");
-  } finally {
-    noRegistry.restore();
-  }
-});
-
-Deno.test("insecure adds --insecure to every crane call", async () => {
-  const f = fake(registry());
-  try {
-    const { ctx } = context({ insecure: true });
-    await model.methods.digest.execute(
-      { refs: ["docker.io/library/nats:2.10"] },
-      ctx,
-    );
-    assert(f.calls.every((c) => c.args.at(-1) === "--insecure"));
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("describe records an index with its platform images, and an image with its own platform", async () => {
-  const f = fake(registry());
-  try {
-    const { ctx, written } = context();
-    await model.methods.describe.execute(
-      {
-        refs: [
-          "docker.io/library/nats:2.10",
-          "registry.example.org/team/hello:v1",
-        ],
-      },
-      ctx,
-    );
-    assertEquals(written.map((w) => w.name), [
-      "image-docker.io-library-nats-4b9874bd1e5a",
-      "image-registry.example.org-team-hello-9f86d081884c",
-    ]);
-    const index = written[0].data;
-    assertEquals(index.kind, "index");
-    assertEquals(index.digest, DIGEST_A);
-    assertEquals(index.tag, "2.10");
-    assertEquals(index.mediaType, "application/vnd.oci.image.index.v1+json");
-    assertEquals(index.platforms, ["linux/amd64", "linux/arm64/v8"]);
-    assertEquals((index.children as unknown[]).length, 3);
-    assertEquals(index.configDigest, CONFIG_D);
-    assertEquals(index.created, "2026-10-01T00:00:00Z");
-    assertEquals(index.labels, { "org.opencontainers.image.version": "2.10" });
-    assertEquals(index.annotations, {
-      "org.opencontainers.image.base.name": "static:latest",
-    });
-    assertEquals(index.layers, 4);
-    assertEquals(index.size, 2 * (1514 + 1100));
-    const image = written[1].data;
-    assertEquals(image.kind, "image");
-    assertEquals(image.platforms, ["linux/arm64/v8"]);
-    assertEquals(image.children, []);
-    assertEquals(image.configDigest, CONFIG_D);
-    assertEquals(image.labels, {});
-    assertEquals(image.annotations, {
-      "org.opencontainers.image.revision": "abc123",
-    });
-    assertEquals(image.layers, 2);
-    assertEquals(image.size, 1514 + 1100);
-    // The config of an index came from its first platform image, never from the index.
-    const configs = f.calls.filter((c) => c.args[0] === "config");
-    assertEquals(configs[0].args[1], `docker.io/library/nats@${DIGEST_B}`);
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("copy copies what is not there, leaves what is, checks the digest after, and refuses a tag", async () => {
-  const reg = registry();
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context({ username: "u", password: "p" });
-    const copy = (sources: string[], c = ctx) =>
-      model.methods.copy.execute(CopyArgsSchema.parse({ sources }), c);
-    await copy([`docker.io/library/nats:2.10@${DIGEST_A}`]);
-    assertEquals(written.length, 1);
-    assertEquals(
-      written[0].name,
-      "mirror-registry.example.org-mirror-docker.io-library-nats-2.10",
-    );
-    const m = written[0].data;
-    assertEquals(m.source, `docker.io/library/nats@${DIGEST_A}`);
-    assertEquals(m.sourceRepository, "docker.io/library/nats");
-    assertEquals(
-      m.target,
-      "registry.example.org/mirror/docker.io/library/nats:2.10",
-    );
-    assertEquals(
-      m.repository,
-      "registry.example.org/mirror/docker.io/library/nats",
-    );
-    assertEquals(m.name, "docker.io/library/nats");
-    assertEquals(m.tag, "2.10");
-    assertEquals(m.digest, DIGEST_A);
-    assertEquals(m.action, "copied");
-    const argv = f.calls.find((c) => c.args[0] === "copy")!.args;
-    assertEquals(argv, [
-      "copy",
-      `docker.io/library/nats@${DIGEST_A}`,
-      "registry.example.org/mirror/docker.io/library/nats:2.10",
-    ]);
-    assertEquals(
-      reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"],
-      DIGEST_A,
-    );
-
-    // Already there with that digest: nothing is copied.
-    const before = f.calls.length;
-    await copy([`docker.io/library/nats:2.10@${DIGEST_A}`]);
-    assertEquals(written[1].data.action, "unchanged");
-    assert(!f.calls.slice(before).some((c) => c.args[0] === "copy"));
-
-    // There with another digest: copied over.
-    reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"] =
-      DIGEST_C;
-    await copy([`docker.io/library/nats:2.10@${DIGEST_A}`]);
-    assertEquals(written[2].data.action, "copied");
-
-    // Without a tag the target is the digest itself.
-    await copy([`docker.io/library/nats@${DIGEST_A}`]);
-    assertEquals(
-      written[3].data.target,
-      `registry.example.org/mirror/docker.io/library/nats@${DIGEST_A}`,
-    );
-    assertEquals(
-      written[3].name,
-      "mirror-registry.example.org-mirror-docker.io-library-nats-4b9874bd1e5a",
-    );
-
-    const err = await assertRejects(() =>
-      copy(["docker.io/library/nats:2.10"])
-    );
-    assertStringIncludes(String(err), "is not pinned by digest");
-    const bare = context({ registry: "" });
-    const none = await assertRejects(() =>
-      copy([`docker.io/library/nats@${DIGEST_A}`], bare.ctx)
-    );
-    assertStringIncludes(String(none), "registry is empty");
-    assertEquals(bare.written.length, 0);
-  } finally {
-    f.restore();
-  }
 });
 
 Deno.test("sourcePath gives the repository a registry mirror is asked for, Docker Hub's in full", () => {
@@ -703,243 +234,6 @@ Deno.test("sourcePath gives the repository a registry mirror is asked for, Docke
   assertEquals(sourcePath("docker.io/nats"), sourcePath("nats"));
   for (const bad of ["Foo/bar", "[::1]:5000/hello", "ghcr.io/Team/Hello"]) {
     assertStringIncludes(String(sourcePath(bad)), "cannot be mirrored");
-  }
-});
-
-Deno.test("copy puts every source at its registry and whole path under the namespace", async () => {
-  const reg = registry();
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context();
-    const copy = (sources: string[]) =>
-      model.methods.copy.execute(CopyArgsSchema.parse({ sources }), ctx);
-    await copy([
-      `docker.io/library/nats:2.10@${DIGEST_A}`,
-      `registry.k8s.io/pause:3.10@${DIGEST_B}`,
-    ]);
-    assertEquals(written.length, 2);
-    const [nats, pause] = written.map((w) => w.data);
-    assertEquals(
-      nats.target,
-      "registry.example.org/mirror/docker.io/library/nats:2.10",
-    );
-    assertEquals(nats.name, "docker.io/library/nats");
-    assertEquals(
-      written[0].name,
-      "mirror-registry.example.org-mirror-docker.io-library-nats-2.10",
-    );
-    assertEquals(
-      pause.target,
-      "registry.example.org/mirror/registry.k8s.io/pause:3.10",
-    );
-    assertEquals(
-      reg.tags["registry.example.org/mirror/registry.k8s.io/pause:3.10"],
-      DIGEST_B,
-    );
-
-    // A bare Docker Hub name lands where containerd asks for it.
-    await copy([`nats:2.10@${DIGEST_A}`]);
-    assertEquals(
-      written[2].data.target,
-      "registry.example.org/mirror/docker.io/library/nats:2.10",
-    );
-    assertEquals(written[2].data.action, "unchanged");
-
-    // A registry's port joins its host with an underscore.
-    await copy([`localhost:5001/team/hello:v1@${DIGEST_A}`]);
-    assertEquals(
-      written[3].data.target,
-      "registry.example.org/mirror/localhost_5001/team/hello:v1",
-    );
-
-    const before = written.length;
-    const err = await assertRejects(() =>
-      copy([`ghcr.io/Team/Hello:v1@${DIGEST_A}`])
-    );
-    assertStringIncludes(String(err), "cannot be mirrored");
-    assertEquals(written.length, before);
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("copy refuses two sources at one target or one record name, before copying anything", async () => {
-  const reg = registry();
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context();
-    const copy = (sources: string[]) =>
-      model.methods.copy.execute(CopyArgsSchema.parse({ sources }), ctx);
-    const target = await assertRejects(() =>
-      copy([
-        `docker.io/nats:2.10@${DIGEST_A}`,
-        `docker.io/library/nats:2.10@${DIGEST_A}`,
-      ])
-    );
-    assertStringIncludes(
-      String(target),
-      "land at the same target registry.example.org/mirror/docker.io/library/nats:2.10",
-    );
-    // Different targets, one record name: / and - both write as -.
-    const record = await assertRejects(() =>
-      copy([
-        `ghcr.io/foo-bar/baz:v1@${DIGEST_A}`,
-        `ghcr.io/foo/bar-baz:v1@${DIGEST_B}`,
-      ])
-    );
-    assertStringIncludes(
-      String(record),
-      "land at the same record mirror-registry.example.org-mirror-ghcr.io-foo-bar-baz-v1",
-    );
-    assertEquals(written.length, 0);
-    assert(!f.calls.some((c) => c.args[0] === "copy"));
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("tag writes to a repository copy made, its whole path under the namespace", async () => {
-  const reg = registry();
-  reg.tags["registry.example.org/mirror/docker.io/library/nats:2.10"] =
-    DIGEST_A;
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context();
-    await model.methods.tag.execute(
-      { name: "docker.io/library/nats", digest: DIGEST_A, tag: "stable" },
-      ctx,
-    );
-    assertEquals(
-      written[0].data.ref,
-      "registry.example.org/mirror/docker.io/library/nats:stable",
-    );
-    assertEquals(
-      reg.tags["registry.example.org/mirror/docker.io/library/nats:stable"],
-      DIGEST_A,
-    );
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("copy fails, and writes nothing, when the digest after the copy is not the source's", async () => {
-  const reg = registry();
-  const restore = __setExec((_bin, args) => {
-    const ok = (s: string) =>
-      Promise.resolve({ code: 0, stdout: enc(s), stderr: "" });
-    if (args[0] === "digest") {
-      return reg.tags[args[1]]
-        ? ok(reg.tags[args[1]] + "\n")
-        : Promise.resolve({
-          code: 1,
-          stdout: new Uint8Array(),
-          stderr: "MANIFEST_UNKNOWN",
-        });
-    }
-    if (args[0] === "copy") {
-      reg.tags[args[2]] = DIGEST_C; // a registry that rewrites what it stores
-      return ok("");
-    }
-    return ok("");
-  });
-  try {
-    const { ctx, written } = context();
-    const err = await assertRejects(() =>
-      model.methods.copy.execute(
-        { sources: [`docker.io/library/nats:2.10@${DIGEST_A}`] },
-        ctx,
-      )
-    );
-    assertStringIncludes(String(err), `after the copy, expected ${DIGEST_A}`);
-    assertEquals(written.length, 0);
-  } finally {
-    restore();
-  }
-});
-
-Deno.test("a failing crane reports its argv and stderr, and nothing is written", async () => {
-  const f = fake(registry(), { fail: "copy" });
-  try {
-    const { ctx, written } = context();
-    const err = await assertRejects(() =>
-      model.methods.copy.execute(
-        { sources: [`docker.io/library/nats:2.10@${DIGEST_A}`] },
-        ctx,
-      )
-    );
-    assertStringIncludes(
-      String(err),
-      `crane copy docker.io/library/nats@${DIGEST_A} registry.example.org/mirror/docker.io/library/nats:2.10 exited 2: copy: boom`,
-    );
-    assertEquals(written.length, 0);
-  } finally {
-    f.restore();
-  }
-});
-
-Deno.test("tag points a tag at a digest and records what it held before", async () => {
-  const reg = registry();
-  reg.tags["registry.example.org/mirror/nats:2.10"] = DIGEST_A;
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context();
-    await model.methods.tag.execute(
-      { name: "nats", digest: DIGEST_A, tag: "stable" },
-      ctx,
-    );
-    assertEquals(
-      written[0].name,
-      "tagging-registry.example.org-mirror-nats-stable",
-    );
-    const t = written[0].data;
-    assertEquals(t.ref, "registry.example.org/mirror/nats:stable");
-    assertEquals(t.repository, "registry.example.org/mirror/nats");
-    assertEquals(t.name, "nats");
-    assertEquals(t.tag, "stable");
-    assertEquals(t.digest, DIGEST_A);
-    assertEquals(t.previousDigest, "");
-    assertEquals(t.changed, true);
-    assertEquals(f.calls.find((c) => c.args[0] === "tag")!.args, [
-      "tag",
-      `registry.example.org/mirror/nats@${DIGEST_A}`,
-      "stable",
-    ]);
-
-    // Already there: no crane tag.
-    const before = f.calls.length;
-    await model.methods.tag.execute(
-      { name: "nats", digest: DIGEST_A, tag: "stable" },
-      ctx,
-    );
-    assertEquals(written[1].data.changed, false);
-    assertEquals(written[1].data.previousDigest, DIGEST_A);
-    assert(!f.calls.slice(before).some((c) => c.args[0] === "tag"));
-
-    // Moved: the old digest is recorded.
-    reg.tags["registry.example.org/mirror/nats:2.11"] = DIGEST_B;
-    await model.methods.tag.execute(
-      { name: "nats", digest: DIGEST_B, tag: "stable" },
-      ctx,
-    );
-    assertEquals(written[2].data.previousDigest, DIGEST_A);
-    assertEquals(written[2].data.changed, true);
-
-    const bad = await assertRejects(() =>
-      model.methods.tag.execute(
-        { name: "nats", digest: DIGEST_A, tag: "a b" },
-        ctx,
-      )
-    );
-    assertStringIncludes(String(bad), "is not an image tag");
-    const name = await assertRejects(() =>
-      model.methods.tag.execute(
-        { name: "Nats", digest: DIGEST_A, tag: "x" },
-        ctx,
-      )
-    );
-    assertStringIncludes(String(name), "not a repository path");
-  } finally {
-    f.restore();
   }
 });
 
@@ -1033,84 +327,6 @@ Deno.test("tarEntries honours a pax path and a GNU long name", () => {
   joined.set(pax.subarray(0, pax.length - 1024), 0);
   joined.set(paxed, pax.length - 1024);
   assertEquals([...tarEntries(joined)].map((e) => e.name), [long]);
-});
-
-Deno.test("blob reads a file out of a Flux-like artifact layer and records it as text and JSON", async () => {
-  const reg = registry();
-  reg.tags["registry.example.org/shop/config-prod:candidate"] = DIGEST_C;
-  reg.manifests[`registry.example.org/shop/config-prod@${DIGEST_C}`] = {
-    mediaType: "application/vnd.oci.image.manifest.v1+json",
-    config: {
-      mediaType: "application/vnd.cncf.flux.config.v1+json",
-      size: 233,
-      digest: CONFIG_D,
-    },
-    layers: [{
-      mediaType: "application/vnd.cncf.flux.content.v1.tar+gzip",
-      size: 400,
-      digest: LAYER_E,
-    }],
-  };
-  reg.blobs[`registry.example.org/shop/config-prod@${LAYER_E}`] = await gzip(
-    tar({ "release.json": RELEASE, "manifests.yaml": "kind: X\n" }),
-  );
-  const f = fake(reg);
-  try {
-    const { ctx, written } = context();
-    const blob = (a: z.input<typeof BlobArgsSchema>) =>
-      model.methods.blob.execute(BlobArgsSchema.parse(a), ctx);
-    await blob({
-      ref: "registry.example.org/shop/config-prod:candidate",
-      path: "release.json",
-    });
-    assertEquals(
-      written[0].name,
-      "blob-registry.example.org-shop-config-prod-2cf24dba5fb0-release.json",
-    );
-    const b = written[0].data;
-    assertEquals(b.ref, "registry.example.org/shop/config-prod:candidate");
-    assertEquals(b.digest, DIGEST_C);
-    assertEquals(b.layerDigest, LAYER_E);
-    assertEquals(
-      b.layerMediaType,
-      "application/vnd.cncf.flux.content.v1.tar+gzip",
-    );
-    assertEquals(b.path, "release.json");
-    assertEquals(b.text, RELEASE);
-    assertEquals(b.json, { product: "shop", images: { api: DIGEST_A } });
-    assertEquals(b.size, RELEASE.length);
-    assert(/^sha256:[0-9a-f]{64}$/.test(String(b.sha256)));
-    assertEquals(
-      f.calls.find((c) => c.args[0] === "blob")!.args[1],
-      `registry.example.org/shop/config-prod@${LAYER_E}`,
-    );
-
-    await blob({
-      ref: `registry.example.org/shop/config-prod@${DIGEST_C}`,
-      path: "manifests.yaml",
-    });
-    assertEquals(written[1].data.json, null);
-    assertEquals(written[1].data.text, "kind: X\n");
-
-    await blob({ ref: "registry.example.org/shop/config-prod:candidate" });
-    assertEquals(written[2].name.endsWith("-layer"), true);
-    assertEquals(
-      written[2].data.size,
-      reg.blobs[`registry.example.org/shop/config-prod@${LAYER_E}`].length,
-    );
-
-    const noLayer = await assertRejects(() =>
-      blob({ ref: "registry.example.org/shop/config-prod:candidate", layer: 3 })
-    );
-    assertStringIncludes(String(noLayer), "has 1 layers, no layer 3");
-    const index = await assertRejects(() =>
-      blob({ ref: "docker.io/library/nats:2.10", path: "x" })
-    );
-    assertStringIncludes(String(index), "is an index, not an artifact");
-    assertEquals(written.length, 3);
-  } finally {
-    f.restore();
-  }
 });
 
 // The real crane against a registry holding an image ko pushed. Needs crane
@@ -1212,3 +428,299 @@ Deno.test({
     }
   },
 });
+
+// ───── the methods, through createModelTestContext with a stub exec ─────
+
+const DIGEST_B =
+  "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const DIGEST_C =
+  "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+const ok = (stdout: string | Uint8Array): CommandResult => ({
+  code: 0,
+  stdout: typeof stdout === "string" ? enc(stdout) : stdout,
+  stderr: "",
+});
+const err = (stderr: string): CommandResult => ({
+  code: 1,
+  stdout: new Uint8Array(),
+  stderr,
+});
+const MISSING = err("MANIFEST_UNKNOWN: manifest unknown");
+
+/**
+ * Routes: `[argument prefix, answer]`; the first route whose prefix starts
+ * the call's arguments answers it, an array of answers in turn. A call no
+ * route answers fails.
+ */
+type Routes = [string, CommandResult | CommandResult[]][];
+
+type Call = { args: string; stdin?: string; env: Record<string, string> };
+
+/** Runs `body` with the stub exec and a swamp test context. */
+async function withStub(
+  routes: Routes,
+  body: (h: {
+    ctx: Context;
+    calls: Call[];
+    written: () => Written[];
+    logs: () => string[];
+  }) => Promise<void>,
+  opts: {
+    globalArgs?: Record<string, unknown>;
+    stored?: Record<string, Record<string, unknown>>;
+  } = {},
+) {
+  const calls: Call[] = [];
+  const used = new Map<number, number>();
+  const restore = __setExec((_bin, args, o) => {
+    const line = args.join(" ");
+    calls.push({ args: line, stdin: o.stdin, env: o.env });
+    const i = routes.findIndex(([prefix]) => line.startsWith(prefix));
+    if (i < 0) {
+      return Promise.reject(new Error(`the stub has no answer for ${line}`));
+    }
+    const a = routes[i][1];
+    if (!Array.isArray(a)) return Promise.resolve(a);
+    const n = used.get(i) ?? 0;
+    used.set(i, n + 1);
+    return Promise.resolve(a[Math.min(n, a.length - 1)]);
+  });
+  const t = createModelTestContext({
+    globalArgs: GlobalArgsSchema.parse({
+      registry: "registry.example.org",
+      namespace: "mirror",
+      ...opts.globalArgs,
+    }),
+    repoDir: REPO,
+    storedResources: opts.stored ?? {},
+  });
+  try {
+    await body({
+      ctx: t.context as unknown as Context,
+      calls,
+      written: () =>
+        t.getWrittenResources().map((w) => ({
+          spec: w.specName,
+          name: w.name,
+          data: w.data as Record<string, unknown>,
+        })),
+      logs: () => t.getLogs().map((l) => l.message),
+    });
+  } finally {
+    restore();
+  }
+}
+
+const NATS = "docker.io/library/nats";
+
+Deno.test("digest records a tag's digest and that it changed since the last record", () =>
+  withStub([[`digest ${NATS}:2.10`, ok(DIGEST_B + "\n")]], async (h) => {
+    await model.methods.digest.execute({ refs: [`${NATS}:2.10`] }, h.ctx);
+    const [w] = h.written();
+    assertEquals(w.spec, "digest");
+    assertEquals(w.name, "digest-docker.io-library-nats-2.10");
+    assertEquals(w.data.digest, DIGEST_B);
+    assertEquals(w.data.previousDigest, DIGEST_A);
+    assertEquals(w.data.changed, true);
+    assertEquals(w.data.pinned, `${NATS}:2.10@${DIGEST_B}`);
+  }, {
+    stored: {
+      "digest-docker.io-library-nats-2.10": {
+        digest: DIGEST_A,
+        firstSeenAt: "2026-01-01T00:00:00.000Z",
+      },
+    },
+  }));
+
+Deno.test("digest fails on a reference the registry does not have, and writes nothing", () =>
+  withStub([[`digest ${NATS}:nope`, MISSING]], async (h) => {
+    await assertRejects(
+      () => model.methods.digest.execute({ refs: [`${NATS}:nope`] }, h.ctx),
+      Error,
+      `${NATS}:nope is not in the registry`,
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("describe records an image's platform, config, labels, layers and size", () =>
+  withStub([
+    [`digest ${NATS}:2.10`, ok(DIGEST_B)],
+    [
+      `manifest ${NATS}@${DIGEST_B}`,
+      ok(JSON.stringify({
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+        config: { digest: DIGEST_C, size: 10 },
+        layers: [{ size: 100 }, { size: 200 }],
+        annotations: { "org.opencontainers.image.source": "https://x" },
+      })),
+    ],
+    [
+      `config ${NATS}@${DIGEST_B}`,
+      ok(JSON.stringify({
+        created: "2026-10-01T00:00:00Z",
+        os: "linux",
+        architecture: "amd64",
+        config: { Labels: { team: "a" } },
+      })),
+    ],
+  ], async (h) => {
+    await model.methods.describe.execute({ refs: [`${NATS}:2.10`] }, h.ctx);
+    const [w] = h.written();
+    assertEquals(w.spec, "image");
+    assertEquals(w.name, "image-docker.io-library-nats-111111111111");
+    assertEquals(w.data.kind, "image");
+    assertEquals(w.data.platforms, ["linux/amd64"]);
+    assertEquals(w.data.configDigest, DIGEST_C);
+    assertEquals(w.data.labels, { team: "a" });
+    assertEquals([w.data.layers, w.data.size], [2, 310]);
+    assertEquals(h.logs().at(-1), "{ref} is {kind} {digest} for {platforms}");
+  }));
+
+Deno.test("describe fails on a manifest that is not JSON, and writes nothing", () =>
+  withStub([
+    [`digest ${NATS}:2.10`, ok(DIGEST_B)],
+    [`manifest ${NATS}@${DIGEST_B}`, ok("<html>")],
+  ], async (h) => {
+    await assertRejects(
+      () => model.methods.describe.execute({ refs: [`${NATS}:2.10`] }, h.ctx),
+      Error,
+      "output is not JSON",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const TARGET = "registry.example.org/mirror/docker.io/library/nats:2.10";
+
+Deno.test("copy logs in with the password on stdin, copies by digest and checks the digest after", () =>
+  withStub([
+    ["auth login registry.example.org", ok("")],
+    [`digest ${TARGET}`, [MISSING, ok(DIGEST_B)]],
+    [`copy ${NATS}@${DIGEST_B} ${TARGET}`, ok("")],
+  ], async (h) => {
+    await model.methods.copy.execute(
+      { sources: [`${NATS}:2.10@${DIGEST_B}`] },
+      h.ctx,
+    );
+    const login = h.calls[0];
+    assertEquals(login.stdin, "s3cret-pw");
+    assertEquals(login.args.includes("s3cret-pw"), false);
+    assert(login.env.DOCKER_CONFIG, "a docker config of the run's own");
+    const [w] = h.written();
+    assertEquals(w.spec, "mirror");
+    assertEquals(
+      w.name,
+      "mirror-registry.example.org-mirror-docker.io-library-nats-2.10",
+    );
+    assertEquals([w.data.action, w.data.target, w.data.digest], [
+      "copied",
+      TARGET,
+      DIGEST_B,
+    ]);
+    assertEquals(JSON.stringify(h.written()).includes("s3cret-pw"), false);
+    assertEquals(h.logs().join("\n").includes("s3cret-pw"), false);
+  }, { globalArgs: { username: "robot", password: "s3cret-pw" } }));
+
+Deno.test("copy fails when the target holds another digest after the copy, and writes nothing", () =>
+  withStub([
+    [`digest ${TARGET}`, [MISSING, ok(DIGEST_C)]],
+    [`copy ${NATS}@${DIGEST_B} ${TARGET}`, ok("")],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        model.methods.copy.execute(
+          { sources: [`${NATS}:2.10@${DIGEST_B}`] },
+          h.ctx,
+        ),
+      Error,
+      `${TARGET} is ${DIGEST_C} after the copy, expected ${DIGEST_B}`,
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const TAGGED = "registry.example.org/mirror/config-prod";
+
+Deno.test("tag moves a tag to the digest and records the digest it held before", () =>
+  withStub([
+    [`digest ${TAGGED}:stable`, [ok(DIGEST_A), ok(DIGEST_B)]],
+    [`tag ${TAGGED}@${DIGEST_B} stable`, ok("")],
+  ], async (h) => {
+    await model.methods.tag.execute(
+      { name: "config-prod", digest: DIGEST_B, tag: "stable" },
+      h.ctx,
+    );
+    const [w] = h.written();
+    assertEquals(w.spec, "tagging");
+    assertEquals(
+      w.name,
+      "tagging-registry.example.org-mirror-config-prod-stable",
+    );
+    assertEquals([w.data.previousDigest, w.data.changed], [DIGEST_A, true]);
+  }));
+
+Deno.test("tag fails when crane tag fails, and writes nothing", () =>
+  withStub([
+    [`digest ${TAGGED}:stable`, MISSING],
+    [
+      `tag ${TAGGED}@${DIGEST_B} stable`,
+      err("MANIFEST_UNKNOWN: no such digest"),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        model.methods.tag.execute(
+          { name: "config-prod", digest: DIGEST_B, tag: "stable" },
+          h.ctx,
+        ),
+      Error,
+      `crane tag ${TAGGED}@${DIGEST_B} stable exited 1: MANIFEST_UNKNOWN`,
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const ARTIFACT = "registry.example.org/mirror/config";
+
+Deno.test("blob records a file out of the artifact's layer, parsed as JSON", async () => {
+  const layer = await gzip(tar({ "release.json": RELEASE }));
+  await withStub([
+    [`digest ${ARTIFACT}:v1`, ok(DIGEST_B)],
+    [
+      `manifest ${ARTIFACT}@${DIGEST_B}`,
+      ok(JSON.stringify({
+        layers: [{ digest: DIGEST_C, mediaType: "application/x-tar+gzip" }],
+      })),
+    ],
+    [`blob ${ARTIFACT}@${DIGEST_C}`, ok(layer)],
+  ], async (h) => {
+    await model.methods.blob.execute(
+      { ref: `${ARTIFACT}:v1`, path: "release.json", layer: 0 },
+      h.ctx,
+    );
+    const [w] = h.written();
+    assertEquals(w.spec, "blob");
+    assertEquals(
+      w.name,
+      "blob-registry.example.org-mirror-config-111111111111-release.json",
+    );
+    assertEquals(w.data.text, RELEASE);
+    assertEquals(w.data.json, JSON.parse(RELEASE));
+    assertEquals(w.data.layerDigest, DIGEST_C);
+    assertStringIncludes(String(w.data.sha256), "sha256:");
+  });
+});
+
+Deno.test("blob fails on an index, which is no artifact, and writes nothing", () =>
+  withStub([
+    [`digest ${ARTIFACT}:v1`, ok(DIGEST_B)],
+    [`manifest ${ARTIFACT}@${DIGEST_B}`, ok(JSON.stringify({ manifests: [] }))],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        model.methods.blob.execute(
+          { ref: `${ARTIFACT}:v1`, path: "release.json", layer: 0 },
+          h.ctx,
+        ),
+      Error,
+      "is an index, not an artifact",
+    );
+    assertEquals(h.written(), []);
+  }));

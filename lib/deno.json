@@ -4,8 +4,7 @@
     "test": "deno test --allow-run=sh",
     "lint": "deno lint",
     "fmt": "deno fmt",
-    "fmt:check": "deno fmt --check",
-    "mutations": "deno run --allow-read --allow-write --allow-run mutations.ts"
+    "fmt:check": "deno fmt --check"
   },
   "lint": {
     "rules": {

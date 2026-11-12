@@ -295,14 +295,16 @@ written to the cluster by any method, and none is planned.
 
 ## Testing
 
-`deno task test` runs the unit tests against a fake kubectl that is as strict as
-the real one about what it is asked. The live suite in `smoke/` was run with
-rootless Podman and kind (the Podman provider): a kind cluster, the upstream
-Gateway API CRDs and Envoy Gateway, one object for every unhealthy case above,
-the refusals and a cancelled run. A few shapes of status that Envoy Gateway does
-not produce are written by the suite itself through the status subresource, and
-are named as such there. `smoke/README.md` in the source repository says what it
-needs and how to run it.
+`deno task test` runs the unit tests: the parsers and the health rules, and each
+method (`list` and `get` of every type) run through swamp's
+`createModelTestContext` with kubectl stubbed, once with an answer and once with
+a failure, checking the records written, the log lines and the error. The live
+suite in `smoke/` was run with rootless Podman and kind (the Podman provider): a
+kind cluster, the upstream Gateway API CRDs and Envoy Gateway, one object for
+every unhealthy case above, the refusals and a cancelled run. A few shapes of
+status that Envoy Gateway does not produce are written by the suite itself
+through the status subresource, and are named as such there. `smoke/README.md`
+in the source repository says what it needs and how to run it.
 
 ## License
 

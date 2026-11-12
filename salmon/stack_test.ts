@@ -1,4 +1,12 @@
-import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1.0.13";
+import {
+  assert,
+  assertEquals,
+  assertMatch,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.13";
+import { HOSTILE } from "../lib/test_inputs.ts";
+import { harness } from "./stub_test.ts";
 import {
   ADMIN_GROUP,
   composeProject,
@@ -7,6 +15,7 @@ import {
   keyEncryptionKey,
   localIssuerUrl,
   MANAGERS,
+  model,
   salmonConfig,
   seedFile,
   stableId,
@@ -185,4 +194,136 @@ Deno.test("extra networks are joined as external ones", async () => {
   assertEquals(p.services.salmon.networks, ["default", "kind"]);
   assertEquals(p.networks, { kind: { name: "kind", external: true } });
   assertEquals(localIssuerUrl(args()), "http://127.0.0.1:18090/issuer/");
+});
+
+Deno.test("a project name shaped like a flag, a path or shell text never parses", () => {
+  for (const project of [...HOSTILE, "-p", "--project-directory=/", "A"]) {
+    if (/^[a-z0-9][a-z0-9_-]*$/.test(project)) continue;
+    assert(
+      !GlobalArgsSchema.safeParse({ ...fixture, project }).success,
+      JSON.stringify(project),
+    );
+  }
+  for (const over of [{ upTimeoutSeconds: 0 }, { startTimeoutSeconds: -1 }]) {
+    assert(!GlobalArgsSchema.safeParse({ ...fixture, ...over }).success);
+  }
+});
+
+Deno.test("every method that changes something says so", () => {
+  for (const method of Object.values(model.methods)) {
+    assertEquals(method.kind, "action");
+  }
+});
+
+// ───── the methods, through createModelTestContext with a stub spawn ─────
+
+const M = model.methods;
+const UP = "docker compose -f - up -d --wait --remove-orphans";
+const PS =
+  "docker ps -q --filter label=com.docker.compose.project=t --filter label=com.docker.compose.service=salmon";
+const LOGS = "docker compose -p t logs --tail 20 salmon";
+const DOWN = "docker compose -p t down --volumes --remove-orphans";
+const DISCOVERY =
+  "GET http://127.0.0.1:18090/issuer/.well-known/openid-configuration";
+
+Deno.test("ensure starts the project from stdin, waits for discovery and records the stack running", async () => {
+  const g = args();
+  using h = harness({ [UP]: {} }, {
+    globalArgs: g,
+    http: { [DISCOVERY]: { status: 200, body: {} } },
+  });
+  await M.ensure.execute({}, h.context);
+  assertEquals(h.calls.map((c) => c.key), [UP]);
+  assertEquals(JSON.parse(h.calls[0].stdin ?? "").name, "t");
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["stack", "stack"]]);
+  const id = await ids(g);
+  assertEquals(
+    [w[0].data.running, w[0].data.error, w[0].data.apps, w[0].data.trustId],
+    [true, "", id.apps, id.trustId],
+  );
+  assertEquals(
+    (w[0].data.grants as { revoked: boolean }[]).map((x) => x.revoked),
+    [false, false],
+  );
+  assertEquals(
+    h.logs().at(-1),
+    "Salmon registry.dataverket.org/tools/salmon:latest answers at http://localhost:8080/issuer/",
+  );
+});
+
+Deno.test("ensure: a refused compose up fails with Salmon's log, records the error and keeps the key out", async () => {
+  const g = args();
+  const kek = await keyEncryptionKey(g);
+  using h = harness({
+    [UP]: { code: 1, stderr: `seed refused; key ${kek}` },
+    [LOGS]: { stdout: "salmon: bad seed: unknown app" },
+    [PS]: { stdout: "" },
+  }, { globalArgs: g });
+  const err = await assertRejects(() => M.ensure.execute({}, h.context));
+  assertStringIncludes(String(err), "docker compose up failed (exit 1)");
+  assertStringIncludes(String(err), "bad seed: unknown app");
+  const w = h.written();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].data.running, false);
+  assertStringIncludes(String(w[0].data.error), "docker compose up failed");
+  assertEquals(JSON.stringify([w, h.logs(), String(err)]).includes(kek), false);
+});
+
+Deno.test("revoke restarts Salmon without the app's grants and records them revoked", async () => {
+  const g = args();
+  using h = harness({ [UP]: {} }, {
+    globalArgs: g,
+    http: { [DISCOVERY]: { status: 200, body: {} } },
+  });
+  await M.revoke.execute({ app: "db" }, h.context);
+  const seed = JSON.parse(
+    JSON.parse(h.calls[0].stdin ?? "").configs.seed.content,
+  );
+  const id = await ids(g);
+  assertEquals(seed.grants.map((x: { app: string }) => x.app), [
+    id.apps.other,
+  ]);
+  const w = h.written();
+  assertEquals(
+    (w[0].data.grants as { app: string; revoked: boolean }[]).map((
+      x,
+    ) => [x.app, x.revoked]),
+    [["db", true], ["other", false]],
+  );
+  assertEquals(w[0].data.running, true);
+});
+
+Deno.test("revoke refuses an app the fixture grants nothing at, before docker runs", async () => {
+  using h = harness({}, { globalArgs: args() });
+  await assertRejects(
+    () => M.revoke.execute({ app: "nope" }, h.context),
+    Error,
+    "the fixture grants nothing at app nope",
+  );
+  assertEquals([h.calls, h.written()], [[], []]);
+});
+
+Deno.test("stop removes the project and records the stack not running", async () => {
+  using h = harness({ [DOWN]: {} }, { globalArgs: args() });
+  await M.stop.execute({}, h.context);
+  assertEquals(h.calls.map((c) => c.key), [DOWN]);
+  const w = h.written();
+  assertEquals([w[0].data.running, w[0].data.error], [false, ""]);
+  assertEquals(h.logs(), ["Removing stack t"]);
+});
+
+Deno.test("stop: a failed compose down fails and records the error, with the container still running", async () => {
+  using h = harness({
+    [DOWN]: { code: 1, stderr: "network t_default has active endpoints" },
+    [PS]: { stdout: "abc123\n" },
+  }, { globalArgs: args() });
+  await assertRejects(
+    () => M.stop.execute({}, h.context),
+    Error,
+    "docker compose down failed (exit 1): network t_default has active endpoints",
+  );
+  const w = h.written();
+  assertEquals(w[0].data.running, true);
+  assertStringIncludes(String(w[0].data.error), "has active endpoints");
 });

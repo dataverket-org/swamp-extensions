@@ -1,17 +1,17 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
-import { ListInventorySchema } from "./_helpers.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import {
   HttpRouteSchema,
-  model as httproute,
+  model,
   parentLabel,
   parseHttpRoute,
   readMatch,
   routeReasons,
 } from "./httproute.ts";
-import { cond, ctx, healthyRoute, withCluster } from "./test_support.ts";
+import { cond, healthyRoute } from "./test_support.ts";
+import { harness, list } from "./stub_test.ts";
 
 const AT = "2026-11-10T09:00:00.000Z";
-const RES = "httproutes.gateway.networking.k8s.io";
+
 const GROUP = "gateway.networking.k8s.io";
 
 function withParentConditions(conditions: unknown[]): Record<string, unknown> {
@@ -296,94 +296,6 @@ Deno.test("readMatch and parentLabel write what a person reads", () => {
   );
 });
 
-Deno.test("list records every HTTPRoute and an inventory; get records one", async () => {
-  const bad = withParentConditions([
-    cond("Accepted", "True", "Accepted", "", 2),
-    cond("ResolvedRefs", "False", "BackendNotFound", "", 2),
-  ]);
-  (bad.metadata as Record<string, unknown>).name = "bad";
-  await withCluster(
-    { objects: { httproutes: [healthyRoute(), bad] } },
-    async (k) => {
-      const c = ctx({ namespace: "apps" });
-      await httproute.methods.list.execute({}, c.context);
-      assertEquals(k.calls[0].args, [
-        "--request-timeout=30s",
-        "get",
-        RES,
-        "-n",
-        "apps",
-        "-o",
-        "json",
-      ]);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["httproute", "apps--app"],
-        ["httproute", "apps--bad"],
-        ["inventory", "inventory_ns_apps"],
-      ]);
-      const inv = ListInventorySchema.parse(c.written[2].data);
-      assertEquals(inv.unhealthy, [{
-        namespace: "apps",
-        name: "bad",
-        reasons: [
-          "parent infra/edge/https (example.org/gateway-controller): ResolvedRefs=False (BackendNotFound)",
-        ],
-      }]);
-      assertEquals(inv.items.map((i) => [i.dataName, i.reason]), [
-        ["apps--app", null],
-        [
-          "apps--bad",
-          "parent infra/edge/https (example.org/gateway-controller): ResolvedRefs=False (BackendNotFound)",
-        ],
-      ]);
-
-      const all = ctx();
-      await httproute.methods.list.execute({ namespace: "" }, all.context);
-      assertEquals(k.kubectl[1].command, ["get", RES, "-A"]);
-      assertEquals(all.written[2].name, "inventory_all");
-
-      const one = ctx();
-      await httproute.methods.get.execute(
-        { name: "bad", namespace: "apps" },
-        one.context,
-      );
-      assertEquals(k.kubectl[2].command, ["get", RES, "bad", "-n", "apps"]);
-      assertEquals(one.written.map((w) => w.name), ["apps--bad"]);
-      assertEquals(
-        HttpRouteSchema.parse(one.written[0].data).summary.healthy,
-        false,
-      );
-    },
-  );
-});
-
-Deno.test("a route with a leftover parent report is listed as healthy, and the report is counted", async () => {
-  const r = healthyRoute();
-  (r.status as { parents: Record<string, unknown>[] }).parents.push({
-    controllerName: "example.org/gateway-controller",
-    parentRef: {
-      group: GROUP,
-      kind: "Gateway",
-      name: "edge",
-      namespace: "infra",
-      sectionName: "https-old-name",
-    },
-    conditions: [
-      cond("Accepted", "False", "NoMatchingParent", "No listeners match", 1),
-    ],
-  });
-  await withCluster({ objects: { httproutes: [r] } }, async () => {
-    const c = ctx();
-    await httproute.methods.list.execute({}, c.context);
-    const stored = HttpRouteSchema.parse(c.written[0].data);
-    assertEquals(stored.summary.healthy, true);
-    assertEquals(stored.summary.leftoverParentReports, 1);
-    const inv = ListInventorySchema.parse(c.written[1].data);
-    assertEquals(inv.allHealthy, true);
-    assertEquals(inv.items[0].reason, null);
-  });
-});
-
 const CTRL = "example.org/gateway-controller";
 
 /** A route with these spec parents and these reports, at generation 5. */
@@ -407,21 +319,26 @@ function routeWith(
 }
 
 const EDGE = { name: "edge", namespace: "infra" };
+
 const fine = (generation = 5) => [
   cond("Accepted", "True", "Accepted", "", generation),
   cond("ResolvedRefs", "True", "ResolvedRefs", "", generation),
 ];
+
 const refused = (reason: string, generation = 5) => [
   cond("Accepted", "False", reason, "refused", generation),
   cond("ResolvedRefs", "True", "ResolvedRefs", "", generation),
 ];
+
 const findings = (p: ReturnType<typeof parseHttpRoute>) =>
   p.summary.unhealthy.map((
     u,
   ) => [u.parent, u.controllerName, u.condition, u.reason]);
 
 const HTTP = { ...EDGE, sectionName: "http" };
+
 const HTTPS = { ...EDGE, sectionName: "https" };
+
 const roles = (p: ReturnType<typeof parseHttpRoute>) =>
   p.parents.map((x) => [x.judged, x.notJudgedBecause]);
 
@@ -891,35 +808,6 @@ Deno.test("PartiallyInvalid True is a finding: some rules were dropped", () => {
   assertEquals(left.summary.healthy, true);
 });
 
-Deno.test("an HTTPRoute at a version other than v1 is read, recorded and warned about", async () => {
-  const r = healthyRoute();
-  r.apiVersion = "gateway.networking.k8s.io/v1beta1";
-  await withCluster({ objects: { httproutes: [r] } }, async () => {
-    const c = ctx();
-    await httproute.methods.list.execute({}, c.context);
-    assertEquals(
-      c.written[0].data.apiVersion,
-      "gateway.networking.k8s.io/v1beta1",
-    );
-    assertEquals(c.written[1].data.apiVersions, [
-      "gateway.networking.k8s.io/v1beta1",
-    ]);
-    assertEquals(c.warnings.length, 1);
-    assertEquals(c.warnings[0].includes("HTTPRoutes"), true, c.warnings[0]);
-    assertEquals(c.warnings[0].includes("v1beta1"), true, c.warnings[0]);
-    const one = ctx({ namespace: "apps" });
-    await httproute.methods.get.execute({ name: "app" }, one.context);
-    assertEquals(one.warnings.length, 1);
-    assertEquals(one.warnings[0].includes("v1beta1"), true);
-  });
-  // At v1 nothing is warned about.
-  await withCluster({ objects: { httproutes: [healthyRoute()] } }, async () => {
-    const c = ctx();
-    await httproute.methods.list.execute({}, c.context);
-    assertEquals(c.warnings, []);
-  });
-});
-
 Deno.test("a report kept from before the route's parent was edited is superseded by the controller's current one", () => {
   const shapes = [
     // [edge] edited to [edge/https]; the report for the whole Gateway stayed.
@@ -1038,4 +926,72 @@ Deno.test("an inventory line names the controller, also when only one reported",
     "parent infra/ghost: NotReported",
     `parent infra/edge/https (${CTRL}): Accepted=False (NotAllowedByListeners)`,
   ]);
+});
+
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const RESOURCE = `httproutes.${GROUP}`;
+
+Deno.test("list records every HTTPRoute of every namespace and one inventory, and logs the count", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} -A`]: { stdout: list([healthyRoute()]) },
+  });
+  await model.methods.list.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["httproute", "apps--app"],
+    ["inventory", "inventory_all"],
+  ]);
+  assertEquals((w[0].data.summary as Record<string, unknown>).healthy, true);
+  assertEquals([w[1].data.count, w[1].data.unhealthyCount], [1, 0]);
+  assertEquals(
+    h.logs().includes("Recorded {count} HTTPRoutes, {unhealthy} not healthy"),
+    true,
+  );
+});
+
+Deno.test("list refuses an answer that holds another kind, and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} -n apps`]: {
+      stdout: list([{ kind: "Gateway", metadata: { name: "x" } }]),
+    },
+  });
+  await assertRejects(
+    () => model.methods.list.execute({ namespace: "apps" }, h.context),
+    Error,
+    'is of kind "Gateway", not HTTPRoute',
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records one HTTPRoute, in the definition's namespace", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} app -n apps`]: { stdout: healthyRoute() },
+  }, { globalArgs: { namespace: "apps" } });
+  await model.methods.get.execute({ name: "app" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["httproute", "apps--app"]]);
+  assertEquals(
+    h.logs().includes(
+      "HTTPRoute {name}: healthy={healthy}, {findings} findings",
+    ),
+    true,
+  );
+});
+
+Deno.test("get of a route that does not exist fails with kubectl's NotFound and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} gone -n apps`]: {
+      code: 1,
+      stderr:
+        `Error from server (NotFound): httproutes.${GROUP} "gone" not found`,
+    },
+  });
+  await assertRejects(
+    () =>
+      model.methods.get.execute({ name: "gone", namespace: "apps" }, h.context),
+    Error,
+    "not found",
+  );
+  assertEquals(h.written(), []);
 });

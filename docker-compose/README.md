@@ -77,6 +77,14 @@ run in the project directory with arguments as argv arrays, never through a
 shell. `ps --format json` is parsed as one object per line, or as one array
 where an older Compose prints that.
 
+## Tests
+
+`deno task test` runs unit tests of the argv, of `ps` parsing and of readiness,
+and runs `ensure` and `teardown` through `createModelTestContext` with a stub in
+place of docker that answers only the calls its test lists: for each method one
+test of the state it records and one of a failing docker compose, which leaves
+no record. Nothing here starts a container.
+
 ## License
 
 AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Linus Johansen.

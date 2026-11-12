@@ -358,11 +358,16 @@ operator's `error`; the method succeeds. Assert on the record:
 
 ## Testing
 
-`deno task test` runs the unit tests against a strict fake of `kubectl` that
-refuses any call it was not told to expect. `smoke/` holds the live suite: the
-operator, the plugin, an S3 gateway and five Clusters on a throwaway cluster,
-and every method run through swamp, with more refusals than successes. A Backup
-was completed with the `barmanObjectStore` and the `plugin` method;
+`deno task test` runs the unit tests: the parsers and the request checks, and
+every method of the three types, run through swamp's `createModelTestContext`
+with a stub kubectl that answers only the commands each test names. They pin
+what a method records, what it logs, and what it refuses: a list with its
+inventory, a get, a create that sends the Backup on standard input, adopts one
+with the same request and refuses a Cluster without the method's configuration,
+and a refused or missing object that records nothing. `smoke/` holds the live
+suite: the operator, the plugin, an S3 gateway and five Clusters on a throwaway
+cluster, and every method run through swamp, with more refusals than successes.
+A Backup was completed with the `barmanObjectStore` and the `plugin` method;
 `volumeSnapshot` requests were accepted by the API server and never completed,
 because nothing on that cluster takes snapshots. The live suite was run on a
 kind cluster made with kind's Podman provider on rootless Podman;

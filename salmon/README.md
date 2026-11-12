@@ -260,9 +260,14 @@ changed in meaning. What a user of 2026.10.29.2 will see:
 
 ## Testing
 
-`deno task test` runs the unit tests against fakes of docker, kubectl and Salmon
-that are as strict as the real ones about what they are asked; they spawn
-nothing. The live suite in `smoke/` was run with rootless Podman and kind (the
+`deno task test` runs the unit tests: the compose file, the configuration and
+the seed that Salmon is started with, and each method of both types run through
+swamp's `createModelTestContext` with a stub `docker`/`kubectl` and a stub
+`fetch` that answer only what the test lists. They pin what a method writes and
+logs on success, and what it records and refuses on failure: a refused
+`compose up` or `down`, an app the fixture grants nothing at, a refused
+exchange, an issuer that does not answer. The stubs are no model of Salmon or a
+cluster; the live suite in `smoke/` was run with rootless Podman and kind (the
 Podman provider): a kind cluster as the issuer of the workload's token, the
 Salmon container, the exchange, the revoke and the refusals. `smoke/README.md`
 in the source repository says what it needs and how to run it.

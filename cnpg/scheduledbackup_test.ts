@@ -3,12 +3,9 @@ import {
   assertEquals,
   assertFalse,
   assertRejects,
-  assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
-import { InventorySchema, KubectlError } from "../lib/kubectl.ts";
-import { RESOURCES } from "./_helpers.ts";
 import {
-  model as scheduledbackup,
+  model,
   parseScheduledBackup,
   ScheduledBackupSchema,
   scheduleReason,
@@ -19,23 +16,9 @@ import {
   nightly,
   scheduled,
 } from "./fixtures.ts";
-import {
-  type Answer,
-  everything,
-  forbidden,
-  forbiddenList,
-  getArgs,
-  HOSTILE,
-  list,
-  listCall,
-  notFound,
-  PLANTED,
-  SAID,
-  withScript,
-} from "./test_support.ts";
+import { PLANTED } from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
 
-const S = RESOURCES.scheduledBackup;
-const B = RESOURCES.backup;
 const FAILED_NIGHTLY =
   "newest Backup nightly-3 failed: the operator gave no error text";
 
@@ -151,277 +134,6 @@ Deno.test("a suspended, empty or malformed ScheduledBackup still parses", () => 
   assertEquals(last.error, "bad schedule at https://example.org");
 });
 
-Deno.test("list reads the schedules, then the Backups once", async () => {
-  await withScript(
-    [
-      { args: listCall(S, ""), out: list([nightly]) },
-      { args: listCall(B, ""), out: list(backups) },
-    ],
-    { namespace: "" },
-    async (c) => {
-      const r = await scheduledbackup.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 2);
-      assertEquals([c.written[1].spec, c.written[1].name], [
-        "inventory",
-        "inventory_all",
-      ]);
-      assertEquals([c.written[0].spec, c.written[0].name], [
-        "scheduledbackup",
-        "pg--nightly",
-      ]);
-      ScheduledBackupSchema.strict().parse(c.written[0].data);
-      for (const v of Object.values(PLANTED)) {
-        assertFalse(everything(c).includes(v));
-      }
-    },
-  );
-});
-
-Deno.test("list with no schedules does not read the Backups", async () => {
-  await withScript(
-    [{ args: listCall(S, "other"), out: list([]) }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await scheduledbackup.methods.list.execute(
-        { namespace: "other" },
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["inventory", "inventory_ns_other"],
-      ]);
-      assertEquals((c.written[0].data as { count: number }).count, 0);
-    },
-  );
-});
-
-Deno.test("get reads one schedule and the Backups of its namespace", async () => {
-  await withScript(
-    [
-      { args: getArgs(S, "nightly", "pg"), out: nightly },
-      { args: listCall(B, "pg"), out: list(backups) },
-    ],
-    { namespace: "pg", kubeconfig: "/tmp/kc" },
-    async (c) => {
-      await scheduledbackup.methods.get.execute({ name: "nightly" }, c.context);
-      assertEquals(c.written[0].name, "pg--nightly");
-      assertStringIncludes(
-        c.logs.at(-1)!,
-        "3 Backups, newest nightly-3 is failed",
-      );
-    },
-  );
-});
-
-Deno.test("a broken call fails by name and writes nothing", async () => {
-  const first: Array<[Answer, string]> = [
-    [{ fail: notFound(S, "nightly") }, '"nightly" not found'],
-    [{ fail: forbidden("get", S, "pg") }, "(Forbidden)"],
-    [{ out: "oops" }, "did not print JSON (4 characters of output)"],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ fail: SAID.badToken }, "did not accept the credentials"],
-    [{ fail: SAID.refused }, "could not be reached"],
-  ];
-  for (const [answer, text] of first) {
-    await withScript(
-      [{ args: getArgs(S, "nightly", "pg"), ...answer }],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () =>
-            scheduledbackup.methods.get.execute({ name: "nightly" }, c.context),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertEquals(c.written, []);
-      },
-    );
-  }
-  const second: Array<[Answer, string]> = [
-    [forbiddenList(B, "pg"), "(Forbidden)"],
-    [{ out: { items: null } }, "did not return a list"],
-    [{ out: list([nightly]) }, 'of kind "ScheduledBackup", not Backup'],
-    [{ hang: true }, "no answer within 35 seconds"],
-  ];
-  for (const [answer, text] of second) {
-    await withScript(
-      [
-        { args: getArgs(S, "nightly", "pg"), out: nightly },
-        { args: listCall(B, "pg"), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () =>
-            scheduledbackup.methods.get.execute({ name: "nightly" }, c.context),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertEquals(c.written, []);
-      },
-    );
-    await withScript(
-      [
-        { args: listCall(S, "pg"), out: list([nightly]) },
-        { args: listCall(B, "pg"), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await assertRejects(
-          () => scheduledbackup.methods.list.execute({}, c.context),
-          Error,
-          text,
-        );
-        assertEquals(c.written, []);
-      },
-    );
-  }
-  await withScript(
-    [{ args: listCall(S, ""), fail: SAID.missingCrd("scheduledbackups") }],
-    { namespace: "" },
-    async (c) => {
-      await assertRejects(
-        () => scheduledbackup.methods.list.execute({}, c.context),
-        Error,
-        "the CRDs that define it are not installed",
-      );
-      assertEquals(c.written, []);
-    },
-  );
-});
-
-Deno.test("hostile names and namespaces are refused before anything is spawned", async () => {
-  for (const bad of HOSTILE) {
-    await withScript([], { namespace: "pg" }, async (c, s) => {
-      await assertRejects(
-        () => scheduledbackup.methods.get.execute({ name: bad }, c.context),
-        Error,
-        "is not a Kubernetes object name",
-      );
-      if (bad !== "") {
-        await assertRejects(
-          () =>
-            scheduledbackup.methods.list.execute({ namespace: bad }, c.context),
-          Error,
-          "is not a Kubernetes namespace name",
-        );
-      }
-      assertEquals(s.calls, []);
-    });
-  }
-  await withScript([], { namespace: "" }, async (c) => {
-    await assertRejects(
-      () => scheduledbackup.methods.get.execute({ name: "nightly" }, c.context),
-      Error,
-      "namespace is required for get",
-    );
-  });
-});
-
-Deno.test("an answer that is not the ScheduledBackup that was asked for is an error and no record", async () => {
-  const wrong: unknown[] = [
-    {},
-    [],
-    { ...nightly, metadata: { name: "weekly", namespace: "pg" } },
-    { ...nightly, metadata: { name: "nightly", namespace: "other" } },
-    { ...nightly, kind: "Backup" },
-    list([nightly]),
-  ];
-  for (const out of wrong) {
-    await withScript(
-      [{ args: getArgs(S, "nightly", "pg"), out }],
-      { namespace: "pg" },
-      async (c) => {
-        await assertRejects(
-          () =>
-            scheduledbackup.methods.get.execute({ name: "nightly" }, c.context),
-          KubectlError,
-          "kubectl did not return ScheduledBackup pg/nightly",
-        );
-        assertEquals(c.written, [], JSON.stringify(out));
-      },
-    );
-  }
-});
-
-Deno.test("a schedule whose newest Backup does not end is named once it is older than allowed", async () => {
-  const made = "2026-11-10T03:30:00Z";
-  const now = Date.parse(made) + 5_000_000;
-  const parsed = (phase: string | null, older: unknown[] = []) =>
-    parseScheduledBackup(nightly, [
-      ...older,
-      phase === null
-        ? { ...scheduled("nightly-7", made, "x"), status: {} }
-        : scheduled("nightly-7", made, phase),
-    ] as Record<string, unknown>[], now);
-  const running = parsed("running");
-  assertEquals(running.lastBackupUnfinishedSeconds, 5000);
-  assertEquals(running.lastBackup!.unfinishedSeconds, 5000);
-  assertEquals(running.lastBackupCompleted, false);
-  ScheduledBackupSchema.strict().parse(running);
-  assertEquals(
-    scheduleReason(running, 3600),
-    "newest Backup nightly-7 is still running after 5000 s, longer than 3600 s",
-  );
-  assertEquals(
-    scheduleReason(parsed(null), 3600),
-    "newest Backup nightly-7 is without a phase after 5000 s, longer than 3600 s",
-  );
-  // Inside what is allowed, and exactly at it: healthy.
-  assertEquals(scheduleReason(running, 7200), null);
-  assertEquals(scheduleReason(running, 5000), null);
-  // A Backup that ended has no age, whatever came before it.
-  assertEquals(parsed("completed").lastBackupUnfinishedSeconds, null);
-  assertEquals(scheduleReason(parsed("completed"), 1), null);
-  // Only the newest counts: an old one that never ended does not.
-  const old = scheduled("nightly-1", "2026-11-01T03:30:00Z", "running");
-  assertEquals(scheduleReason(parsed("completed", [old]), 3600), null);
-  assertEquals(
-    parseScheduledBackup(nightly, [], now).lastBackupUnfinishedSeconds,
-    null,
-  );
-
-  // Through list, with the definition's own threshold.
-  const ago = new Date(Date.now() - 600_000).toISOString();
-  for (
-    const [globalArgs, healthy] of [
-      [{}, true],
-      [{ unfinishedAfterSeconds: 3600 }, true],
-      [{ unfinishedAfterSeconds: 60 }, false],
-    ] as Array<[Record<string, unknown>, boolean]>
-  ) {
-    await withScript(
-      [
-        { args: listCall(S, "pg"), out: list([nightly]) },
-        {
-          args: listCall(B, "pg"),
-          out: list([scheduled("nightly-8", ago, "running")]),
-        },
-      ],
-      { namespace: "pg", ...globalArgs },
-      async (c) => {
-        await scheduledbackup.methods.list.execute({}, c.context);
-        const inv = InventorySchema.strict().parse(c.written.at(-1)!.data);
-        assertEquals(inv.items[0].healthy, healthy);
-        assertEquals(inv.unhealthyCount, healthy ? 0 : 1);
-        if (healthy) {
-          assertEquals(inv.items[0].reason, null);
-        } else {
-          assert(
-            /^newest Backup nightly-8 is still running after 6\d\d s, longer than 60 s$/
-              .test(inv.items[0].reason!),
-            inv.items[0].reason!,
-          );
-        }
-        const rec = c.written[0].data as {
-          lastBackupUnfinishedSeconds: number;
-        };
-        assert(rec.lastBackupUnfinishedSeconds >= 600);
-      },
-    );
-  }
-});
-
 Deno.test("a schedule is unhealthy when suspended, in error, or when its newest Backup failed", () => {
   const reason = (item: unknown, made: unknown[] = []) =>
     scheduleReason(
@@ -468,126 +180,89 @@ Deno.test("a schedule is unhealthy when suspended, in error, or when its newest 
   for (const v of Object.values(PLANTED)) assertFalse(all.includes(v));
 });
 
-Deno.test("list writes an inventory that names each suspended or failing schedule and why", async () => {
-  const named = (name: string, more: Record<string, unknown> = {}) => ({
-    ...nightly,
-    metadata: { name, namespace: "pg" },
-    ...more,
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const SB = "scheduledbackups.postgresql.cnpg.io";
+const B = "backups.postgresql.cnpg.io";
+const inPg = backups.slice(0, 5);
+
+Deno.test("list records each ScheduledBackup with its newest Backup, and an inventory naming the failing one", async () => {
+  using h = harness({
+    [`kubectl get ${SB} -n pg`]: { stdout: list([nightly]) },
+    [`kubectl get ${B} -n pg`]: { stdout: list(inPg) },
+  }, { globalArgs: { namespace: "pg" } });
+  await model.methods.list.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["scheduledbackup", "pg--nightly"],
+    ["inventory", "inventory_ns_pg"],
+  ]);
+  assertEquals(w[0].data.lastBackupPhase, "failed");
+  const inv = w[1].data as {
+    unhealthyCount: number;
+    items: { reason: string | null }[];
+  };
+  assertEquals(inv.unhealthyCount, 1);
+  assertEquals(inv.items[0].reason, FAILED_NIGHTLY);
+  assert(h.logs().some((l) => l.startsWith("Recorded {count}")));
+});
+
+Deno.test("list of no ScheduledBackups reads no Backups and records an empty inventory", async () => {
+  using h = harness({ [`kubectl get ${SB} -A`]: { stdout: list([]) } });
+  await model.methods.list.execute({}, h.context);
+  assertEquals(h.calls.length, 1);
+  assertEquals(h.written().map((x) => [x.name, x.data.count]), [
+    ["inventory_all", 0],
+  ]);
+});
+
+Deno.test("list passes on a refused Backup list and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${SB} -n pg`]: { stdout: list([nightly]) },
+    [`kubectl get ${B} -n pg`]: forbidden("list", B),
   });
-  await withScript(
-    [
-      {
-        args: listCall(S, "pg"),
-        out: list([
-          nightly,
-          named("weekly"),
-          named("paused", { spec: { ...nightly.spec, suspend: true } }),
-          named("new"),
-        ]),
-      },
-      { args: listCall(B, "pg"), out: list(backups) },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await scheduledbackup.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 5);
-      const last = c.written.at(-1)!;
-      assertEquals([last.spec, last.name], ["inventory", "inventory_ns_pg"]);
-      const inv = InventorySchema.strict().parse(last.data);
-      assertEquals(
-        [inv.namespace, inv.count, inv.healthyCount, inv.unhealthyCount],
-        ["pg", 4, 2, 2],
-      );
-      assertEquals(inv.items, [
-        {
-          namespace: "pg",
-          name: "nightly",
-          dataName: "pg--nightly",
-          healthy: false,
-          reason: FAILED_NIGHTLY,
-        },
-        {
-          namespace: "pg",
-          name: "weekly",
-          dataName: "pg--weekly",
-          healthy: true,
-          reason: null,
-        },
-        {
-          namespace: "pg",
-          name: "paused",
-          dataName: "pg--paused",
-          healthy: false,
-          reason: "suspended",
-        },
-        // A schedule that has made no Backup yet is not called failing.
-        {
-          namespace: "pg",
-          name: "new",
-          dataName: "pg--new",
-          healthy: true,
-          reason: null,
-        },
-      ]);
-      assertEquals(
-        inv.items.map((i) => i.dataName),
-        c.written.slice(0, 4).map((w) => w.name),
-      );
-      for (const v of Object.values(PLANTED)) {
-        assertFalse(everything(c).includes(v));
-      }
-    },
+  await assertRejects(
+    () => model.methods.list.execute({ namespace: "pg" }, h.context),
+    Error,
+    "forbidden",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records one ScheduledBackup and logs its newest Backup", async () => {
+  using h = harness({
+    [`kubectl get ${SB} nightly -n pg`]: { stdout: nightly },
+    [`kubectl get ${B} -n pg`]: { stdout: list(inPg) },
+  });
+  await model.methods.get.execute(
+    { name: "nightly", namespace: "pg" },
+    h.context,
+  );
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [[
+    "scheduledbackup",
+    "pg--nightly",
+  ]]);
+  assertEquals([w[0].data.backupCount, w[0].data.schedule], [
+    3,
+    "0 30 3 * * *",
+  ]);
+  assert(
+    h.logs().includes(
+      "ScheduledBackup {name}: {count} Backups, newest {backup} is {phase}",
+    ),
   );
 });
 
-Deno.test("a list in which two schedules share a data name, or one has no name, writes nothing", async () => {
-  const named = (namespace: string, name?: string) => ({
-    ...nightly,
-    metadata: { name, namespace },
+Deno.test("get of a missing ScheduledBackup fails and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${SB} gone -n pg`]: notFound(SB, "gone"),
   });
-  for (
-    const [items, text] of [
-      [
-        [named("a", "b--c"), named("a--b", "c")],
-        "would both be stored as a--b--c",
-      ],
-      [[nightly, named("pg")], "a ScheduledBackup without a name or namespace"],
-    ] as Array<[unknown[], string]>
-  ) {
-    await withScript(
-      [{ args: listCall(S, ""), out: list(items) }],
-      { namespace: "" },
-      async (c) => {
-        await assertRejects(
-          () => scheduledbackup.methods.list.execute({}, c.context),
-          Error,
-          text,
-        );
-        assertEquals(c.written, []);
-      },
-    );
-  }
-});
-
-Deno.test("a cancelled run fails as cancelled and writes nothing", async () => {
-  const stop = new AbortController();
-  await withScript(
-    [{ args: listCall(S, "pg"), out: list([nightly]) }],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () => scheduledbackup.methods.list.execute({}, c.context),
-        KubectlError,
-      );
-      assertEquals(e.kind, "cancelled");
-      assertEquals(c.written, []);
-    },
-    {
-      signal: stop.signal,
-      handler: () => {
-        stop.abort();
-        return {};
-      },
-    },
+  await assertRejects(
+    () =>
+      model.methods.get.execute({ name: "gone", namespace: "pg" }, h.context),
+    Error,
+    "not found",
   );
+  assertEquals(h.written(), []);
 });

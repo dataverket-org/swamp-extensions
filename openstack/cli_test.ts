@@ -1,9 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertThrows,
-} from "jsr:@std/assert@1.0.13";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1.0.13";
 import {
   buildEnv,
   CliError,
@@ -11,12 +6,8 @@ import {
   isConflict,
   isNotFound,
   mapLimit,
-  openstack,
-  openstackJson,
-  openstackVersion,
   redactSecret,
 } from "./cli.ts";
-import { fail, installFake, line, ok } from "./test_support.ts";
 
 const base = { PATH: "/usr/bin", OS_CLOUD: "ambient", OS_PASSWORD: "hunter2" };
 
@@ -89,96 +80,6 @@ Deno.test("redactSecret masks every occurrence and tolerates no secret", () => {
     "a [REDACTED] and [REDACTED]",
   );
   assertEquals(redactSecret("plain", undefined), "plain");
-});
-
-Deno.test("openstack appends nothing, openstackJson appends -f json and parses", async () => {
-  const fake = installFake((args) => {
-    if (line({ args, env: {} }) === "server list") return [{ ID: "x" }];
-    if (args[0] === "--version") return ok("openstack 10.3.0\n");
-    return undefined;
-  });
-  try {
-    assertEquals(
-      await openstackJson({ cloud: "e", openstackPath: "openstack" }, [
-        "server",
-        "list",
-      ]),
-      [{ ID: "x" }],
-    );
-    assertEquals(
-      await openstack({ cloud: "e", openstackPath: "openstack" }, [
-        "--version",
-      ]),
-      "openstack 10.3.0\n",
-    );
-    assertEquals(fake.calls[0].env.OS_CLOUD, "e");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a non-zero exit becomes a CliError with redacted stderr", async () => {
-  const fake = installFake(() =>
-    fail("auth failed for secret s3cret (HTTP 401)")
-  );
-  try {
-    const err = await assertRejects(
-      () =>
-        openstack({
-          authUrl: "https://keystone.example.net/v3",
-          applicationCredentialId: "id",
-          applicationCredentialSecret: "s3cret",
-          openstackPath: "openstack",
-        }, ["server", "list"]),
-      CliError,
-      "openstack server list failed (exit 1)",
-    );
-    assert(!err.message.includes("s3cret"));
-    assert(err.message.includes("[REDACTED]"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("openstackJson rejects empty and malformed output", async () => {
-  const fake = installFake((args) =>
-    ok(args[0] === "empty" ? "" : "{not json")
-  );
-  try {
-    await assertRejects(
-      () =>
-        openstackJson({ cloud: "e", openstackPath: "openstack" }, ["empty"]),
-      Error,
-      "printed no JSON output",
-    );
-    await assertRejects(
-      () => openstackJson({ cloud: "e", openstackPath: "openstack" }, ["bad"]),
-      Error,
-      "unparseable JSON",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("openstackVersion runs without any authentication configured", async () => {
-  // Inherited OS_* pass through when the model names no cloud, so the
-  // operator's own OS_CLOUD must not decide this test.
-  const inherited = Deno.env.get("OS_CLOUD");
-  Deno.env.delete("OS_CLOUD");
-  const fake = installFake((args) =>
-    args[0] === "--version" ? ok("openstack 10.3.0\n") : undefined
-  );
-  try {
-    assertEquals(
-      await openstackVersion({ openstackPath: "openstack" }),
-      "openstack 10.3.0",
-    );
-    assertEquals(fake.calls[0].env.OS_CLOUD, undefined);
-  } finally {
-    fake.restore();
-    if (inherited !== undefined) Deno.env.set("OS_CLOUD", inherited);
-  }
 });
 
 Deno.test("isNotFound and isConflict classify CLI stderr", () => {

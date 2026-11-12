@@ -1,274 +1,9 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./app.ts";
-import { API_APP, OIDC_APP, PROJECT } from "./fixtures.ts";
-import { installFake, line, makeContext, page } from "./test_support.ts";
-import { toBase64 } from "./api.ts";
-import { shapeApp } from "./schema.ts";
-
-const PROJECT_SEARCH = "POST /management/v1/projects/_search";
-const APP_SEARCH = `POST /management/v1/projects/${PROJECT.id}/apps/_search`;
-const APP_GET = `GET /management/v1/projects/${PROJECT.id}/apps/${OIDC_APP.id}`;
-const OIDC_CONFIG =
-  `PUT /management/v1/projects/${PROJECT.id}/apps/${OIDC_APP.id}/oidc_config`;
-
-Deno.test("list stores one resource per application, with the config filled in", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([OIDC_APP, API_APP]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({ project: "fabrikk" }, context);
-    // Keyed by the project's name, not its id, so a workflow can name it
-    assertEquals(written.map((w) => w.name), [
-      "app-fabrikk-kubelogin",
-      "app-fabrikk-fabrikk-api",
-    ]);
-    assertEquals(written[0].data.kind, "oidc");
-    assertEquals(written[0].data.appType, "native");
-    assertEquals(written[0].data.accessTokenType, "bearer");
-    assertEquals(written[1].data.kind, "api");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureOidc treats Zitadel's 'No changes' as idempotent", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([OIDC_APP]);
-    if (line(call) === OIDC_CONFIG) {
-      return { status: 400, body: { message: "No changes" } };
-    }
-    if (line(call) === APP_GET) return { app: OIDC_APP };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensureOidc.execute({
-      project: "fabrikk",
-      name: "kubelogin",
-      redirectUris: ["http://localhost:8000"],
-      postLogoutUris: [],
-      appType: "native",
-      authMethod: "none",
-      grantTypes: ["authorization_code"],
-      responseTypes: ["code"],
-      accessTokenType: "bearer",
-      devMode: false,
-      idTokenRoleAssertion: false,
-      accessTokenRoleAssertion: false,
-      idTokenUserinfoAssertion: false,
-      loginVersion: "instance",
-      loginBaseUri: undefined,
-    }, context);
-    assertEquals(written.map((w) => w.spec), ["app", "app-credential"]);
-    assertEquals(written[0].data.action, "unchanged");
-    assertEquals(written[1].data.clientSecret, undefined);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureOidc stores the client secret once, on create", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([]);
-    if (line(call) === `POST /management/v1/projects/${PROJECT.id}/apps/oidc`) {
-      return {
-        appId: OIDC_APP.id,
-        clientId: "client",
-        clientSecret: "once-only",
-      };
-    }
-    if (line(call) === APP_GET) return { app: OIDC_APP };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensureOidc.execute({
-      project: "fabrikk",
-      name: "kubelogin",
-      redirectUris: ["http://localhost:8000"],
-      postLogoutUris: [],
-      appType: "web",
-      authMethod: "basic",
-      grantTypes: ["authorization_code", "refresh_token"],
-      responseTypes: ["code"],
-      accessTokenType: "bearer",
-      devMode: false,
-      idTokenRoleAssertion: false,
-      accessTokenRoleAssertion: false,
-      idTokenUserinfoAssertion: false,
-      loginVersion: "instance",
-      loginBaseUri: undefined,
-    }, context);
-    const credential = written.find((w) => w.spec === "app-credential");
-    assertEquals(credential?.data.clientSecret, "once-only");
-    assertEquals(credential?.data.action, "created");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("redirectSet changes the allowlist and carries the rest over", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([OIDC_APP]);
-    if (line(call) === OIDC_CONFIG) return {};
-    if (line(call) === APP_GET) {
-      return {
-        app: {
-          ...OIDC_APP,
-          oidcConfig: {
-            ...(OIDC_APP.oidcConfig as Record<string, unknown>),
-            redirectUris: ["http://localhost:18000"],
-          },
-        },
-      };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.redirectSet.execute({
-      project: "fabrikk",
-      app: "kubelogin",
-      add: ["http://localhost:18000"],
-      remove: ["http://localhost:8000"],
-    }, context);
-    const put = fake.calls.find((call) => line(call) === OIDC_CONFIG);
-    const body = put?.body as Record<string, unknown>;
-    assertEquals(body.redirectUris, ["http://localhost:18000"]);
-    assertEquals(body.authMethodType, "OIDC_AUTH_METHOD_TYPE_NONE");
-    assertEquals(body.appType, "OIDC_APP_TYPE_NATIVE");
-    assertEquals(written[0].data.added, ["http://localhost:18000"]);
-    assertEquals(written[0].data.removed, ["http://localhost:8000"]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("redirectSet does nothing when the allowlist already reads that way", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([OIDC_APP]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.redirectSet.execute({
-      project: "fabrikk",
-      app: "kubelogin",
-      add: ["http://localhost:8000"],
-      remove: [],
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "PUT"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete refuses a confirm that is not the live name", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([OIDC_APP]);
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.delete.execute({
-          project: "fabrikk",
-          app: "kubelogin",
-          confirm: "kubelogon",
-          dryRun: false,
-        }, context),
-      Error,
-      "refusing to delete",
-    );
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("keyCreate decodes the key JSON and stores it once", async () => {
-  const keyJson = '{"type":"application","keyId":"7"}';
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([API_APP]);
-    if (
-      line(call) ===
-        `POST /management/v1/projects/${PROJECT.id}/apps/${API_APP.id}/keys`
-    ) return { id: "7", keyDetails: toBase64(keyJson) };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.keyCreate.execute(
-      { project: "fabrikk", app: "fabrikk-api", expirationDate: undefined },
-      context,
-    );
-    assertEquals(written[0].spec, "app-key");
-    assertEquals(written[0].data.keyJson, keyJson);
-    assertEquals(written[0].data.keyId, "7");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("keyDelete does nothing for a key this application does not have", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([API_APP]);
-    if (
-      line(call) ===
-        `POST /management/v1/projects/${PROJECT.id}/apps/${API_APP.id}/keys/_search`
-    ) return page([{ id: "7" }]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.keyDelete.execute({
-      project: "fabrikk",
-      app: "fabrikk-api",
-      keyId: "9",
-      dryRun: false,
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("secretRotate refuses an application that has no secret to rotate", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) {
-      return page([{ id: "1", name: "saml", samlConfig: {} }]);
-    }
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.secretRotate.execute(
-          { project: "fabrikk", app: "saml" },
-          context,
-        ),
-      Error,
-      "neither an OIDC nor an API application",
-    );
-  } finally {
-    fake.restore();
-  }
-});
+import { API_APP, OIDC_APP } from "./fixtures.ts";
+import { AppCredential, AppKey, shapeApp } from "./schema.ts";
+import type { ModelContext } from "./common.ts";
+import { assertNoPlanted, fail, harness, type Reply } from "./test_support.ts";
 
 Deno.test("an auth method Zitadel omitted reads as basic, for OIDC and API", () => {
   const oidc = shapeApp(
@@ -336,151 +71,6 @@ Deno.test("an application that is neither OIDC nor API gets no auth method", () 
   assertEquals(bare.authMethod, undefined);
 });
 
-const OIDC_CREATE = `POST /management/v1/projects/${PROJECT.id}/apps/oidc`;
-
-/** The kubelogin client as decision 015 wants it: roles in the ID token, v2 login UI. */
-function ensureKubelogin(
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    project: "fabrikk",
-    name: "kubelogin",
-    redirectUris: ["http://localhost:8000"],
-    postLogoutUris: [],
-    appType: "native" as const,
-    authMethod: "none" as const,
-    grantTypes: ["authorization_code" as const],
-    responseTypes: ["code" as const],
-    accessTokenType: "bearer" as const,
-    devMode: false,
-    idTokenRoleAssertion: true,
-    accessTokenRoleAssertion: false,
-    idTokenUserinfoAssertion: false,
-    loginVersion: "v2" as const,
-    loginBaseUri: undefined,
-    ...overrides,
-  };
-}
-
-Deno.test("ensureOidc sends the role assertion and the login UI it was given", async () => {
-  let body: Record<string, unknown> | undefined;
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([]);
-    if (line(call) === OIDC_CREATE) {
-      body = call.body as Record<string, unknown>;
-      return { appId: OIDC_APP.id, clientId: "client" };
-    }
-    if (line(call) === APP_GET) return { app: OIDC_APP };
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.ensureOidc.execute(
-      ensureKubelogin({ loginBaseUri: "https://login.example.org" }),
-      context,
-    );
-    assertEquals(body?.idTokenRoleAssertion, true);
-    assertEquals(body?.accessTokenRoleAssertion, false);
-    assertEquals(body?.loginVersion, {
-      loginV2: { baseUri: "https://login.example.org" },
-    });
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureOidc with the instance's login UI sends no loginVersion at all", async () => {
-  const bodies: Record<string, unknown>[] = [];
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([]);
-    if (line(call) === OIDC_CREATE) {
-      bodies.push(call.body as Record<string, unknown>);
-      return { appId: OIDC_APP.id, clientId: "client" };
-    }
-    if (line(call) === APP_GET) return { app: OIDC_APP };
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.ensureOidc.execute(
-      ensureKubelogin({ loginVersion: "instance" }),
-      context,
-    );
-    await model.methods.ensureOidc.execute(
-      ensureKubelogin({ loginVersion: "v1" }),
-      context,
-    );
-    assertEquals(bodies.length, 2);
-    assert(!("loginVersion" in bodies[0]));
-    assertEquals(bodies[1].loginVersion, { loginV1: {} });
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a login base URI without the v2 login UI is refused before any call", async () => {
-  const fake = installFake(() => undefined);
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.ensureOidc.execute(
-          ensureKubelogin({
-            loginVersion: "instance",
-            loginBaseUri: "https://login.example.org",
-          }),
-          context,
-        ),
-      Error,
-      "loginBaseUri needs loginVersion v2",
-    );
-    assertEquals(fake.calls.length, 0);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("redirectSet carries the role assertions and the login UI over", async () => {
-  const configured = {
-    ...OIDC_APP,
-    oidcConfig: {
-      ...(OIDC_APP.oidcConfig as Record<string, unknown>),
-      idTokenRoleAssertion: true,
-      accessTokenRoleAssertion: true,
-      loginVersion: { loginV2: { baseUri: "https://login.example.org" } },
-    },
-  };
-  let body: Record<string, unknown> | undefined;
-  const fake = installFake((call) => {
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === APP_SEARCH) return page([configured]);
-    if (line(call) === OIDC_CONFIG) {
-      body = call.body as Record<string, unknown>;
-      return {};
-    }
-    if (line(call) === APP_GET) return { app: configured };
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.redirectSet.execute({
-      project: "fabrikk",
-      app: "kubelogin",
-      add: ["http://localhost:18000"],
-      remove: [],
-    }, context);
-    assertEquals(body?.idTokenRoleAssertion, true);
-    assertEquals(body?.accessTokenRoleAssertion, true);
-    assertEquals(body?.loginVersion, {
-      loginV2: { baseUri: "https://login.example.org" },
-    });
-  } finally {
-    fake.restore();
-  }
-});
-
 Deno.test("the app record reads the assertions and the login UI, absent as off and instance", () => {
   const plain = shapeApp("p", OIDC_APP, "observed", "t");
   assertEquals(plain.idTokenRoleAssertion, false);
@@ -516,4 +106,433 @@ Deno.test("the app record reads the assertions and the login UI, absent as off a
   const api = shapeApp("p", API_APP, "observed", "t");
   assertEquals(api.loginVersion, undefined);
   assertEquals(api.idTokenRoleAssertion, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Methods, with a stub caller answering only the calls each test names.
+// ---------------------------------------------------------------------------
+
+type H = ReturnType<typeof harness>;
+interface Method {
+  arguments: { parse(value: unknown): unknown };
+  // deno-lint-ignore no-explicit-any
+  execute(args: any, context: ModelContext): Promise<unknown>;
+}
+
+/** Run a method with its arguments parsed as the CLI parses them. */
+function run(method: Method, args: Record<string, unknown>, h: H) {
+  return method.execute(method.arguments.parse(args), h.context);
+}
+
+const P = "/management/v1/projects/300";
+const OIDC_ID = str(OIDC_APP.id);
+const API_ID = str(API_APP.id);
+const OIDC_PATH = `${P}/apps/${OIDC_ID}`;
+const API_PATH = `${P}/apps/${API_ID}`;
+const SECRET = "CLIENT-SECRET-only-in-the-credential";
+
+function str(value: unknown): string {
+  return String(value);
+}
+
+/** The project every test resolves by id. */
+function routes(extra: Record<string, Reply | Reply[]>) {
+  return {
+    [`GET ${P}`]: { project: { id: "300", name: "fabrikk" } },
+    ...extra,
+  };
+}
+
+const m = model.methods;
+
+Deno.test("app list stores each application under the project's name", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [OIDC_APP, API_APP] },
+  }));
+  await run(m.list, { project: "300" }, h);
+  assertEquals(h.written().map((w) => w.name), [
+    "app-fabrikk-kubelogin",
+    "app-fabrikk-fabrikk-api",
+  ]);
+  assertEquals(h.written()[1].data.kind, "api");
+  assertNoPlanted(h);
+});
+
+Deno.test("app list fails on a project that does not exist", async () => {
+  const h = harness({ [`GET ${P}`]: fail(404, "Project not found") });
+  await assertRejects(
+    () => run(m.list, { project: "300" }, h),
+    Error,
+    "no project",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("app get resolves the application by name and stores it", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
+  }));
+  await run(m.get, { project: "300", app: "kubelogin" }, h);
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.appId, w.data.kind], ["app", OIDC_ID, "oidc"]);
+});
+
+Deno.test("app get fails on an application the project does not have", async () => {
+  const h = harness(routes({ [`POST ${P}/apps/_search`]: { result: [] } }));
+  await assertRejects(
+    () => run(m.get, { project: "300", app: "nope" }, h),
+    Error,
+    "no application",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("ensureOidc creates a client and keeps the secret in the credential only", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [] },
+    [`POST ${P}/apps/oidc`]: {
+      appId: OIDC_ID,
+      clientId: "c1",
+      clientSecret: SECRET,
+    },
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+  }));
+  await run(m.ensureOidc, {
+    project: "300",
+    name: "kubelogin",
+    redirectUris: ["http://localhost:8000"],
+    authMethod: "none",
+    loginVersion: "v2",
+  }, h);
+  const create = h.calls.find((c) => c.path === `${P}/apps/oidc`);
+  const body = create?.body as Record<string, unknown>;
+  assertEquals(body.authMethodType, "OIDC_AUTH_METHOD_TYPE_NONE");
+  assertEquals(body.loginVersion, { loginV2: {} });
+  const [app, cred] = h.written();
+  assertEquals([app.spec, app.data.action], ["app", "created"]);
+  assertEquals([cred.spec, cred.data.clientSecret], ["app-credential", SECRET]);
+  assertEquals(AppCredential.shape.clientSecret.meta()?.sensitive, true);
+  assert(!JSON.stringify(app.data).includes(SECRET));
+  assert(!h.logs().join("\n").includes(SECRET));
+  assertNoPlanted(h);
+});
+
+Deno.test("ensureOidc reads a 'No changes' answer as unchanged", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
+    [`PUT ${OIDC_PATH}/oidc_config`]: fail(400, "No changes"),
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+  }));
+  await run(m.ensureOidc, { project: "300", name: "kubelogin" }, h);
+  assertEquals(h.written().map((w) => w.data.action), [
+    "unchanged",
+    "unchanged",
+  ]);
+  assertEquals(h.written()[1].data.clientSecret, undefined);
+});
+
+Deno.test("ensureOidc refuses loginBaseUri without v2 before any call", async () => {
+  const h = harness({});
+  await assertRejects(
+    () =>
+      run(m.ensureOidc, {
+        project: "300",
+        name: "x",
+        loginBaseUri: "https://login.example.org",
+      }, h),
+    Error,
+    "needs loginVersion v2",
+  );
+  assertEquals(h.calls, []);
+});
+
+Deno.test("ensureOidc fails when the update is refused for another reason", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
+    [`PUT ${OIDC_PATH}/oidc_config`]: fail(403, "permission denied"),
+  }));
+  await assertRejects(
+    () => run(m.ensureOidc, { project: "300", name: "kubelogin" }, h),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("ensureApi creates an API application with the jwt method", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [] },
+    [`POST ${P}/apps/api`]: { appId: API_ID, clientId: "c2" },
+    [`GET ${API_PATH}`]: { app: API_APP },
+  }));
+  await run(m.ensureApi, { project: "300", name: "fabrikk-api" }, h);
+  const create = h.calls.find((c) => c.path === `${P}/apps/api`);
+  assertEquals(
+    (create?.body as Record<string, unknown>).authMethodType,
+    "API_AUTH_METHOD_TYPE_PRIVATE_KEY_JWT",
+  );
+  assertEquals(h.written().map((w) => [w.spec, w.data.action]), [
+    ["app", "created"],
+    ["app-credential", "created"],
+  ]);
+});
+
+Deno.test("ensureApi fails when the create is refused, and writes nothing", async () => {
+  const h = harness(routes({
+    [`POST ${P}/apps/_search`]: { result: [] },
+    [`POST ${P}/apps/api`]: fail(409, "already exists"),
+  }));
+  await assertRejects(
+    () => run(m.ensureApi, { project: "300", name: "fabrikk-api" }, h),
+    Error,
+    "HTTP 409",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("redirectSet changes only the allowlist and carries the rest over", async () => {
+  const after = {
+    ...OIDC_APP,
+    oidcConfig: {
+      ...(OIDC_APP.oidcConfig as Record<string, unknown>),
+      redirectUris: ["https://new.example.org/cb"],
+    },
+  };
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: [{ app: OIDC_APP }, { app: after }],
+    [`PUT ${OIDC_PATH}/oidc_config`]: {},
+  }));
+  await run(m.redirectSet, {
+    project: "300",
+    app: OIDC_ID,
+    add: ["https://new.example.org/cb"],
+    remove: ["http://localhost:8000"],
+  }, h);
+  const put = h.calls.find((c) => c.method === "PUT");
+  const body = put?.body as Record<string, unknown>;
+  assertEquals(body.redirectUris, ["https://new.example.org/cb"]);
+  assertEquals(body.authMethodType, "OIDC_AUTH_METHOD_TYPE_NONE");
+  assertEquals(body.clientId, undefined);
+  const [w] = h.written();
+  assertEquals(w.data.added, ["https://new.example.org/cb"]);
+  assertEquals(w.data.removed, ["http://localhost:8000"]);
+  assertEquals(w.data.action, "updated");
+});
+
+Deno.test("redirectSet refuses an application that is not OIDC", async () => {
+  const h = harness(routes({ [`GET ${API_PATH}`]: { app: API_APP } }));
+  await assertRejects(
+    () => run(m.redirectSet, { project: "300", app: API_ID, add: ["x"] }, h),
+    Error,
+    "not an OIDC application",
+  );
+  assertEquals(h.calls.filter((c) => c.method === "PUT"), []);
+});
+
+Deno.test("app update renames and stores the new name", async () => {
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: [{ app: OIDC_APP }, {
+      app: { ...OIDC_APP, name: "kubectl" },
+    }],
+    [`PUT ${OIDC_PATH}`]: {},
+  }));
+  await run(m.update, { project: "300", app: OIDC_ID, name: "kubectl" }, h);
+  assertEquals(h.calls.find((c) => c.method === "PUT")?.body, {
+    name: "kubectl",
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.action], ["app-fabrikk-kubectl", "updated"]);
+});
+
+Deno.test("app update fails when the rename is refused", async () => {
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+    [`PUT ${OIDC_PATH}`]: fail(400, "invalid name"),
+  }));
+  await assertRejects(
+    () => run(m.update, { project: "300", app: OIDC_ID, name: "kubectl" }, h),
+    Error,
+    "HTTP 400",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("app setState deactivates an active application", async () => {
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+    [`POST ${OIDC_PATH}/_deactivate`]: {},
+  }));
+  await run(m.setState, { project: "300", app: OIDC_ID, state: "inactive" }, h);
+  const [w] = h.written();
+  assertEquals(
+    [w.spec, w.data.previousState, w.data.state, w.data.action],
+    ["state", "active", "inactive", "deactivated"],
+  );
+});
+
+Deno.test("app setState fails when the deactivation is refused", async () => {
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+    [`POST ${OIDC_PATH}/_deactivate`]: fail(403, "denied"),
+  }));
+  await assertRejects(
+    () =>
+      run(m.setState, { project: "300", app: OIDC_ID, state: "inactive" }, h),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("secretRotate keeps the new secret in the sensitive credential, out of the logs", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/api_config/_generate_client_secret`]: {
+      clientSecret: SECRET,
+    },
+  }));
+  await run(m.secretRotate, { project: "300", app: API_ID }, h);
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.action], ["app-credential", "rotated"]);
+  assertEquals(w.data.clientSecret, SECRET);
+  assertEquals(w.data.clientId, "400000000000000002@fabrikk");
+  assertEquals(AppCredential.shape.clientSecret.meta()?.sensitive, true);
+  assert(!h.logs().join("\n").includes(SECRET));
+  assertNoPlanted(h);
+});
+
+Deno.test("secretRotate refuses an application that is neither OIDC nor API", async () => {
+  const h = harness(routes({
+    [`GET ${P}/apps/5`]: { app: { id: "5", name: "saml", samlConfig: {} } },
+  }));
+  await assertRejects(
+    () => run(m.secretRotate, { project: "300", app: "5" }, h),
+    Error,
+    "neither an OIDC nor an API",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("app delete removes the application and tombstones its record", async () => {
+  const h = harness(routes({
+    [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
+    [`DELETE ${OIDC_PATH}`]: {},
+  }));
+  await run(
+    m.delete,
+    { project: "300", app: OIDC_ID, confirm: "kubelogin" },
+    h,
+  );
+  assertEquals(h.forgotten, ["app-fabrikk-kubelogin"]);
+  const [w] = h.written();
+  assertEquals([w.data.deleted, w.data.action], [true, "removed"]);
+});
+
+Deno.test("app delete refuses a confirm that is not the live name", async () => {
+  const h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
+  await assertRejects(
+    () =>
+      run(m.delete, { project: "300", app: OIDC_ID, confirm: "kubectl" }, h),
+    Error,
+    "refusing to delete",
+  );
+  assertEquals(h.calls.filter((c) => c.method === "DELETE"), []);
+  assertEquals(h.written(), []);
+});
+
+Deno.test("app delete with dryRun plans and changes nothing", async () => {
+  const h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
+  await run(m.delete, {
+    project: "300",
+    app: OIDC_ID,
+    confirm: "kubelogin",
+    dryRun: true,
+  }, h);
+  assertEquals(h.calls.filter((c) => c.method === "DELETE"), []);
+  assertEquals(h.written()[0].data.action, "planned");
+  assertEquals(h.forgotten, []);
+});
+
+Deno.test("keyCreate keeps the key JSON in the sensitive key record, out of the logs", async () => {
+  const keyJson = '{"type":"application","keyId":"k1","key":"PRIVATE"}';
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys`]: { id: "k1", keyDetails: btoa(keyJson) },
+  }));
+  await run(m.keyCreate, { project: "300", app: API_ID }, h);
+  assertEquals(h.calls.at(-1)?.body, { type: "KEY_TYPE_JSON" });
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.keyId, w.data.keyJson], [
+    "app-key",
+    "k1",
+    keyJson,
+  ]);
+  assertEquals(AppKey.shape.keyJson.meta()?.sensitive, true);
+  assert(!h.logs().join("\n").includes("PRIVATE"));
+  assertNoPlanted(h);
+});
+
+Deno.test("keyCreate fails when the instance refuses the key", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys`]: fail(400, "expiration in the past"),
+  }));
+  await assertRejects(
+    () => run(m.keyCreate, { project: "300", app: API_ID }, h),
+    Error,
+    "HTTP 400",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("keyList stores each key by id and expiry, with no material", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys/_search`]: {
+      result: [{ id: "k1", type: "KEY_TYPE_JSON", expirationDate: "2027" }],
+    },
+  }));
+  await run(m.keyList, { project: "300", app: API_ID }, h);
+  const [w] = h.written();
+  assertEquals([w.name, w.data.type, w.data.keyJson], [
+    "app-key-fabrikk-fabrikk-api-k1",
+    "json",
+    undefined,
+  ]);
+});
+
+Deno.test("keyList fails when the key search is refused", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys/_search`]: fail(403, "denied"),
+  }));
+  await assertRejects(
+    () => run(m.keyList, { project: "300", app: API_ID }, h),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("keyDelete deletes a key that belongs to the application", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys/_search`]: { result: [{ id: "k1" }] },
+    [`DELETE ${API_PATH}/keys/k1`]: {},
+  }));
+  await run(m.keyDelete, { project: "300", app: API_ID, keyId: "k1" }, h);
+  assertEquals(h.forgotten, ["app-key-fabrikk-fabrikk-api-k1"]);
+  assertEquals(h.written()[0].data.action, "removed");
+});
+
+Deno.test("keyDelete never deletes a key the application does not hold", async () => {
+  const h = harness(routes({
+    [`GET ${API_PATH}`]: { app: API_APP },
+    [`POST ${API_PATH}/keys/_search`]: { result: [{ id: "k1" }] },
+  }));
+  await run(m.keyDelete, { project: "300", app: API_ID, keyId: "k9" }, h);
+  assertEquals(h.calls.filter((c) => c.method === "DELETE"), []);
+  const [w] = h.written();
+  assertEquals([w.data.deleted, w.data.action], [false, "unchanged"]);
+  assert(h.logs().some((l) => l.startsWith("warning: no key")));
 });

@@ -1,61 +1,97 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
-import { StateInventorySchema } from "./_helpers.ts";
-import { ChallengeSchema } from "./_records.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./challenge.ts";
-import {
-  assertGetRefusals,
-  assertListFailures,
-  assertNoSecrets,
-  challenge,
-  ctx,
-  list,
-  withCalls,
-} from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
+import { assertNoSecrets, challenge } from "./test_support.ts";
 
-const CHALLENGES = "challenges.acme.cert-manager.io";
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
 
-Deno.test("challenge list and get record state and never the token, key or solver configuration", async () => {
-  const c = ctx({});
-  const a = challenge("ch-a", { uid: "u", name: "o" });
-  const b = challenge("ch-b", { uid: "u", name: "o" }, { status: null });
-  await withCalls([
-    { args: ["get", CHALLENGES, "-A"], out: list([a, b]) },
-    { args: ["get", CHALLENGES, "ch-b", "-n", "acme-test"], out: b },
-  ], async () => {
-    await model.methods.list.execute({}, c.context);
-    await model.methods.get.execute({
-      name: "ch-b",
-      namespace: "acme-test",
-    }, c.context);
+const M = model.methods;
+const R = "challenges.acme.cert-manager.io";
+const OWNER = { uid: "uid-owner", name: "owner" };
+
+Deno.test("list records each Challenge and one inventory, and no secret", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: {
+      stdout: list([challenge("one", OWNER), challenge("two", OWNER)]),
+    },
   });
-  assertEquals(c.written.map((w) => [w.spec, w.name]), [
-    ["challenge", "acme-test--ch-a"],
-    ["challenge", "acme-test--ch-b"],
-    ["inventory", "inventory_all"],
-    ["challenge", "acme-test--ch-b"],
+  await M.list.execute({ namespace: "acme-test" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["challenge", "acme-test--one"],
+    ["challenge", "acme-test--two"],
+    ["inventory", "inventory_ns_acme-test"],
   ]);
-  ChallengeSchema.parse(c.written[1].data);
-  assertEquals(
-    StateInventorySchema.parse(c.written[2].data).items.map((i) => i.state),
-    ["pending", ""],
+  assertEquals(w[2].data.count, 2);
+  assertEquals(w[0].data.name, "one");
+  assertEquals(h.logs().at(-1), "Found 2 Challenge objects, 2 not healthy");
+  assertNoSecrets(w, h.logs());
+});
+
+Deno.test("list with no namespace anywhere reads every namespace", async () => {
+  using h = harness({ [`kubectl get ${R} -A`]: { stdout: list([]) } });
+  await M.list.execute({}, h.context);
+  assertEquals(h.written().map((x) => x.name), ["inventory_all"]);
+});
+
+Deno.test("list passes on a refusal and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: forbidden("list", R),
+  });
+  await assertRejects(
+    () => M.list.execute({ namespace: "acme-test" }, h.context),
+    Error,
+    "forbidden",
   );
-  assertNoSecrets(c.written, c.logs);
+  assertEquals(h.written(), []);
 });
 
-Deno.test("no challenges is an empty inventory, not an error", async () => {
-  const c = ctx({});
-  await withCalls(
-    [{ args: ["get", CHALLENGES, "-A"], out: list([]) }],
-    () => model.methods.list.execute({}, c.context),
+Deno.test("list says cert-manager is not installed when the type is not served", async () => {
+  using h = harness({
+    [`kubectl get ${R} -n acme-test`]: {
+      code: 1,
+      stderr: `error: the server doesn't have a resource type "${
+        R.split(".")[0]
+      }"`,
+    },
+  });
+  await assertRejects(
+    () => M.list.execute({ namespace: "acme-test" }, h.context),
+    Error,
+    "cert-manager is not installed",
   );
-  assertEquals(c.written.map((w) => w.name), ["inventory_all"]);
-  assertEquals(StateInventorySchema.parse(c.written[0].data).count, 0);
+  assertEquals(h.written(), []);
 });
 
-Deno.test("challenge get refuses injection-shaped names before kubectl and names a missing object", async () => {
-  await assertGetRefusals(model.methods.get.execute, CHALLENGES, "Challenge");
+Deno.test("get records the one Challenge asked for", async () => {
+  using h = harness({
+    [`kubectl get ${R} one -n acme-test`]: { stdout: challenge("one", OWNER) },
+  });
+  await M.get.execute({ name: "one", namespace: "acme-test" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [[
+    "challenge",
+    "acme-test--one",
+  ]]);
+  assertEquals([w[0].data.namespace, w[0].data.name], ["acme-test", "one"]);
+  assertEquals(h.logs().at(-1), "Read Challenge one");
+  assertNoSecrets(w, h.logs());
 });
 
-Deno.test("challenge list fails whole on RBAC, a missing CRD, an expired login, a timeout, output that is not JSON or an answer that is not a list", async () => {
-  await assertListFailures(model.methods.list.execute, CHALLENGES, "Challenge");
+Deno.test("get of a missing Challenge says it does not exist and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${R} gone -n acme-test`]: notFound(R, "gone"),
+  });
+  await assertRejects(
+    () => M.get.execute({ name: "gone", namespace: "acme-test" }, h.context),
+    Error,
+    "Challenge acme-test/gone does not exist",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get without a namespace is refused before kubectl runs", async () => {
+  using h = harness({});
+  await assertRejects(() => M.get.execute({ name: "one" }, h.context));
+  assertEquals([h.calls, h.written()], [[], []]);
 });

@@ -1,372 +1,535 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./project.ts";
-import { PROJECT, ROLE } from "./fixtures.ts";
-import { installFake, line, makeContext, page } from "./test_support.ts";
-
-const SEARCH = "POST /management/v1/projects/_search";
-const GET = "GET /management/v1/projects/300000000000000001";
-
-Deno.test("list stores one resource per project", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH
-      ? page([PROJECT, { ...PROJECT, id: "2", name: "annet" }])
-      : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({}, context);
-    assertEquals(written.map((w) => w.name), [
-      "project-fabrikk",
-      "project-annet",
-    ]);
-    assertEquals(written[0].data.roleAssertion, true);
-    assertEquals(written[0].data.action, "observed");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensure leaves a project that already matches alone", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? page([PROJECT]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensure.execute(
-      { name: "fabrikk", roleAssertion: true },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assertEquals(fake.calls.length, 1);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensure creates a project that is not there", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([]);
-    if (line(call) === "POST /management/v1/projects") {
-      return { id: PROJECT.id };
-    }
-    if (line(call) === GET) return { project: PROJECT };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensure.execute({ name: "fabrikk" }, context);
-    assertEquals(written[0].data.action, "created");
-    assertEquals(fake.calls[1].body, {
-      name: "fabrikk",
-      projectRoleAssertion: false,
-      projectRoleCheck: false,
-      hasProjectCheck: false,
-    });
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("update sends the live values it was not asked to change", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === `PUT /management/v1/projects/${PROJECT.id}`) return {};
-    if (line(call) === GET) {
-      return { project: { ...PROJECT, name: "fabrikk-2" } };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.update.execute(
-      { project: "fabrikk", name: "fabrikk-2" },
-      context,
-    );
-    assertEquals(fake.calls[1].body, {
-      name: "fabrikk-2",
-      projectRoleAssertion: true,
-      projectRoleCheck: false,
-      hasProjectCheck: false,
-    });
-    assertEquals(written[0].data.action, "updated");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("setState deactivates, and says so when there is nothing to do", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (
-      line(call) === `POST /management/v1/projects/${PROJECT.id}/_deactivate`
-    ) {
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.setState.execute(
-      { project: "fabrikk", state: "inactive" },
-      context,
-    );
-    assertEquals(written[0].data.action, "deactivated");
-    await model.methods.setState.execute(
-      { project: "fabrikk", state: "active" },
-      context,
-    );
-    assertEquals(written[1].data.action, "unchanged");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete refuses a confirm that is not the live name", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? page([PROJECT]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.delete.execute(
-          { project: "fabrikk", confirm: "fabrik", dryRun: false },
-          context,
-        ),
-      Error,
-      "refusing to delete",
-    );
-    assertEquals(written.length, 0);
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete under dryRun reports the plan and calls nothing", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? page([PROJECT]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.delete.execute(
-      { project: "fabrikk", confirm: "fabrikk", dryRun: true },
-      context,
-    );
-    assertEquals(written[0].data.action, "planned");
-    assertEquals(written[0].data.deleted, false);
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete removes the project once the name matches", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === `DELETE /management/v1/projects/${PROJECT.id}`) {
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.delete.execute(
-      { project: "fabrikk", confirm: "fabrikk", dryRun: false },
-      context,
-    );
-    assertEquals(written[0].data.deleted, true);
-    assertEquals(written[0].data.action, "removed");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("roleEnsure creates a missing role and converges an existing one", async () => {
-  const roleSearch = `POST /management/v1/projects/${PROJECT.id}/roles/_search`;
-  let created = false;
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === roleSearch) return created ? page([ROLE]) : page([]);
-    if (line(call) === `POST /management/v1/projects/${PROJECT.id}/roles`) {
-      created = true;
-      return {};
-    }
-    if (
-      line(call) ===
-        `PUT /management/v1/projects/${PROJECT.id}/roles/kube-admin`
-    ) return {};
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.roleEnsure.execute({
-      project: "fabrikk",
-      roleKey: "kube-admin",
-      displayName: "Kubernetes administrators",
-      group: "kubernetes",
-    }, context);
-    assertEquals(written[0].data.action, "created");
-    await model.methods.roleEnsure.execute({
-      project: "fabrikk",
-      roleKey: "kube-admin",
-      displayName: "Kubernetes administrators",
-      group: "kubernetes",
-    }, context);
-    assertEquals(written[1].data.action, "unchanged");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("roleRemove is a no-op when the role is already gone", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (
-      line(call) === `POST /management/v1/projects/${PROJECT.id}/roles/_search`
-    ) {
-      return page([]);
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.roleRemove.execute(
-      { project: "fabrikk", roleKey: "ghost", dryRun: false },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assertEquals(written[0].data.deleted, false);
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete is a no-op when the project is already gone", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? page([]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.delete.execute(
-      { project: "ghost", confirm: "ghost", dryRun: false },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-const GRANT_SEARCH =
-  `POST /management/v1/projects/${PROJECT.id}/grants/_search`;
-const GRANTED_ORG = "900000000000000001";
-const PROJECT_GRANT = {
-  grantId: "700000000000000001",
-  projectId: PROJECT.id,
-  grantedOrgId: GRANTED_ORG,
-  grantedOrgName: "Annen organisasjon",
-  grantedRoleKeys: ["kube-admin"],
-  state: "PROJECT_GRANT_STATE_ACTIVE",
-};
-
-Deno.test("projectGrantEnsure replaces the granted role set", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([PROJECT_GRANT]);
-    if (
-      line(call) ===
-        `PUT /management/v1/projects/${PROJECT.id}/grants/${PROJECT_GRANT.grantId}`
-    ) return {};
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.projectGrantEnsure.execute({
-      project: "fabrikk",
-      grantedOrgId: GRANTED_ORG,
-      roleKeys: ["kube-readers"],
-    }, context);
-    const put = fake.calls.find((call) => call.method === "PUT");
-    assertEquals(put?.body, { roleKeys: ["kube-readers"] });
-    assertEquals(written[0].data.action, "updated");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("projectGrantEnsure with the same roles in another order changes nothing", async () => {
-  const held = { ...PROJECT_GRANT, grantedRoleKeys: ["a", "b"] };
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([held]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.projectGrantEnsure.execute({
-      project: "fabrikk",
-      grantedOrgId: GRANTED_ORG,
-      roleKeys: ["b", "a"],
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "PUT"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("projectGrantDelete wants the granted organization's name repeated", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([PROJECT_GRANT]);
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.projectGrantDelete.execute({
-          project: "fabrikk",
-          grantedOrgId: GRANTED_ORG,
-          confirm: GRANTED_ORG,
-          dryRun: false,
-        }, context),
-      Error,
-      "refusing to delete granted organization name",
-    );
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("projectGrantDelete of a grant that was never made is a no-op", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.projectGrantDelete.execute({
-      project: "fabrikk",
-      grantedOrgId: GRANTED_ORG,
-      confirm: "Annen organisasjon",
-      dryRun: false,
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
+import { assertNoPlanted, fail, harness } from "./test_support.ts";
 
 Deno.test("project-grant methods carry the kinds a collection needs", () => {
   assertEquals(model.methods.projectGrantDelete.kind, "action");
   assertEquals(model.methods.projectGrantMemberRemove.kind, "action");
   assertEquals(model.methods.projectGrantEnsure.kind, "create");
   assertEquals(model.methods.projectGrantList.kind, "list");
+});
+
+const P = "/management/v1/projects";
+const PROJECT = {
+  id: "200",
+  name: "fabrikk",
+  state: "PROJECT_STATE_ACTIVE",
+  projectRoleAssertion: true,
+};
+const GET_PROJECT = { [`GET ${P}/200`]: { project: PROJECT } };
+const GRANT = {
+  grantId: "300",
+  grantedOrgId: "500",
+  grantedOrgName: "tenant",
+  grantedRoleKeys: ["reader"],
+  state: "PROJECT_GRANT_STATE_ACTIVE",
+};
+const GRANTS = { [`POST ${P}/200/grants/_search`]: { result: [GRANT] } };
+const MEMBERS = `POST ${P}/200/grants/300/members/_search`;
+
+Deno.test("list stores every project", async () => {
+  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  await model.methods.list.execute({}, h.context);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.state], [
+    "project",
+    "project-fabrikk",
+    "active",
+  ]);
+  assertNoPlanted(h);
+});
+
+Deno.test("list fails when the search fails, and writes nothing", async () => {
+  const h = harness({ [`POST ${P}/_search`]: fail(403) });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+  assertNoPlanted(h);
+});
+
+Deno.test("get resolves a name and stores the project", async () => {
+  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  await model.methods.get.execute({ project: "fabrikk" }, h.context);
+  assertEquals(h.written()[0].data.id, "200");
+});
+
+Deno.test("get refuses a project that does not exist", async () => {
+  const h = harness({ [`GET ${P}/201`]: fail(404, "not found") });
+  await assertRejects(
+    () => model.methods.get.execute({ project: "201" }, h.context),
+    Error,
+    'no project "201"',
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("ensure creates a missing project", async () => {
+  const h = harness({
+    [`POST ${P}/_search`]: { result: [] },
+    [`POST ${P}`]: { id: "200" },
+    ...GET_PROJECT,
+  });
+  await model.methods.ensure.execute({ name: "fabrikk" }, h.context);
+  assertEquals(h.calls[1].body, {
+    name: "fabrikk",
+    projectRoleAssertion: false,
+    projectRoleCheck: false,
+    hasProjectCheck: false,
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.action, w.data.id], [
+    "project-fabrikk",
+    "created",
+    "200",
+  ]);
+});
+
+Deno.test("ensure leaves a project as asked alone", async () => {
+  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  await model.methods.ensure.execute(
+    { name: "fabrikk", roleAssertion: true },
+    h.context,
+  );
+  assertEquals(h.written()[0].data.action, "unchanged");
+  assertEquals(h.calls.length, 1);
+});
+
+Deno.test("ensure fails when the create is refused", async () => {
+  const h = harness({
+    [`POST ${P}/_search`]: { result: [] },
+    [`POST ${P}`]: fail(409, "already exists"),
+  });
+  await assertRejects(
+    () => model.methods.ensure.execute({ name: "fabrikk" }, h.context),
+    Error,
+    "HTTP 409",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("update renames and keeps the flags it was not given", async () => {
+  const h = harness({
+    [`GET ${P}/200`]: [{ project: PROJECT }, {
+      project: { ...PROJECT, name: "fabrikk2" },
+    }],
+    [`PUT ${P}/200`]: {},
+  });
+  await model.methods.update.execute(
+    { project: "200", name: "fabrikk2" },
+    h.context,
+  );
+  assertEquals(h.calls[1].body, {
+    name: "fabrikk2",
+    projectRoleAssertion: true,
+    projectRoleCheck: false,
+    hasProjectCheck: false,
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.action], ["project-fabrikk2", "updated"]);
+});
+
+Deno.test("update fails when the write is refused", async () => {
+  const h = harness({ ...GET_PROJECT, [`PUT ${P}/200`]: fail(400) });
+  await assertRejects(
+    () =>
+      model.methods.update.execute(
+        { project: "200", roleCheck: true },
+        h.context,
+      ),
+    Error,
+    "HTTP 400",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("setState deactivates an active project", async () => {
+  const h = harness({ ...GET_PROJECT, [`POST ${P}/200/_deactivate`]: {} });
+  await model.methods.setState.execute(
+    { project: "200", state: "inactive" },
+    h.context,
+  );
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.previousState, w.data.action], [
+    "state",
+    "project-state-200",
+    "active",
+    "deactivated",
+  ]);
+});
+
+Deno.test("setState fails when the project cannot be read", async () => {
+  const h = harness({ [`GET ${P}/200`]: fail(500) });
+  await assertRejects(
+    () =>
+      model.methods.setState.execute(
+        { project: "200", state: "inactive" },
+        h.context,
+      ),
+    Error,
+    "HTTP 500",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("delete removes the project and tombstones its record", async () => {
+  const h = harness({ ...GET_PROJECT, [`DELETE ${P}/200`]: {} });
+  await model.methods.delete.execute(
+    { project: "200", confirm: "fabrikk", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.calls.map((c) => c.method), ["GET", "DELETE"]);
+  assertEquals(h.forgotten, ["project-fabrikk"]);
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.deleted, w.data.action], [
+    "deletion",
+    true,
+    "removed",
+  ]);
+});
+
+Deno.test("delete refuses a confirm that is not the live name", async () => {
+  const h = harness(GET_PROJECT);
+  await assertRejects(
+    () =>
+      model.methods.delete.execute(
+        { project: "200", confirm: "other", dryRun: false },
+        h.context,
+      ),
+    Error,
+    "refusing to delete project name",
+  );
+  assertEquals(h.calls.length, 1);
+  assertEquals(h.written(), []);
+  assertEquals(h.forgotten, []);
+});
+
+Deno.test("delete with dryRun only plans", async () => {
+  const h = harness(GET_PROJECT);
+  await model.methods.delete.execute(
+    { project: "200", confirm: "fabrikk", dryRun: true },
+    h.context,
+  );
+  assertEquals(h.written()[0].data.action, "planned");
+  assertEquals(h.calls.length, 1);
+});
+
+Deno.test("roleList stores the roles keyed by project and key", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: {
+      result: [{ key: "reader", displayName: "Reader" }],
+    },
+  });
+  await model.methods.roleList.execute({ project: "200" }, h.context);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.key], [
+    "role",
+    "role-fabrikk-reader",
+    "reader",
+  ]);
+});
+
+Deno.test("roleList fails when the search fails", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: fail(503),
+  });
+  await assertRejects(
+    () => model.methods.roleList.execute({ project: "200" }, h.context),
+    Error,
+    "HTTP 503",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("roleEnsure creates a missing role", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: { result: [] },
+    [`POST ${P}/200/roles`]: {},
+  });
+  await model.methods.roleEnsure.execute(
+    { project: "200", roleKey: "reader", displayName: "Reader" },
+    h.context,
+  );
+  assertEquals(h.calls[2].body, {
+    roleKey: "reader",
+    displayName: "Reader",
+    group: "",
+  });
+  assertEquals(h.written()[0].data.action, "created");
+});
+
+Deno.test("roleEnsure fails when the create is refused", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: { result: [] },
+    [`POST ${P}/200/roles`]: fail(400),
+  });
+  await assertRejects(
+    () =>
+      model.methods.roleEnsure.execute(
+        { project: "200", roleKey: "reader" },
+        h.context,
+      ),
+    Error,
+    "HTTP 400",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("roleRemove deletes the role and tombstones it", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: { result: [{ key: "reader" }] },
+    [`DELETE ${P}/200/roles/reader`]: {},
+  });
+  await model.methods.roleRemove.execute(
+    { project: "200", roleKey: "reader", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.forgotten, ["role-fabrikk-reader"]);
+  assertEquals(h.written()[0].data.deleted, true);
+});
+
+Deno.test("roleRemove with dryRun deletes nothing", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/roles/_search`]: { result: [{ key: "reader" }] },
+  });
+  await model.methods.roleRemove.execute(
+    { project: "200", roleKey: "reader", dryRun: true },
+    h.context,
+  );
+  assertEquals(h.calls.some((c) => c.method === "DELETE"), false);
+  assertEquals(h.written()[0].data.action, "planned");
+  assertEquals(h.forgotten, []);
+});
+
+Deno.test("projectGrantList stores each grant", async () => {
+  const h = harness({ ...GET_PROJECT, ...GRANTS });
+  await model.methods.projectGrantList.execute({ project: "200" }, h.context);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.roleKeys], [
+    "project-grant",
+    "project-grant-fabrikk-500",
+    ["reader"],
+  ]);
+});
+
+Deno.test("projectGrantList fails on an unknown project", async () => {
+  const h = harness({ [`POST ${P}/_search`]: { result: [] } });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantList.execute({ project: "nope" }, h.context),
+    Error,
+    'no project "nope"',
+  );
+});
+
+Deno.test("projectGrantEnsure converges the role set", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [`PUT ${P}/200/grants/300`]: {},
+  });
+  await model.methods.projectGrantEnsure.execute(
+    { project: "200", grantedOrgId: "500", roleKeys: ["reader", "writer"] },
+    h.context,
+  );
+  assertEquals(h.calls[2].body, { roleKeys: ["reader", "writer"] });
+  const [w] = h.written();
+  assertEquals([w.data.action, w.data.roleKeys], [
+    "updated",
+    ["reader", "writer"],
+  ]);
+});
+
+Deno.test("projectGrantEnsure fails when the grant is refused", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/grants/_search`]: { result: [] },
+    [`POST ${P}/200/grants`]: fail(404, "org not found"),
+  });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantEnsure.execute(
+        { project: "200", grantedOrgId: "500", roleKeys: ["reader"] },
+        h.context,
+      ),
+    Error,
+    "HTTP 404",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("projectGrantSetState deactivates the grant", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [`POST ${P}/200/grants/300/_deactivate`]: {},
+  });
+  await model.methods.projectGrantSetState.execute(
+    { project: "200", grantedOrgId: "500", state: "inactive" },
+    h.context,
+  );
+  const [w] = h.written();
+  assertEquals([w.name, w.data.action], [
+    "project-grant-state-fabrikk-500",
+    "deactivated",
+  ]);
+});
+
+Deno.test("projectGrantSetState refuses a grant that does not exist", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/grants/_search`]: { result: [] },
+  });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantSetState.execute(
+        { project: "200", grantedOrgId: "500", state: "inactive" },
+        h.context,
+      ),
+    Error,
+    "is not granted to organization 500",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("projectGrantDelete takes the grant back", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [`DELETE ${P}/200/grants/300`]: {},
+  });
+  await model.methods.projectGrantDelete.execute(
+    { project: "200", grantedOrgId: "500", confirm: "tenant", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.forgotten, ["project-grant-fabrikk-500"]);
+  assertEquals(h.written()[0].data.action, "removed");
+});
+
+Deno.test("projectGrantDelete refuses a confirm that is not the org name", async () => {
+  const h = harness({ ...GET_PROJECT, ...GRANTS });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantDelete.execute(
+        { project: "200", grantedOrgId: "500", confirm: "500", dryRun: false },
+        h.context,
+      ),
+    Error,
+    "refusing to delete granted organization name",
+  );
+  assertEquals(h.calls.some((c) => c.method === "DELETE"), false);
+  assertEquals(h.written(), []);
+});
+
+Deno.test("projectGrantMemberList stores the grant's members", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [MEMBERS]: { result: [{ userId: "600", roles: ["PROJECT_GRANT_OWNER"] }] },
+  });
+  await model.methods.projectGrantMemberList.execute(
+    { project: "200", grantedOrgId: "500" },
+    h.context,
+  );
+  const [w] = h.written();
+  assertEquals([w.spec, w.name], [
+    "project-grant-member",
+    "project-grant-member-fabrikk-600",
+  ]);
+});
+
+Deno.test("projectGrantMemberList refuses a grant that does not exist", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    [`POST ${P}/200/grants/_search`]: { result: [] },
+  });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantMemberList.execute(
+        { project: "200", grantedOrgId: "500" },
+        h.context,
+      ),
+    Error,
+    "is not granted",
+  );
+});
+
+Deno.test("projectGrantMemberEnsure adds a missing member", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [MEMBERS]: { result: [] },
+    [`POST ${P}/200/grants/300/members`]: {},
+  });
+  await model.methods.projectGrantMemberEnsure.execute(
+    {
+      project: "200",
+      grantedOrgId: "500",
+      userId: "600",
+      roles: ["PROJECT_GRANT_OWNER"],
+    },
+    h.context,
+  );
+  assertEquals(h.calls[3].body, {
+    userId: "600",
+    roles: ["PROJECT_GRANT_OWNER"],
+  });
+  assertEquals(h.written()[0].data.action, "created");
+});
+
+Deno.test("projectGrantMemberEnsure fails when the add is refused", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [MEMBERS]: { result: [] },
+    [`POST ${P}/200/grants/300/members`]: fail(400, "user not in org"),
+  });
+  await assertRejects(
+    () =>
+      model.methods.projectGrantMemberEnsure.execute(
+        { project: "200", grantedOrgId: "500", userId: "600", roles: ["X"] },
+        h.context,
+      ),
+    Error,
+    "user not in org",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("projectGrantMemberRemove removes a member", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [MEMBERS]: { result: [{ userId: "600" }] },
+    [`DELETE ${P}/200/grants/300/members/600`]: {},
+  });
+  await model.methods.projectGrantMemberRemove.execute(
+    { project: "200", grantedOrgId: "500", userId: "600", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.forgotten, ["project-grant-member-fabrikk-600"]);
+  assertEquals(h.written()[0].data.deleted, true);
+});
+
+Deno.test("projectGrantMemberRemove leaves a non-member alone", async () => {
+  const h = harness({
+    ...GET_PROJECT,
+    ...GRANTS,
+    [MEMBERS]: { result: [] },
+  });
+  await model.methods.projectGrantMemberRemove.execute(
+    { project: "200", grantedOrgId: "500", userId: "600", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.calls.some((c) => c.method === "DELETE"), false);
+  assertEquals(h.written()[0].data.action, "unchanged");
+  assert(h.logs().some((l) => l.startsWith("warning:")));
 });

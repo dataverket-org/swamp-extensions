@@ -516,8 +516,8 @@ handled, never the state of a release nothing was done to.
   `helmreleases.helm.toolkit.fluxcd.io` and so on, so a cluster with another
   `helmreleases` type cannot be matched by mistake.
 - Processes are run by a shared layer with a replaceable spawn, a time limit on
-  every call and redacted, bounded error text; the pure parts are exported, so
-  the methods are unit-tested against a strict fake.
+  every call and redacted, bounded error text; the pure parts are exported and
+  unit-tested, and each method is unit-tested through a stub spawn.
 - Each type carries an `upgrades` entry, so a model created on the upstream
   version is stamped when it first runs here.
 - `reset` and the two CLI pre-flight checks, formerly a separate extension.
@@ -548,16 +548,16 @@ import `../lib/`, the swamp commands that package the extension need the
 repository root: `swamp extension quality manifest.yaml --extensions-dir ..`,
 and the same flag on `fmt` and `push`.
 
-The unit tests drive the types with the strict fakes of `../lib/`: a call that
-was not scripted, a kubectl call without the cluster flags, the request timeout
-or `-o json`, an unknown flag, or a name that is not a name fails the test. The
-tests of `get` read HelmRelease and Job objects recorded from a kind cluster
-with Flux 2.10.0, in `fixtures/`. About half of the tests are negative: a
-missing release, refused access, output that is not what was asked for, a
-malformed status, a process that hangs or is cancelled, names and namespaces
-shaped as flags, selectors or shell text, two objects under one data name, and
-credentials in what flux or kubectl printed. With `FLUX_E2E=1` one test runs the
-real flux: it pushes a directory with `release.json` to
+The unit tests cover the pure parts, the parsers, the arguments of each call and
+the blanking of credentials, and every method once on success and once on
+failure: each runs its `execute` through `createModelTestContext` of
+`@swamp-club/swamp-testing`, with kubectl and flux answered by a stub spawn
+(`stub_test.ts`) that knows only the commands the test lists, and the test
+checks the records written and the log lines. The tests of `get` read
+HelmRelease objects recorded from a kind cluster with Flux 2.10.0, in
+`fixtures/`. What the types do against a real cluster, refusals included, is
+tested by the live suite in `smoke/`. With `FLUX_E2E=1` one test runs the real
+flux: it pushes a directory with `release.json` to
 `localhost:5002/team/config:test`, or `FLUX_E2E_REPOSITORY`, pushes it again and
 sees the same digest, and pulls the artifact back with `flux pull artifact` to
 compare. A throwaway registry does:

@@ -206,13 +206,17 @@ deno test --allow-env --allow-read --allow-write --allow-net
 CRANE_E2E=1 deno test --allow-env --allow-read --allow-write --allow-net --allow-run
 ```
 
-The unit tests drive the model with a fake crane over a fake registry: an index
-of two platforms and an attestation, an image, a Flux-like artifact whose layer
-the test builds as a tar+gzip. With `CRANE_E2E=1` one test runs the real crane
-against a registry at `CRANE_E2E_REGISTRY` (default `localhost:5001`) holding
-`CRANE_E2E_IMAGE` (default `team/hello:v1`): digest, describe, copy twice, tag
-twice, and blob out of an artifact the test appends with `crane append`. A
-throwaway registry and image:
+The unit tests cover the pure parts: references, the arguments check, and a file
+read out of a tar layer, gzipped or not. They also run each method, `digest`,
+`describe`, `copy`, `tag` and `blob`, through `createModelTestContext` with a
+stub in place of crane that answers only the calls its test lists: one test per
+method for what it records, one for a failure that leaves no record, and the
+copy test checks that the password reaches crane on stdin and nowhere else. With
+`CRANE_E2E=1` one test runs the real crane against a registry at
+`CRANE_E2E_REGISTRY` (default `localhost:5001`) holding `CRANE_E2E_IMAGE`
+(default `team/hello:v1`): digest, describe, copy twice, tag twice, and blob out
+of an artifact the test appends with `crane append`. A throwaway registry and
+image:
 
 ```sh
 podman run -d --name registry -p 127.0.0.1:5001:5000 docker.io/library/registry:2

@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { model as zoneModel, normalizeZones } from "./availability_zone.ts";
+import { model, normalizeZones } from "./availability_zone.ts";
 import { AZ_ROWS } from "./fixtures.ts";
-import { installFake, line, makeContext } from "./test_support.ts";
+import { fail, withStub } from "./test_support.ts";
 
 Deno.test("normalizeZones de-duplicates per-host rows and keys by service", () => {
   assertEquals(normalizeZones(AZ_ROWS, "compute"), [
@@ -20,37 +20,28 @@ Deno.test("normalizeZones de-duplicates per-host rows and keys by service", () =
   ]);
 });
 
-Deno.test("zone list stores zone-<service>-<name>", async () => {
-  const fake = installFake((
-    args,
-  ) => (line({ args, env: {} }) === "availability zone list --volume"
-    ? AZ_ROWS
-    : undefined)
-  );
-  const { context, written } = makeContext();
-  try {
-    await zoneModel.methods.list.execute({ service: "volume" }, context);
-    assertEquals(written.map((w) => w.name), [
-      "zone-volume-zone-a",
-      "zone-volume-zone-b",
-    ]);
-    assertEquals(written[0].data.service, "volume");
-  } finally {
-    fake.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub runner ─────
 
-Deno.test("zone list rejects output that is not a list", async () => {
-  const fake = installFake(() => ({ oops: true }));
-  const { context, written } = makeContext();
-  try {
+Deno.test("list writes one record per zone, its name carrying the service", () =>
+  withStub([
+    ["availability zone list --volume -f json", { json: AZ_ROWS }],
+  ], async (h) => {
+    await model.methods.list.execute({ service: "volume" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.status]), [
+      ["zone", "zone-volume-zone-a", "available"],
+      ["zone", "zone-volume-zone-b", "not available"],
+    ]);
+    assertEquals(h.logs().at(-1)?.message, "stored {count} zones");
+  }));
+
+Deno.test("list fails when the CLI does, and writes nothing", () =>
+  withStub([
+    ["availability zone list", fail("Forbidden (HTTP 403)")],
+  ], async (h) => {
     await assertRejects(
-      () => zoneModel.methods.list.execute({ service: "compute" }, context),
+      () => model.methods.list.execute({ service: "compute" }, h.context),
       Error,
-      "did not return a list",
+      "availability zone list failed (exit 1): Forbidden (HTTP 403)",
     );
-    assertEquals(written.length, 0);
-  } finally {
-    fake.restore();
-  }
-});
+    assertEquals(h.written(), []);
+  }));

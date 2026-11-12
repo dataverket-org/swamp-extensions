@@ -1,608 +1,603 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import { toBase64 } from "./api.ts";
 import { model } from "./user.ts";
-import { HUMAN_USER, MACHINE_USER } from "./fixtures.ts";
-import { installFake, line, makeContext } from "./test_support.ts";
-import type { ApiCall } from "./api.ts";
-import { fromBase64, toBase64 } from "./api.ts";
+import { assertNoPlanted, fail, harness, type Reply } from "./test_support.ts";
 
-const SEARCH = "POST /v2/users";
-const MACHINE_GET = `GET /v2/users/${MACHINE_USER.userId}`;
-const HUMAN_GET = `GET /v2/users/${HUMAN_USER.userId}`;
+const M = model.methods;
+const ORG_ME = { "GET /management/v1/orgs/me": { org: { id: "100" } } };
+const MACHINE = {
+  userId: "300",
+  username: "ci-bot",
+  state: "USER_STATE_ACTIVE",
+  machine: { name: "CI bot", accessTokenType: "ACCESS_TOKEN_TYPE_BEARER" },
+};
+const HUMAN = {
+  userId: "301",
+  username: "kari",
+  state: "USER_STATE_ACTIVE",
+  human: {
+    profile: { givenName: "Kari", familyName: "Nordmann" },
+    email: { email: "kari@example.org" },
+  },
+};
+const GET_MACHINE = { "GET /v2/users/300": { user: MACHINE } };
+const GET_HUMAN = { "GET /v2/users/301": { user: HUMAN } };
+const GONE = { "GET /v2/users/300": fail(500, "boom") };
 
-/** A v2 search page. */
-/** The one call that matches this `METHOD /path`, so an added lookup cannot shift an index. */
-function callTo(fake: { calls: ApiCall[] }, want: string) {
-  const found = fake.calls.find((call) => line(call) === want);
-  if (!found) throw new Error(`no call to ${want}`);
-  return found;
-}
-
-function users(rows: unknown[]) {
-  return { result: rows, details: { totalResult: String(rows.length) } };
-}
-
-Deno.test("list narrows to one kind of user and stores each one", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? users([MACHINE_USER]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({ type: "machine" }, context);
-    const queries =
-      (callTo(fake, SEARCH).body as { queries: unknown[] }).queries;
-    assert(queries.some((q) => JSON.stringify(q).includes("TYPE_MACHINE")));
-    assert(
-      queries.some((q) => JSON.stringify(q).includes("organizationIdQuery")),
-    );
-    assertEquals(written[0].name, "user-svc-flux");
-    assertEquals(written[0].data.type, "machine");
-    assertEquals(written[0].data.accessTokenType, "bearer");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureMachine leaves a machine user that already matches alone", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? users([MACHINE_USER]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensureMachine.execute({
-      username: "svc-flux",
-      name: "Flux",
-      description: "reconciles the cluster",
-      accessTokenType: "bearer",
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "PATCH"));
-    assert(fake.calls.every((call) => line(call) !== "POST /v2/users/new"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureMachine refuses to converge a human user of that name", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? users([HUMAN_USER]) : undefined
-  );
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.ensureMachine.execute({
-          username: "kari",
-          name: "Kari",
-          description: undefined,
-          accessTokenType: "bearer",
-        }, context),
-      Error,
-      "not a machine user",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensureHuman creates a human and never sends a password", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([]);
-    if (line(call) === "POST /v2/users/new") return { id: HUMAN_USER.userId };
-    if (line(call) === HUMAN_GET) return { user: HUMAN_USER };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensureHuman.execute({
-      username: "kari",
-      email: "kari@dataverket.org",
-      givenName: "Kari",
-      familyName: "Nordmann",
-      displayName: undefined,
-      nickName: undefined,
-      gender: undefined,
-      preferredLanguage: "nb",
-      phone: undefined,
-      emailVerified: true,
-    }, context);
-    const created = callTo(fake, "POST /v2/users/new");
-    const body = JSON.stringify(created.body);
-    assert(!body.includes("password"));
-    assert(body.includes('"isVerified":true'));
-    assert(
-      (created.body as { organizationId?: string }).organizationId !==
-        undefined,
-      "the v2 user service wants the organization in the body",
-    );
-    assertEquals(written[0].data.action, "created");
-    assertEquals(written[0].data.type, "human");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("update sends only the fields it was given", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([MACHINE_USER]);
-    if (line(call) === `PATCH /v2/users/${MACHINE_USER.userId}`) return {};
-    if (line(call) === MACHINE_GET) return { user: MACHINE_USER };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.update.execute({
-      user: "svc-flux",
-      description: "reconciles prod",
-      username: undefined,
-      email: undefined,
-      emailVerified: undefined,
-      givenName: undefined,
-      familyName: undefined,
-      displayName: undefined,
-      phone: undefined,
-      name: undefined,
-      accessTokenType: undefined,
-    }, context);
-    assertEquals(callTo(fake, `PATCH /v2/users/${MACHINE_USER.userId}`).body, {
-      machine: { description: "reconciles prod" },
-    });
-    assertEquals(written[0].data.action, "updated");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("update with nothing to change calls nothing", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? users([MACHINE_USER]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.update.execute({
-      user: "svc-flux",
-      username: undefined,
-      email: undefined,
-      emailVerified: undefined,
-      givenName: undefined,
-      familyName: undefined,
-      displayName: undefined,
-      phone: undefined,
-      name: undefined,
-      description: undefined,
-      accessTokenType: undefined,
-    }, context);
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "PATCH"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("setState unlocks a locked user rather than reactivating", async () => {
-  const locked = { ...MACHINE_USER, state: "USER_STATE_LOCKED" };
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([locked]);
-    if (line(call) === `POST /v2/users/${MACHINE_USER.userId}/unlock`) {
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.setState.execute(
-      { user: "svc-flux", state: "active" },
-      context,
-    );
-    assertEquals(written[0].data.previousState, "locked");
-    assertEquals(written[0].data.action, "reactivated");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete refuses the wrong username, reports a dry run, then deletes", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([MACHINE_USER]);
-    if (line(call) === `DELETE /v2/users/${MACHINE_USER.userId}`) return {};
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.delete.execute(
-          { user: "svc-flux", confirm: "svc-fluxx", dryRun: false },
-          context,
-        ),
-      Error,
-      "refusing to delete",
-    );
-    await model.methods.delete.execute(
-      { user: "svc-flux", confirm: "svc-flux", dryRun: true },
-      context,
-    );
-    assertEquals(written[0].data.deleted, false);
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-    await model.methods.delete.execute(
-      { user: "svc-flux", confirm: "svc-flux", dryRun: false },
-      context,
-    );
-    assertEquals(written[1].data.deleted, true);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("patCreate stores the token once, in the sensitive spec", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([MACHINE_USER]);
-    if (line(call) === `POST /v2/users/${MACHINE_USER.userId}/pats`) {
-      return { tokenId: "77", token: "pat-once" };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.patCreate.execute(
-      { user: "svc-flux", expirationDate: "2027-01-01T00:00:00Z" },
-      context,
-    );
-    assertEquals(written[0].spec, "user-credential");
-    assertEquals(written[0].data.secret, "pat-once");
-    assertEquals(written[0].data.kind, "pat");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("patRevoke does nothing for a token this user does not hold", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([MACHINE_USER]);
-    if (line(call) === "POST /v2/users/pats/search") {
-      return { result: [{ id: "77" }] };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.patRevoke.execute(
-      { user: "svc-flux", tokenId: "88", dryRun: false },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("keyCreate decodes the key content Zitadel base64-encodes", async () => {
-  const keyJson = '{"type":"serviceaccount","keyId":"7"}';
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([MACHINE_USER]);
-    if (line(call) === `POST /v2/users/${MACHINE_USER.userId}/keys`) {
-      return { keyId: "7", keyContent: toBase64(keyJson) };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.keyCreate.execute(
-      {
-        user: "svc-flux",
-        expirationDate: "2027-01-01T00:00:00Z",
-        publicKey: undefined,
-      },
-      context,
-    );
-    assertEquals(written[0].data.secret, keyJson);
-    assertEquals(written[0].data.kind, "key");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("metadata is base64 on the way out and decoded on the way back", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([HUMAN_USER]);
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/metadata`) {
-      return {};
-    }
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/metadata/search`) {
-      return { metadata: [{ key: "groups", value: toBase64("kube-admin") }] };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.metadataSet.execute(
-      { user: "kari", key: "groups", value: "kube-admin" },
-      context,
-    );
-    const body = callTo(fake, `POST /v2/users/${HUMAN_USER.userId}/metadata`)
-      .body as { metadata: { value: string }[] };
-    assertEquals(fromBase64(body.metadata[0].value), "kube-admin");
-    await model.methods.metadataList.execute({ user: "kari" }, context);
-    assertEquals(written[1].data.value, "kube-admin");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("passwordResetLinkCreate returns a code and refuses a machine user", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) {
-      const body = call.body as {
-        queries?: { userNameQuery: { userName: string } }[];
-      };
-      const name = body.queries?.[0]?.userNameQuery.userName;
-      return users([name === "kari" ? HUMAN_USER : MACHINE_USER]);
-    }
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/password_reset`) {
-      return { verificationCode: "reset-once" };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.passwordResetLinkCreate.execute(
-      { user: "kari", delivery: "return", urlTemplate: undefined },
-      context,
-    );
-    assertEquals(written[0].data.verificationCode, "reset-once");
-    await assertRejects(
-      () =>
-        model.methods.passwordResetLinkCreate.execute(
-          { user: "svc-flux", delivery: "return", urlTemplate: undefined },
-          context,
-        ),
-      Error,
-      "not a human user",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("passkeyRegistrationLinkCreate returns a code with its id, mails with the template, and refuses a machine user", async () => {
-  const sent: unknown[] = [];
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) {
-      const body = call.body as {
-        queries?: { userNameQuery: { userName: string } }[];
-      };
-      const name = body.queries?.[0]?.userNameQuery.userName;
-      return users([name === "kari" ? HUMAN_USER : MACHINE_USER]);
-    }
-    if (
-      line(call) ===
-        `POST /v2/users/${HUMAN_USER.userId}/passkeys/registration_link`
-    ) {
-      sent.push(call.body);
-      const body = call.body as { returnCode?: unknown };
-      return body.returnCode ? { code: { id: "c1", code: "reg-once" } } : {};
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.passkeyRegistrationLinkCreate.execute(
-      { user: "kari", delivery: "return", urlTemplate: undefined },
-      context,
-    );
-    assertEquals(written[0].data.code, "reg-once");
-    assertEquals(written[0].data.codeId, "c1");
-    const template =
-      "https://auth.example.org/ui/v2/login/passkey/set?code={{.Code}}";
-    await model.methods.passkeyRegistrationLinkCreate.execute(
-      { user: "kari", delivery: "email", urlTemplate: template },
-      context,
-    );
-    assertEquals(sent[1], { sendLink: { urlTemplate: template } });
-    assertEquals(written[1].data.code, undefined);
-    await assertRejects(
-      () =>
-        model.methods.passkeyRegistrationLinkCreate.execute(
-          { user: "svc-flux", delivery: "return", urlTemplate: undefined },
-          context,
-        ),
-      Error,
-      "not a human user",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("authFactorList gathers second factors and passkeys together", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([HUMAN_USER]);
-    if (
-      line(call) ===
-        `POST /v2/users/${HUMAN_USER.userId}/authentication_factors/_search`
-    ) {
-      return {
-        result: [
-          { state: "AUTH_FACTOR_STATE_READY", otp: {} },
-          {
-            state: "AUTH_FACTOR_STATE_READY",
-            u2f: { id: "u1", name: "Yubikey" },
-          },
-        ],
-      };
-    }
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/passkeys/_search`) {
-      return {
-        result: [{
-          id: "p1",
-          name: "Telefon",
-          state: "AUTH_FACTOR_STATE_READY",
-        }],
-      };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.authFactorList.execute({ user: "kari" }, context);
-    const factors = written.filter((w) => w.spec === "auth-factor");
-    assertEquals(factors.map((w) => w.data.type), ["totp", "u2f", "passkey"]);
-    assertEquals(factors[1].data.name, "Yubikey");
-    assertEquals(factors[2].data.state, "ready");
-    const summary = written.find((w) => w.spec === "auth-summary");
-    assertEquals(summary?.name, "auth-summary-kari");
-    assertEquals(summary?.data.totp, true);
-    assertEquals(summary?.data.u2f, 1);
-    assertEquals(summary?.data.passkeys, 1);
-    assertEquals(summary?.data.factors, 3);
-    assertEquals(summary?.data.mfa, true);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("authFactorList without a user audits every human, and a person with nothing ready has mfa false", async () => {
-  const other = {
-    ...HUMAN_USER,
-    userId: "500000000000000009",
-    username: "ola",
-    human: { email: { email: "ola@example.org" } },
+/** Run one method with parsed arguments against the listed answers. */
+async function run(
+  method: keyof typeof M,
+  args: Record<string, unknown>,
+  routes: Record<string, Reply | Reply[]>,
+) {
+  const h = harness(routes);
+  const m = M[method] as unknown as {
+    arguments: { parse(v: unknown): unknown };
+    execute(a: unknown, c: unknown): Promise<unknown>;
   };
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) {
-      const body = call.body as { queries?: Record<string, unknown>[] };
-      const types = (body.queries ?? []).map((q) => JSON.stringify(q));
-      if (!types.some((q) => q.includes("TYPE_HUMAN"))) return undefined;
-      return users([HUMAN_USER, other]);
-    }
-    if (
-      line(call) ===
-        `POST /v2/users/${HUMAN_USER.userId}/authentication_factors/_search`
-    ) {
-      return { result: [{ state: "AUTH_FACTOR_STATE_READY", otp: {} }] };
-    }
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/passkeys/_search`) {
-      return { result: [] };
-    }
-    if (
-      line(call) ===
-        `POST /v2/users/${other.userId}/authentication_factors/_search`
-    ) {
-      return {
-        result: [{ state: "AUTH_FACTOR_STATE_NOT_READY", u2f: { id: "u9" } }],
-      };
-    }
-    if (line(call) === `POST /v2/users/${other.userId}/passkeys/_search`) {
-      return { result: [] };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.authFactorList.execute({ user: undefined }, context);
-    const summaries = written.filter((w) => w.spec === "auth-summary");
-    assertEquals(summaries.map((w) => w.name), [
-      "auth-summary-kari",
-      "auth-summary-ola",
-    ]);
-    assertEquals(summaries[0].data.mfa, true);
-    assertEquals(summaries[1].data.mfa, false);
-    assertEquals(summaries[1].data.factors, 0);
-    assertEquals(summaries[1].data.email, "ola@example.org");
-    assertEquals(written.filter((w) => w.spec === "auth-factor").length, 2);
-  } finally {
-    fake.restore();
-  }
-});
+  await m.execute(m.arguments.parse(args), h.context);
+  return h;
+}
 
-Deno.test("removing a u2f key or a passkey needs the id that names it", async () => {
-  const fake = installFake((call) =>
-    line(call) === SEARCH ? users([HUMAN_USER]) : undefined
+/** Run one method and expect it to throw `text`, writing nothing. */
+async function refuses(
+  method: keyof typeof M,
+  args: Record<string, unknown>,
+  routes: Record<string, Reply | Reply[]>,
+  text: string,
+) {
+  const h = harness(routes);
+  const m = M[method] as unknown as {
+    arguments: { parse(v: unknown): unknown };
+    execute(a: unknown, c: unknown): Promise<unknown>;
+  };
+  await assertRejects(
+    () => m.execute(m.arguments.parse(args), h.context),
+    Error,
+    text,
   );
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.authFactorRemove.execute(
-          { user: "kari", type: "u2f", id: undefined, dryRun: false },
-          context,
-        ),
-      Error,
-      "needs its id",
-    );
-  } finally {
-    fake.restore();
-  }
+  assertEquals(h.written(), []);
+  assertNoPlanted(h);
+  return h;
+}
+
+const changes = (h: ReturnType<typeof harness>) =>
+  h.calls.filter((c) =>
+    c.method !== "GET" && !/search$/.test(c.path) &&
+    c.path !== "/v2/users"
+  )
+    .map((c) => `${c.method} ${c.path}`);
+
+Deno.test("list stores each user of the organization, machines only", async () => {
+  const h = await run("list", { type: "machine" }, {
+    ...ORG_ME,
+    "POST /v2/users": (c) => {
+      const queries = (c.body as { queries: unknown[] }).queries;
+      assertEquals(queries[1], { typeQuery: { type: "TYPE_MACHINE" } });
+      return { result: [MACHINE] };
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.type], [
+    "user",
+    "user-ci-bot",
+    "machine",
+  ]);
+  assertNoPlanted(h);
 });
 
-Deno.test("removing a factor the person does not have is a no-op", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([HUMAN_USER]);
-    if (
-      line(call) ===
-        `POST /v2/users/${HUMAN_USER.userId}/authentication_factors/_search`
-    ) return { result: [] };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.authFactorRemove.execute(
-      { user: "kari", type: "totp", id: undefined, dryRun: false },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
+Deno.test("list fails when the search fails", async () => {
+  await refuses(
+    "list",
+    {},
+    { ...ORG_ME, "POST /v2/users": fail(403) },
+    "HTTP 403",
+  );
 });
 
-Deno.test("removing a factor under dryRun verifies but does not call", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([HUMAN_USER]);
-    if (
-      line(call) ===
-        `POST /v2/users/${HUMAN_USER.userId}/authentication_factors/_search`
-    ) return { result: [{ state: "AUTH_FACTOR_STATE_READY", otp: {} }] };
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.authFactorRemove.execute(
-      { user: "kari", type: "totp", id: undefined, dryRun: true },
-      context,
-    );
-    assertEquals(written[0].data.action, "planned");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
+Deno.test("get stores a user read by id", async () => {
+  const h = await run("get", { user: "301" }, GET_HUMAN);
+  const [w] = h.written();
+  assertEquals([w.name, w.data.email, w.data.action], [
+    "user-kari",
+    "kari@example.org",
+    "observed",
+  ]);
 });
 
-Deno.test("unlinking an identity provider checks the link belongs to the user", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return users([HUMAN_USER]);
-    if (line(call) === `POST /v2/users/${HUMAN_USER.userId}/links/_search`) {
-      return {
-        result: [{ idpId: "idp1", userId: "kari@idp", userName: "kari" }],
-      };
-    }
-    return undefined;
+Deno.test("get refuses a user that is not there", async () => {
+  await refuses("get", { user: "999" }, {
+    "GET /v2/users/999": fail(404, "not found"),
+  }, 'no user "999"');
+});
+
+Deno.test("ensureMachine creates a missing machine user", async () => {
+  const h = await run("ensureMachine", { username: "ci-bot", name: "CI bot" }, {
+    ...ORG_ME,
+    "POST /v2/users": { result: [] },
+    "POST /v2/users/new": { id: "300" },
+    ...GET_MACHINE,
   });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.idpLinkRemove.execute(
-      {
-        user: "kari",
-        idpId: "idp1",
-        externalUserId: "someone-else@idp",
-        dryRun: false,
+  assertEquals(changes(h), ["POST /v2/users/new"]);
+  assertEquals(h.calls.find((c) => c.path === "/v2/users/new")?.body, {
+    organizationId: "100",
+    username: "ci-bot",
+    machine: { name: "CI bot", accessTokenType: "ACCESS_TOKEN_TYPE_BEARER" },
+  });
+  assertEquals(h.written()[0].data.action, "created");
+});
+
+Deno.test("ensureMachine refuses a username held by a human", async () => {
+  const h = await refuses("ensureMachine", { username: "kari", name: "x" }, {
+    ...ORG_ME,
+    "POST /v2/users": { result: [HUMAN] },
+  }, "is not a machine user");
+  assertEquals(changes(h), []);
+});
+
+Deno.test("ensureHuman converges a changed email on an existing human", async () => {
+  const h = await run("ensureHuman", {
+    username: "kari",
+    email: "kari@new.example.org",
+    givenName: "Kari",
+    familyName: "Nordmann",
+  }, {
+    ...ORG_ME,
+    "POST /v2/users": { result: [HUMAN] },
+    "PATCH /v2/users/301": {},
+    ...GET_HUMAN,
+  });
+  assertEquals(changes(h), ["PATCH /v2/users/301"]);
+  assertEquals(h.written()[0].data.action, "updated");
+});
+
+Deno.test("ensureHuman refuses a username held by a machine", async () => {
+  await refuses(
+    "ensureHuman",
+    {
+      username: "ci-bot",
+      email: "a@b",
+      givenName: "A",
+      familyName: "B",
+    },
+    { ...ORG_ME, "POST /v2/users": { result: [MACHINE] } },
+    "not a human",
+  );
+});
+
+Deno.test("update sends only what is given", async () => {
+  const h = await run("update", { user: "300", description: "builds" }, {
+    "GET /v2/users/300": { user: MACHINE },
+    "PATCH /v2/users/300": (c) => {
+      assertEquals(c.body, { machine: { description: "builds" } });
+      return {};
+    },
+  });
+  assertEquals(changes(h), ["PATCH /v2/users/300"]);
+  assertEquals(h.written()[0].data.action, "updated");
+});
+
+Deno.test("update fails when the patch is refused", async () => {
+  await refuses("update", { user: "300", name: "x" }, {
+    ...GET_MACHINE,
+    "PATCH /v2/users/300": fail(400, "invalid"),
+  }, "HTTP 400");
+});
+
+Deno.test("setState locks an active user", async () => {
+  const h = await run("setState", { user: "300", state: "locked" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/lock": {},
+  });
+  assertEquals(changes(h), ["POST /v2/users/300/lock"]);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.previousState, w.data.action], [
+    "state",
+    "user-state-ci-bot",
+    "active",
+    "locked",
+  ]);
+});
+
+Deno.test("setState fails when the state change is refused", async () => {
+  await refuses("setState", { user: "300", state: "inactive" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/deactivate": fail(412, "precondition"),
+  }, "HTTP 412");
+});
+
+Deno.test("delete removes the user and tombstones its record", async () => {
+  const h = await run("delete", { user: "300", confirm: "ci-bot" }, {
+    ...GET_MACHINE,
+    "DELETE /v2/users/300": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/300"]);
+  assertEquals(h.forgotten, ["user-ci-bot"]);
+  assertEquals(h.written()[0].data.deleted, true);
+});
+
+Deno.test("delete refuses a confirm that is not the live username", async () => {
+  const h = await refuses(
+    "delete",
+    { user: "300", confirm: "other" },
+    GET_MACHINE,
+    "refusing to delete username",
+  );
+  assertEquals(changes(h), []);
+});
+
+Deno.test("patCreate stores the token once as a user credential", async () => {
+  const h = await run("patCreate", {
+    user: "300",
+    expirationDate: "2027-01-01T00:00:00Z",
+  }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/pats": { tokenId: "77", token: "minted-pat" },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.secret], [
+    "user-credential",
+    "user-credential-ci-bot-pat-77",
+    "minted-pat",
+  ]);
+  assertNoPlanted(h);
+});
+
+Deno.test("patCreate fails when Zitadel refuses the token", async () => {
+  await refuses("patCreate", { user: "300", expirationDate: "x" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/pats": fail(400, "bad expiry"),
+  }, "bad expiry");
+});
+
+Deno.test("patList stores each token by id, without a value", async () => {
+  const h = await run("patList", { user: "300" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/pats/search": { result: [{ id: "77" }] },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.id], [
+    "credential",
+    "pat-ci-bot-77",
+    "77",
+  ]);
+  assert(!("secret" in w.data));
+});
+
+Deno.test("patList fails when the user cannot be read", async () => {
+  await refuses("patList", { user: "300" }, GONE, "HTTP 500");
+});
+
+Deno.test("patRevoke revokes a token the user holds", async () => {
+  const h = await run("patRevoke", { user: "300", tokenId: "77" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/pats/search": { result: [{ id: "77" }] },
+    "DELETE /v2/users/300/pats/77": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/300/pats/77"]);
+  assertEquals(h.forgotten, ["pat-ci-bot-77"]);
+  assertEquals(h.written()[0].data.action, "revoked");
+});
+
+Deno.test("patRevoke leaves a token the user does not hold", async () => {
+  const h = await run("patRevoke", { user: "300", tokenId: "78" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/pats/search": { result: [{ id: "77" }] },
+  });
+  assertEquals(changes(h), []);
+  assertEquals(h.written()[0].data.action, "unchanged");
+  assert(h.logs().some((l) => l.startsWith("warning:")));
+});
+
+Deno.test("keyCreate stores the generated key JSON decoded", async () => {
+  const h = await run("keyCreate", {
+    user: "300",
+    expirationDate: "2027-01-01T00:00:00Z",
+  }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/keys": {
+      keyId: "88",
+      keyContent: toBase64('{"keyId":"88"}'),
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.secret], [
+    "user-credential-ci-bot-key-88",
+    '{"keyId":"88"}',
+  ]);
+});
+
+Deno.test("keyCreate fails when Zitadel refuses the key", async () => {
+  await refuses("keyCreate", { user: "300", expirationDate: "x" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/keys": fail(400, "bad key"),
+  }, "bad key");
+});
+
+Deno.test("keyList stores each key by id", async () => {
+  const h = await run("keyList", { user: "300" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/keys/search": { result: [{ id: "88" }, { id: "89" }] },
+  });
+  assertEquals(h.written().map((w) => w.name), [
+    "key-ci-bot-88",
+    "key-ci-bot-89",
+  ]);
+});
+
+Deno.test("keyList fails when the search fails", async () => {
+  await refuses("keyList", { user: "300" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/keys/search": fail(403),
+  }, "HTTP 403");
+});
+
+Deno.test("keyDelete deletes a key the user holds", async () => {
+  const h = await run("keyDelete", { user: "300", keyId: "88" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/keys/search": { result: [{ id: "88" }] },
+    "DELETE /v2/users/300/keys/88": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/300/keys/88"]);
+  assertEquals(h.forgotten, ["key-ci-bot-88"]);
+});
+
+Deno.test("keyDelete in a dry run plans and deletes nothing", async () => {
+  const h = await run("keyDelete", { user: "300", keyId: "88", dryRun: true }, {
+    ...GET_MACHINE,
+    "POST /v2/users/keys/search": { result: [{ id: "88" }] },
+  });
+  assertEquals(changes(h), []);
+  assertEquals(h.written()[0].data.action, "planned");
+});
+
+Deno.test("secretGenerate rotates an existing secret", async () => {
+  const h = await run("secretGenerate", { user: "300" }, {
+    "GET /v2/users/300": {
+      user: { ...MACHINE, machine: { ...MACHINE.machine, hasSecret: true } },
+    },
+    "POST /v2/users/300/secret": { clientSecret: "new-secret" },
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.secret, w.data.action], [
+    "user-credential-ci-bot-secret",
+    "new-secret",
+    "rotated",
+  ]);
+});
+
+Deno.test("secretGenerate fails when Zitadel refuses", async () => {
+  await refuses("secretGenerate", { user: "300" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/secret": fail(409, "conflict"),
+  }, "HTTP 409");
+});
+
+Deno.test("secretRemove removes the client secret", async () => {
+  const h = await run("secretRemove", { user: "300" }, {
+    ...GET_MACHINE,
+    "DELETE /v2/users/300/secret": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/300/secret"]);
+  assertEquals(h.written()[0].data.deleted, true);
+});
+
+Deno.test("secretRemove in a dry run removes nothing", async () => {
+  const h = await run(
+    "secretRemove",
+    { user: "300", dryRun: true },
+    GET_MACHINE,
+  );
+  assertEquals(changes(h), []);
+  assertEquals(h.written()[0].data.action, "planned");
+});
+
+Deno.test("metadataSet sends the value base64 and stores it plain", async () => {
+  const h = await run(
+    "metadataSet",
+    { user: "300", key: "team", value: "ops" },
+    {
+      ...GET_MACHINE,
+      "POST /v2/users/300/metadata": (c) => {
+        assertEquals(c.body, {
+          metadata: [{ key: "team", value: toBase64("ops") }],
+        });
+        return {};
       },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-  } finally {
-    fake.restore();
-  }
+    },
+  );
+  const [w] = h.written();
+  assertEquals([w.name, w.data.value], ["metadata-ci-bot-team", "ops"]);
+});
+
+Deno.test("metadataSet fails when Zitadel refuses", async () => {
+  await refuses("metadataSet", { user: "300", key: "k", value: "v" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/metadata": fail(400, "too long"),
+  }, "too long");
+});
+
+Deno.test("metadataList decodes each value", async () => {
+  const h = await run("metadataList", { user: "300" }, {
+    ...GET_MACHINE,
+    "POST /v2/users/300/metadata/search": {
+      metadata: [{ key: "team", value: toBase64("ops") }],
+    },
+  });
+  assertEquals(h.written()[0].data.value, "ops");
+});
+
+Deno.test("metadataList fails when the user cannot be read", async () => {
+  await refuses("metadataList", { user: "300" }, GONE, "HTTP 500");
+});
+
+Deno.test("metadataDelete deletes the keys named", async () => {
+  const h = await run("metadataDelete", { user: "300", keys: ["a", "b"] }, {
+    ...GET_MACHINE,
+    "DELETE /v2/users/300/metadata?keys=a&keys=b": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/300/metadata?keys=a&keys=b"]);
+  assertEquals(h.written()[0].name, "metadata-deletion-ci-bot-a-b");
+});
+
+Deno.test("metadataDelete refuses an empty key list", async () => {
+  await refuses(
+    "metadataDelete",
+    { user: "300", keys: [] },
+    GET_MACHINE,
+    "keys must not be empty",
+  );
+});
+
+Deno.test("passwordResetLinkCreate stores the returned code", async () => {
+  const h = await run("passwordResetLinkCreate", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/password_reset": (c) => {
+      assertEquals(c.body, { returnCode: {} });
+      return { verificationCode: "CODE1" };
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.verificationCode], ["password-reset", "CODE1"]);
+});
+
+Deno.test("passwordResetLinkCreate refuses a machine user", async () => {
+  await refuses(
+    "passwordResetLinkCreate",
+    { user: "300" },
+    GET_MACHINE,
+    "machine user has no password",
+  );
+});
+
+Deno.test("passkeyRegistrationLinkCreate mails a link with the template", async () => {
+  const h = await run("passkeyRegistrationLinkCreate", {
+    user: "301",
+    delivery: "email",
+    urlTemplate: "https://auth.example.org/x?code={{.Code}}",
+  }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/passkeys/registration_link": (c) => {
+      assertEquals(c.body, {
+        sendLink: { urlTemplate: "https://auth.example.org/x?code={{.Code}}" },
+      });
+      return {};
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.delivery, w.data.code], [
+    "passkey-registration",
+    "email",
+    undefined,
+  ]);
+});
+
+Deno.test("passkeyRegistrationLinkCreate refuses a machine user", async () => {
+  await refuses(
+    "passkeyRegistrationLinkCreate",
+    { user: "300" },
+    GET_MACHINE,
+    "machine user has no passkey",
+  );
+});
+
+Deno.test("authFactorList stores factors and a summary per person", async () => {
+  const h = await run("authFactorList", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/authentication_factors/_search": {
+      result: [{ otp: {}, state: "AUTH_FACTOR_STATE_READY" }],
+    },
+    "POST /v2/users/301/passkeys/_search": {
+      result: [{ id: "p1", state: "AUTH_FACTOR_STATE_NOT_READY" }],
+    },
+  });
+  const w = h.written();
+  assertEquals(w.map((x) => x.name), [
+    "auth-factor-kari-totp-one",
+    "auth-factor-kari-passkey-p1",
+    "auth-summary-kari",
+  ]);
+  assertEquals(w[1].data.state, "not-ready");
+  assertEquals([w[2].data.totp, w[2].data.passkeys, w[2].data.mfa], [
+    true,
+    0,
+    true,
+  ]);
+});
+
+Deno.test("authFactorList fails when a factor search fails", async () => {
+  await refuses("authFactorList", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/authentication_factors/_search": fail(403),
+  }, "HTTP 403");
+});
+
+Deno.test("authFactorRemove removes a TOTP the person has", async () => {
+  const h = await run("authFactorRemove", { user: "301", type: "totp" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/authentication_factors/_search": {
+      result: [{ otp: {} }],
+    },
+    "DELETE /v2/users/301/totp": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/301/totp"]);
+  assertEquals(h.forgotten, ["auth-factor-kari-totp-one"]);
+});
+
+Deno.test("authFactorRemove refuses a passkey without its id", async () => {
+  await refuses(
+    "authFactorRemove",
+    { user: "301", type: "passkey" },
+    GET_HUMAN,
+    "needs its id",
+  );
+});
+
+Deno.test("idpLinkList stores each link", async () => {
+  const h = await run("idpLinkList", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/links/_search": {
+      result: [{ idpId: "500", userId: "ext-1", userName: "kari@idp" }],
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.externalUserId], ["idp-link-kari-500", "ext-1"]);
+});
+
+Deno.test("idpLinkList fails when the search fails", async () => {
+  await refuses("idpLinkList", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/links/_search": fail(403),
+  }, "HTTP 403");
+});
+
+Deno.test("idpLinkRemove unlinks a verified link", async () => {
+  const h = await run("idpLinkRemove", {
+    user: "301",
+    idpId: "500",
+    externalUserId: "ext-1",
+  }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/links/_search": {
+      result: [{ idpId: "500", userId: "ext-1" }],
+    },
+    "DELETE /v2/users/301/links/500/ext-1": {},
+  });
+  assertEquals(changes(h), ["DELETE /v2/users/301/links/500/ext-1"]);
+  assertEquals(h.forgotten, ["idp-link-kari-500"]);
+});
+
+Deno.test("idpLinkRemove leaves a link whose external id does not match", async () => {
+  const h = await run("idpLinkRemove", {
+    user: "301",
+    idpId: "500",
+    externalUserId: "someone-else",
+  }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/links/_search": {
+      result: [{ idpId: "500", userId: "ext-1" }],
+    },
+  });
+  assertEquals(changes(h), []);
+  assertEquals(h.written()[0].data.action, "unchanged");
 });

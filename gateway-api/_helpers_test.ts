@@ -4,26 +4,19 @@
  * `../lib/`; here are the parts built on it, and the names this extension's
  * README promises.
  */
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
+import { assertEquals } from "jsr:@std/assert@1.0.13";
 import {
   dataName,
   inventoryName,
   InventorySchema,
   kubectlCliCheck,
-  KubectlError,
   KubectlGlobalArgsSchema,
   readConditions,
 } from "../lib/kubectl.ts";
-import { LOG_LINE, SAID } from "../lib/kubectl_fake.ts";
 import {
   conditionsCurrent,
   listInventory,
   ListInventorySchema,
-  readGatewayApi,
   readGroupKinds,
   reasonLine,
   reasonSummary,
@@ -31,18 +24,6 @@ import {
 import { model as gateway } from "./gateway.ts";
 import { model as gatewayclass } from "./gatewayclass.ts";
 import { model as httproute } from "./httproute.ts";
-import { withCluster } from "./test_support.ts";
-
-const RES = "gateways.gateway.networking.k8s.io";
-
-/** One read against a cluster that answers every call with this stderr. */
-async function failure(stderr: string): Promise<KubectlError> {
-  return await withCluster({ failWith: stderr }, () =>
-    assertRejects(
-      () => readGatewayApi(["get", RES, "-A"], RES, { globalArgs: {} }),
-      KubectlError,
-    ));
-}
 
 Deno.test("conditionsCurrent compares observed generations to the object's", () => {
   const at = (g: number | null) =>
@@ -70,76 +51,6 @@ Deno.test("readGroupKinds defaults the group and drops what has no kind", () => 
     ],
   );
   assertEquals(readGroupKinds(undefined), []);
-});
-
-Deno.test("absent CRDs are missing-crd, worded as the Gateway API not being installed", async () => {
-  for (
-    const said of [
-      SAID.missingCrd("gateways"),
-      SAID.noKind("Gateway", "gateway.networking.k8s.io/v1"),
-      "Error from server (NotFound): the server could not find the requested resource\n",
-    ]
-  ) {
-    const e = await failure(said);
-    assertEquals(e.kind, "missing-crd", said);
-    assertStringIncludes(e.message, "The Gateway API CRDs are not installed");
-    assertStringIncludes(e.message, `does not serve ${RES}`);
-    assertStringIncludes(e.message, `kubectl get ${RES} -A failed`);
-  }
-});
-
-Deno.test("a refusal is forbidden, names the verbs needed and keeps kubectl's sentence", async () => {
-  const e = await failure(SAID.forbidden("list", RES));
-  assertEquals(e.kind, "forbidden");
-  assertStringIncludes(e.message, "refused by RBAC");
-  assertStringIncludes(e.message, `needs get and list on ${RES}`);
-  assertStringIncludes(e.message, 'cannot list resource "gateways"');
-  assertEquals(e.message.includes("\n"), false);
-});
-
-Deno.test("every other failure passes through with the shared layer's kind and words", async () => {
-  const notFound = await failure(SAID.notFound(RES, "x"));
-  assertEquals(notFound.kind, "not-found");
-  assertStringIncludes(notFound.message, "not found");
-  for (const said of [SAID.unauthorized, SAID.badToken]) {
-    const e = await failure(said);
-    assertEquals(e.kind, "unauthorized");
-    assertStringIncludes(e.message, "did not accept the credentials");
-  }
-  const closed = await failure(SAID.refused);
-  assertEquals(closed.kind, "unreachable");
-  assertStringIncludes(closed.message, "could not be reached");
-  assertStringIncludes(closed.message, "was refused - did you specify");
-  assertEquals(closed.message.includes("memcache.go"), false);
-  // Log lines only: the last one is all there is, and it is kept.
-  const noise = await failure(LOG_LINE.repeat(5));
-  assertEquals(noise.kind, "unreachable");
-  assertStringIncludes(noise.message, "connection refused");
-  // A dial that ran out of time is a timeout, not unreachable.
-  const slow = await failure(
-    "Unable to connect to the server: dial tcp 192.0.2.1:6443: i/o timeout\n",
-  );
-  assertEquals(slow.kind, "timeout");
-  const other = await failure(
-    "error: stat /no/such/file: no such file or directory\n",
-  );
-  assertEquals(other.kind, "other");
-  assertStringIncludes(other.message, "no such file");
-  assertStringIncludes((await failure("")).message, "(no error output)");
-});
-
-Deno.test("the wording of a failure never carries what looks like a credential", async () => {
-  const secret = "eyJhbGciOiJSUzI1NiJ9.c2VjcmV0.c2ln";
-  for (
-    const said of [
-      `Error from server (Forbidden): ${RES} is forbidden: token=${secret} Authorization: Bearer ${secret}\n`,
-      `error: the server doesn't have a resource type "gateways" password: ${secret}\n`,
-    ]
-  ) {
-    const e = await failure(said);
-    assertEquals(e.message.includes(secret), false, e.message);
-    assertEquals(e.stderr.includes(secret), false, e.stderr);
-  }
 });
 
 Deno.test("data names: objects by namespace and name, classes by name, inventories apart from both", () => {

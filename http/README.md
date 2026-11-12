@@ -189,15 +189,16 @@ deno test --allow-env --allow-read --allow-net
 HTTP_E2E=1 deno test --allow-env --allow-read --allow-net
 ```
 
-The unit tests run the probe against a local server for every outcome: an
-answer, a wrong status, a missing body text, redirects followed, capped and
-refused, nothing listening, an answer slower than the timeout, and a chain that
-does not verify. `endpoint_json_test.ts` does the same for `bodyJson` against a
-server that refuses anything but the plain GET the type promises, and spends
-most of its tests on what must not pass. [smoke/](./smoke/) holds the same as
-live runs through swamp. With `HTTP_E2E=1` one test checks `HTTP_E2E_URL`
-(default `https://example.org/`) over a verified chain and sees
-`self-signed.badssl.com` recorded as `tls: failed`.
+The unit tests run `health` through swamp's `createModelTestContext` with a stub
+fetcher injected at the `__setFetcher` seam: an answer that matches after a
+redirect, a wrong status with a JSON field that differs (and no body value in
+the record), a chain that does not verify, and a redirect not followed. They
+also cover the pure parts: the arguments check, the failure kinds and error
+text, the JSON judging of `bodyJson`, and a probe of a port where nothing
+listens. [smoke/](./smoke/) runs the outcomes live through swamp. With
+`HTTP_E2E=1` one test checks `HTTP_E2E_URL` (default `https://example.org/`)
+over a verified chain and sees `self-signed.badssl.com` recorded as
+`tls: failed`.
 
 ## License
 

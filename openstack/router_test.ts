@@ -1,9 +1,8 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model, normalizeRouter } from "./router.ts";
-import { EXT_NET, idRows, ROUTER_SHOW, SUBNET_SHOW } from "./fixtures.ts";
-import { installFake, line, makeContext, notFound } from "./test_support.ts";
+import { fail, NOT_FOUND, withStub } from "./test_support.ts";
+import { EXT_NET, ROUTER_SHOW, SUBNET_SHOW } from "./fixtures.ts";
 
-const ID = ROUTER_SHOW.id;
 const SUBNET = SUBNET_SHOW.id;
 
 Deno.test("normalizeRouter flattens gateway info, interfaces and routes", () => {
@@ -33,154 +32,282 @@ Deno.test("normalizeRouter flattens gateway info, interfaces and routes", () => 
   assertEquals(bare.snatEnabled, false);
 });
 
-Deno.test("list and create store router-<name>; create passes the gateway", async () => {
-  let created = false;
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "router list -c ID") return idRows(ID);
-    if (l === "router show private-gw") {
-      return created ? ROUTER_SHOW : notFound("router", "private-gw");
-    }
-    if (
-      l === "router create --external-gateway ext-net --enable-snat private-gw"
-    ) {
-      created = true;
-      return ROUTER_SHOW;
-    }
-    if (l === `router show ${ID}`) return ROUTER_SHOW;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({}, context);
-    await model.methods.create.execute({
-      name: "private-gw",
-      externalGateway: "ext-net",
-      snat: true,
-    }, context);
-    assertEquals(written.map((w) => w.name), [
-      "router-private-gw",
-      "router-private-gw",
+// ───── the methods, through createModelTestContext with a stub runner ─────
+
+const M = model.methods;
+const ID = ROUTER_SHOW.id;
+const NAME = "router-private-gw";
+const BARE = { ...ROUTER_SHOW, interfaces_info: [], routes: [] };
+const ROUTE = { destination: "203.0.113.0/24", nexthop: "192.0.2.254" };
+
+Deno.test("list shows each router and writes one record each", () =>
+  withStub([
+    ["router list -c ID --name private-gw", { json: [{ ID }] }],
+    [`router show ${ID}`, { json: ROUTER_SHOW }],
+  ], async (h) => {
+    await M.list.execute({ name: "private-gw" }, h.context);
+    assertEquals(
+      h.written().map((w) => [w.spec, w.name, w.data.externalNetworkId]),
+      [["router", NAME, EXT_NET]],
+    );
+    assertEquals(h.logs().at(-1)?.message, "stored {count} routers");
+  }));
+
+Deno.test("list fails when the CLI does, and writes nothing", () =>
+  withStub([["router list", fail("Unauthorized (HTTP 401)")]], async (h) => {
+    await assertRejects(
+      () => M.list.execute({}, h.context),
+      Error,
+      "router list failed (exit 1)",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("get writes the router it reads", () =>
+  withStub([["router show private-gw", { json: ROUTER_SHOW }]], async (h) => {
+    await M.get.execute({ router: "private-gw" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name]), [["router", NAME]]);
+  }));
+
+Deno.test("get fails on a missing router, and writes nothing", () =>
+  withStub([["router show nope", NOT_FOUND]], async (h) => {
+    await assertRejects(
+      () => M.get.execute({ router: "nope" }, h.context),
+      Error,
+      "router show nope failed",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("create makes a router with a gateway and writes it", () =>
+  withStub([
+    ["router show private-gw", NOT_FOUND],
+    ["router create --external-gateway ext-net --enable-snat private-gw", {
+      json: { id: ID },
+    }],
+    [`router show ${ID}`, { json: ROUTER_SHOW }],
+  ], async (h) => {
+    await M.create.execute(
+      { name: "private-gw", externalGateway: "ext-net", snat: true },
+      h.context,
+    );
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.snatEnabled]), [
+      ["router", NAME, true],
     ]);
-  } finally {
-    fake.restore();
-  }
-});
+  }));
 
-Deno.test("addSubnet resolves the subnet id, skips when attached, otherwise attaches", async () => {
-  const other = "11111111-2222-4333-8444-555555555555";
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "router show private-gw" || l === `router show ${ID}`) {
-      return ROUTER_SHOW;
-    }
-    if (l === "subnet show private-subnet") return SUBNET_SHOW;
-    if (l === `router add subnet ${ID} ${other}`) return "";
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.addSubnet.execute({
-      router: "private-gw",
-      subnet: "private-subnet",
-    }, context);
-    assertEquals(fake.calls.length, 2);
-    await model.methods.addSubnet.execute({
-      router: "private-gw",
-      subnet: other,
-    }, context);
-    assertEquals(fake.calls.length, 5);
-    assertEquals(written.length, 2);
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("create fails when the CLI refuses, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", NOT_FOUND],
+    [
+      "router create",
+      fail("Quota exceeded for resources: ['router'] (HTTP 409)"),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () => M.create.execute({ name: "private-gw" }, h.context),
+      Error,
+      "Quota exceeded",
+    );
+    assertEquals(h.written(), []);
+  }));
 
-Deno.test("removeSubnet detaches only when attached", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "router show private-gw" || l === `router show ${ID}`) {
-      return ROUTER_SHOW;
-    }
-    if (l === `router remove subnet ${ID} ${SUBNET}`) return "";
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.removeSubnet.execute({
+Deno.test("update clears the gateway, renames and drops the old record", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    [`router unset --external-gateway ${ID}`, { stdout: "" }],
+    [`router set --name edge ${ID}`, { stdout: "" }],
+    [`router show ${ID}`, {
+      json: { ...ROUTER_SHOW, name: "edge", external_gateway_info: null },
+    }],
+  ], async (h) => {
+    await M.update.execute({
       router: "private-gw",
-      subnet: SUBNET,
-    }, context);
-    assertEquals(fake.calls.map(line), [
-      "router show private-gw",
-      `router remove subnet ${ID} ${SUBNET}`,
-      `router show ${ID}`,
-    ]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("addRoute and removeRoute are idempotent and use router set/unset --route", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "router show private-gw" || l === `router show ${ID}`) {
-      return ROUTER_SHOW;
-    }
-    if (
-      l ===
-        `router set --route destination=198.51.100.0/24,gateway=192.0.2.253 ${ID}`
-    ) return "";
-    if (
-      l ===
-        `router unset --route destination=203.0.113.0/24,gateway=192.0.2.254 ${ID}`
-    ) return "";
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.addRoute.execute({
-      router: "private-gw",
-      route: { destination: "203.0.113.0/24", nexthop: "192.0.2.254" },
-    }, context);
-    assertEquals(fake.calls.length, 1);
-    await model.methods.addRoute.execute({
-      router: "private-gw",
-      route: { destination: "198.51.100.0/24", nexthop: "192.0.2.253" },
-    }, context);
-    assertEquals(fake.calls.length, 4);
-    await model.methods.removeRoute.execute({
-      router: "private-gw",
-      route: { destination: "203.0.113.0/24", nexthop: "192.0.2.254" },
-    }, context);
-    assertEquals(fake.calls.length, 7);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("update clears the gateway with router unset before setting", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "router show private-gw" || l === `router show ${ID}`) {
-      return ROUTER_SHOW;
-    }
-    if (l === `router unset --external-gateway ${ID}`) return "";
-    if (l === `router set --description edge ${ID}`) return "";
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await model.methods.update.execute({
-      router: "private-gw",
+      name: "edge",
       clearExternalGateway: true,
-      description: "edge",
-    }, context);
-    assertEquals(fake.calls.map(line).slice(1, 3), [
-      `router unset --external-gateway ${ID}`,
-      `router set --description edge ${ID}`,
-    ]);
-  } finally {
-    fake.restore();
-  }
-});
+    }, h.context);
+    assertEquals(h.deleted(), [NAME]);
+    assertEquals(
+      h.written().map((w) => [w.name, w.data.externalNetworkId]),
+      [["router-edge", ""]],
+    );
+  }));
+
+Deno.test("update fails when the set fails, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    ["router set", fail("Forbidden (HTTP 403)")],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.update.execute({
+          router: "private-gw",
+          snat: false,
+          clearExternalGateway: false,
+        }, h.context),
+      Error,
+      "router set failed",
+    );
+    assertEquals(h.deleted(), []);
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("addSubnet attaches a subnet and stores the router as re-read", () =>
+  withStub([
+    ["router show private-gw", { json: BARE }],
+    [`router add subnet ${ID} ${SUBNET}`, { stdout: "" }],
+    [`router show ${ID}`, { json: ROUTER_SHOW }],
+  ], async (h) => {
+    await M.addSubnet.execute(
+      { router: "private-gw", subnet: SUBNET },
+      h.context,
+    );
+    const [w] = h.written();
+    assertEquals(
+      (w.data.interfaces as { subnetId: string }[]).map((i) => i.subnetId),
+      [SUBNET],
+    );
+  }));
+
+Deno.test("addSubnet fails when the attach fails, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", { json: BARE }],
+    [
+      "router add subnet",
+      fail("Router already has a port on subnet (HTTP 400)"),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.addSubnet.execute(
+          { router: "private-gw", subnet: SUBNET },
+          h.context,
+        ),
+      Error,
+      "router add subnet",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("removeSubnet detaches an attached subnet and stores the router", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    [`router remove subnet ${ID} ${SUBNET}`, { stdout: "" }],
+    [`router show ${ID}`, { json: BARE }],
+  ], async (h) => {
+    await M.removeSubnet.execute(
+      { router: "private-gw", subnet: SUBNET },
+      h.context,
+    );
+    assertEquals(h.written().map((w) => [w.name, w.data.interfaces]), [[
+      NAME,
+      [],
+    ]]);
+  }));
+
+Deno.test("removeSubnet fails when the detach fails, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    [
+      "router remove subnet",
+      fail("Router interface in use by floating IPs (HTTP 409)"),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.removeSubnet.execute(
+          { router: "private-gw", subnet: SUBNET },
+          h.context,
+        ),
+      Error,
+      "in use by floating IPs",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("addRoute sets a missing route and stores the router", () =>
+  withStub([
+    ["router show private-gw", { json: BARE }],
+    [
+      `router set --route destination=203.0.113.0/24,gateway=192.0.2.254 ${ID}`,
+      { stdout: "" },
+    ],
+    [`router show ${ID}`, { json: ROUTER_SHOW }],
+  ], async (h) => {
+    await M.addRoute.execute({ router: "private-gw", route: ROUTE }, h.context);
+    assertEquals(h.written().map((w) => w.data.routes), [[ROUTE]]);
+  }));
+
+Deno.test("addRoute fails when the set fails, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", { json: BARE }],
+    [
+      "router set --route",
+      fail(
+        "Invalid input for routes: nexthop is not connected with router (HTTP 400)",
+      ),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.addRoute.execute({ router: "private-gw", route: ROUTE }, h.context),
+      Error,
+      "nexthop is not connected",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("removeRoute unsets a present route and stores the router", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    [
+      `router unset --route destination=203.0.113.0/24,gateway=192.0.2.254 ${ID}`,
+      { stdout: "" },
+    ],
+    [`router show ${ID}`, { json: BARE }],
+  ], async (h) => {
+    await M.removeRoute.execute(
+      { router: "private-gw", route: ROUTE },
+      h.context,
+    );
+    assertEquals(h.written().map((w) => w.data.routes), [[]]);
+  }));
+
+Deno.test("removeRoute fails when the unset fails, and writes nothing", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    ["router unset --route", fail("Forbidden (HTTP 403)")],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.removeRoute.execute(
+          { router: "private-gw", route: ROUTE },
+          h.context,
+        ),
+      Error,
+      "router unset failed",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("delete deletes the router and drops its stored resource", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    [`router delete ${ID}`, { stdout: "" }],
+  ], async (h) => {
+    await M.delete.execute({ router: "private-gw" }, h.context);
+    assertEquals(h.deleted(), [NAME]);
+  }));
+
+Deno.test("delete fails on a router with interfaces, and drops nothing", () =>
+  withStub([
+    ["router show private-gw", { json: ROUTER_SHOW }],
+    ["router delete", fail("Router still has ports (HTTP 409)")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.delete.execute({ router: "private-gw" }, h.context),
+      Error,
+      "still has ports",
+    );
+    assertEquals(h.deleted(), []);
+  }));

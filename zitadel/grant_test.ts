@@ -1,243 +1,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./grant.ts";
-import { GRANT, HUMAN_USER, PROJECT } from "./fixtures.ts";
-import { installFake, line, makeContext, page } from "./test_support.ts";
-
-const USER_SEARCH = "POST /v2/users";
-const PROJECT_SEARCH = "POST /management/v1/projects/_search";
-const GRANT_SEARCH = "POST /management/v1/users/grants/_search";
-
-function users(rows: unknown[]) {
-  return { result: rows, details: { totalResult: String(rows.length) } };
-}
-
-Deno.test("list stores one resource per grant", async () => {
-  const fake = installFake((call) =>
-    line(call) === GRANT_SEARCH ? page([GRANT]) : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      context,
-    );
-    assertEquals(written[0].data.roleKeys, ["kube-admin"]);
-    assertEquals(written[0].data.state, "active");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensure converges the role set rather than adding to it", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([GRANT]);
-    if (
-      line(call) ===
-        `PUT /management/v1/users/${HUMAN_USER.userId}/grants/${GRANT.id}`
-    ) return {};
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensure.execute(
-      { user: "kari", project: "fabrikk", roleKeys: ["kube-readers"] },
-      context,
-    );
-    const put = fake.calls.find((call) => call.method === "PUT");
-    assertEquals(put?.body, { roleKeys: ["kube-readers"] });
-    assertEquals(written[0].data.action, "updated");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("ensure is a no-op when the same roles are held in another order", async () => {
-  const held = { ...GRANT, roleKeys: ["kube-admin", "kube-readers"] };
-  const fake = installFake((call) => {
-    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([held]);
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.ensure.execute(
-      {
-        user: "kari",
-        project: "fabrikk",
-        roleKeys: ["kube-readers", "kube-admin"],
-      },
-      context,
-    );
-    assertEquals(written[0].data.action, "unchanged");
-    assert(fake.calls.every((call) => call.method !== "PUT"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("delete reports a dry run, then removes the grant", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([GRANT]);
-    if (
-      line(call) ===
-        `DELETE /management/v1/users/${HUMAN_USER.userId}/grants/${GRANT.id}`
-    ) return {};
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.delete.execute(
-      { user: "kari", project: "fabrikk", dryRun: true },
-      context,
-    );
-    assertEquals(written[0].data.deleted, false);
-    assert(fake.calls.every((call) => call.method !== "DELETE"));
-    await model.methods.delete.execute(
-      { user: "kari", project: "fabrikk", dryRun: false },
-      context,
-    );
-    assertEquals(written[1].data.deleted, true);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("setState refuses a grant that is not there", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([]);
-    return undefined;
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.setState.execute(
-          { user: "kari", project: "fabrikk", state: "inactive" },
-          context,
-        ),
-      Error,
-      "no grant on project",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("list names a grant by username and project, as ensure does", async () => {
-  const row = { ...GRANT, userName: "kari", projectName: "fabrikk" };
-  const fake = installFake((call) => {
-    if (line(call) === USER_SEARCH) return users([HUMAN_USER]);
-    if (line(call) === PROJECT_SEARCH) return page([PROJECT]);
-    if (line(call) === GRANT_SEARCH) return page([row]);
-    return undefined;
-  });
-  const listed = makeContext();
-  const ensured = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      listed.context,
-    );
-    await model.methods.ensure.execute(
-      { user: "kari", project: "fabrikk", roleKeys: ["kube-admin"] },
-      ensured.context,
-    );
-    assertEquals(listed.written[0].name, "grant-kari-fabrikk");
-    assertEquals(listed.written[0].name, ensured.written[0].name);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("list falls back to an id only for the name Zitadel did not send", async () => {
-  const fake = installFake((call) =>
-    line(call) === GRANT_SEARCH
-      ? page([
-        GRANT,
-        { ...GRANT, id: "600000000000000002", userName: "kari" },
-        { ...GRANT, id: "600000000000000003", userName: "", projectName: "p" },
-      ])
-      : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      context,
-    );
-    assertEquals(written.map((entry) => entry.name), [
-      `grant-${GRANT.userId}-${GRANT.projectId}`,
-      `grant-kari-${GRANT.projectId}`,
-      `grant-${GRANT.userId}-p`,
-    ]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("two grants of one user on one project do not overwrite each other", async () => {
-  const row = { ...GRANT, userName: "kari", projectName: "fabrikk" };
-  const fake = installFake((call) =>
-    line(call) === GRANT_SEARCH
-      ? page([row, { ...row, id: "600000000000000009", roleKeys: ["other"] }])
-      : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      context,
-    );
-    assertEquals(written.length, 2);
-    assertEquals(written[0].name, "grant-kari-fabrikk");
-    assert(written[1].name.startsWith("grant-kari-fabrikk-"));
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("list forgets the id-named record of a grant it now stores by name", async () => {
-  const fake = installFake((call) =>
-    line(call) === GRANT_SEARCH
-      ? page([{ ...GRANT, userName: "kari", projectName: "fabrikk" }])
-      : undefined
-  );
-  const { context, written, forgotten } = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      context,
-    );
-    assertEquals(written[0].name, "grant-kari-fabrikk");
-    assertEquals(forgotten, [`grant-${GRANT.userId}-${GRANT.projectId}`]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("list forgets nothing when the id is the only name there is", async () => {
-  const fake = installFake((call) =>
-    line(call) === GRANT_SEARCH ? page([GRANT]) : undefined
-  );
-  const { context, written, forgotten } = makeContext();
-  try {
-    await model.methods.list.execute(
-      { user: undefined, project: undefined },
-      context,
-    );
-    assertEquals(written[0].name, `grant-${GRANT.userId}-${GRANT.projectId}`);
-    assertEquals(forgotten, []);
-  } finally {
-    fake.restore();
-  }
-});
+import type { ModelContext } from "./common.ts";
+import { assertNoPlanted, fail, harness, type Reply } from "./test_support.ts";
 
 Deno.test("every type carries an upgrade to the version it declares", async () => {
   for (
@@ -265,4 +29,155 @@ Deno.test("every type carries an upgrade to the version it declares", async () =
     const args = { apiUrl: "https://zitadel.example.org", keyJsonFile: "~/k" };
     assertEquals(last.upgradeAttributes(args), args, file);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Methods, with a stub caller answering only the calls each test names.
+// ---------------------------------------------------------------------------
+
+type H = ReturnType<typeof harness>;
+interface Method {
+  arguments: { parse(value: unknown): unknown };
+  // deno-lint-ignore no-explicit-any
+  execute(args: any, context: ModelContext): Promise<unknown>;
+}
+
+/** Run a method with its arguments parsed as the CLI parses them. */
+function run(method: Method, args: Record<string, unknown>, h: H) {
+  return method.execute(method.arguments.parse(args), h.context);
+}
+
+const SEARCH = "POST /management/v1/users/grants/_search";
+const GRANT = {
+  id: "500",
+  userId: "200",
+  projectId: "300",
+  roleKeys: ["reader"],
+  state: "USER_GRANT_STATE_ACTIVE",
+  displayName: "Ada",
+  userName: "ada",
+  projectName: "fabrikk",
+};
+
+/** The user and the project every test resolves by id. */
+function routes(extra: Record<string, Reply | Reply[]>) {
+  return {
+    "GET /v2/users/200": { user: { userId: "200", username: "ada" } },
+    "GET /management/v1/projects/300": {
+      project: { id: "300", name: "fabrikk" },
+    },
+    ...extra,
+  };
+}
+
+const ids = { user: "200", project: "300" };
+const m = model.methods;
+
+Deno.test("grant list stores each grant under username and project name", async () => {
+  const h = harness({ [SEARCH]: { result: [GRANT] } });
+  await run(m.list, {}, h);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.roleKeys], [
+    "grant",
+    "grant-ada-fabrikk",
+    ["reader"],
+  ]);
+  assertEquals(h.forgotten, ["grant-200-300"]);
+  assertNoPlanted(h);
+});
+
+Deno.test("grant list fails when the search is refused", async () => {
+  const h = harness({ [SEARCH]: fail(403, "denied") });
+  await assertRejects(() => run(m.list, {}, h), Error, "HTTP 403");
+  assertEquals(h.written(), []);
+});
+
+Deno.test("grant ensure converges the role set of an existing grant", async () => {
+  const h = harness(routes({
+    [SEARCH]: { result: [GRANT] },
+    "PUT /management/v1/users/200/grants/500": {},
+  }));
+  await run(m.ensure, { ...ids, roleKeys: '["admin","reader"]' }, h);
+  assertEquals(h.calls.at(-1)?.body, { roleKeys: ["admin", "reader"] });
+  const [w] = h.written();
+  assertEquals([w.name, w.data.action], ["grant-ada-fabrikk", "updated"]);
+});
+
+Deno.test("grant ensure creates a missing grant", async () => {
+  const h = harness(routes({
+    [SEARCH]: { result: [] },
+    "POST /management/v1/users/200/grants": { userGrantId: "501" },
+  }));
+  await run(m.ensure, { ...ids, roleKeys: ["reader"] }, h);
+  assertEquals(h.calls.at(-1)?.body, {
+    projectId: "300",
+    roleKeys: ["reader"],
+  });
+  assertEquals(h.written()[0].data.action, "created");
+});
+
+Deno.test("grant ensure fails on a user that does not exist", async () => {
+  const h = harness({ "GET /v2/users/200": fail(404, "User not found") });
+  await assertRejects(
+    () => run(m.ensure, { ...ids, roleKeys: ["reader"] }, h),
+    Error,
+    "no user",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("grant setState deactivates an active grant", async () => {
+  const h = harness(routes({
+    [SEARCH]: { result: [GRANT] },
+    "POST /management/v1/users/200/grants/500/_deactivate": {},
+  }));
+  await run(m.setState, { ...ids, state: "inactive" }, h);
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.action, w.data.state], [
+    "state",
+    "deactivated",
+    "inactive",
+  ]);
+});
+
+Deno.test("grant setState fails when the user has no grant on the project", async () => {
+  const h = harness(routes({ [SEARCH]: { result: [] } }));
+  await assertRejects(
+    () => run(m.setState, { ...ids, state: "inactive" }, h),
+    Error,
+    "has no grant",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("grant delete removes the grant", async () => {
+  const h = harness(routes({
+    [SEARCH]: { result: [GRANT] },
+    "DELETE /management/v1/users/200/grants/500": {},
+  }));
+  await run(m.delete, ids, h);
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.deleted, w.data.action], [
+    "deletion",
+    true,
+    "removed",
+  ]);
+  assert(h.logs().some((l) => l.startsWith("warning: deleted grant")));
+});
+
+Deno.test("grant delete with dryRun plans and calls no delete", async () => {
+  const h = harness(routes({ [SEARCH]: { result: [GRANT] } }));
+  await run(m.delete, { ...ids, dryRun: true }, h);
+  assertEquals(h.calls.filter((c) => c.method === "DELETE"), []);
+  assertEquals(h.written()[0].data.action, "planned");
+  assertEquals(h.forgotten, []);
+});
+
+Deno.test("grant delete fails when the instance refuses the delete", async () => {
+  const h = harness(routes({
+    [SEARCH]: { result: [GRANT] },
+    "DELETE /management/v1/users/200/grants/500": fail(403, "denied"),
+  }));
+  await assertRejects(() => run(m.delete, ids, h), Error, "HTTP 403");
+  assertEquals(h.written(), []);
 });

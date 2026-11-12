@@ -134,11 +134,12 @@ carry a line of it.
 
 ## What the suite does not show
 
-These are shown against the fake `kubectl` of the unit tests only:
+These are not shown by a live test:
 
 - The refusal of a patch whose `resourceVersion` is stale. The method reads and
   patches in one go, and no real sequence places a change between the two
-  without a hook in the code.
+  without a hook in the code. A unit test pins its message for a stubbed
+  `Conflict` answer.
 - A Certificate deleted during the poll of `renew`, a cancelled run, a `kubectl`
   that hangs, and a patch whose answer never arrives.
 - A server that repeats the patch body in its error.

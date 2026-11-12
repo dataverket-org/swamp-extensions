@@ -29,7 +29,7 @@ export interface ApiResult {
   body: unknown;
 }
 
-/** The authenticated-call seam; swapped for a fake in tests. */
+/** The authenticated-call seam; a test injects a stub client in its place. */
 export type Caller = (call: ApiCall) => Promise<ApiResult>;
 
 /** The `@dataverket/github` global arguments this module reads. */

@@ -5,14 +5,6 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.13";
-import type { FakeTime } from "../lib/cli_fake.ts";
-import {
-  isCancelled,
-  KUBECTL_CALL_LIMIT_MS,
-  KubectlError,
-} from "../lib/kubectl.ts";
-import type { FakeKubectl, KubectlCall } from "../lib/kubectl_fake.ts";
-import { RESOURCES } from "./_helpers.ts";
 import {
   backupReason,
   BackupSchema,
@@ -21,12 +13,9 @@ import {
   scheduledBackupOf,
 } from "./_backup_record.ts";
 import {
-  CREATE_LIMIT_MS,
   CreateArgsSchema,
   desiredSpec,
-  MAX_WAIT_SECONDS,
-  model as backup,
-  OPAQUE_MIN_LENGTH,
+  model,
   refusal,
   specDifferences,
 } from "./backup.ts";
@@ -39,27 +28,10 @@ import {
   clusterThree,
   scheduled,
 } from "./fixtures.ts";
-import {
-  type Answer,
-  everything,
-  forbidden,
-  forbiddenList,
-  getArgs,
-  HOSTILE,
-  list,
-  listCall,
-  notFound,
-  PLANTED,
-  SAID,
-  withScript,
-} from "./test_support.ts";
+import { PLANTED } from "./test_support.ts";
+import { forbidden, harness, list, notFound } from "./stub_test.ts";
 
-const C = RESOURCES.cluster;
-const B = RESOURCES.backup;
-const CREATE = ["create", "-f", "-", "-n", "pg"];
 const PLUGIN = "barman-cloud.cloudnative-pg.io";
-type Fake = FakeKubectl & FakeTime;
-const MISSING_CRD = "the CRDs that define it are not installed";
 
 function noSecret(text: string): void {
   for (const v of Object.values(PLANTED)) {
@@ -440,797 +412,6 @@ Deno.test("a Cluster is refused for a method it is not configured for", () => {
   );
 });
 
-Deno.test("list records every Backup, or the ones of one Cluster", async () => {
-  const all = list([
-    backupCompleted,
-    backupFailed,
-    scheduled("n-1", "2026-11-10T03:30:00Z", "completed"),
-  ]);
-  await withScript(
-    [{ args: listCall(B, ""), out: all }],
-    { namespace: "" },
-    async (c) => {
-      const r = await backup.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 4);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["backup", "pg--manual-1"],
-        ["backup", "pg--bad-1"],
-        ["backup", "pg--n-1"],
-        ["inventory", "inventory_all"],
-      ]);
-      for (const w of c.written.slice(0, 3)) {
-        BackupSchema.strict().parse(w.data);
-      }
-      noSecret(everything(c));
-    },
-  );
-  await withScript(
-    [{ args: listCall(B, "pg"), out: all }],
-    { namespace: "pg" },
-    async (c) => {
-      await backup.methods.list.execute({ cluster: "bad" }, c.context);
-      assertEquals(c.written.map((w) => w.name), ["pg--bad-1"]);
-    },
-  );
-});
-
-Deno.test("list and get fail by name on a broken call and write nothing", async () => {
-  const broken: Array<[Answer, string]> = [
-    [forbiddenList(B, "pg"), "(Forbidden)"],
-    [{ fail: SAID.missingCrd("backups") }, MISSING_CRD],
-    [{ out: "not json" }, "did not print JSON (8 characters of output)"],
-    [{ out: { items: "x" } }, "did not return a list"],
-    [{ out: { kind: "Status", items: [] } }, "did not return a list"],
-    [{ out: list([null]) }, "item 0 is not an object"],
-    [{ out: list([clusterOne]) }, 'item 0 is of kind "Cluster", not Backup'],
-    [
-      { out: list([{ kind: "Backup", metadata: { namespace: "pg" } }]) },
-      "a Backup without a name or namespace",
-    ],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ fail: SAID.unauthorized }, "did not accept the credentials"],
-    [{ fail: SAID.badToken }, "did not accept the credentials"],
-    [{ fail: SAID.refused }, "could not be reached"],
-    [{ fail: SAID.requestTimeout }, "no answer in time"],
-    [{ notInstalled: true }, "kubectl is not on PATH"],
-  ];
-  for (const [answer, text] of broken) {
-    await withScript([{ args: listCall(B, "pg"), ...answer }], {
-      namespace: "pg",
-    }, async (c) => {
-      const e = await assertRejects(
-        () => backup.methods.list.execute({}, c.context),
-        Error,
-      );
-      assertStringIncludes(e.message, text);
-      assertEquals(c.written, []);
-    });
-  }
-  for (
-    const [answer, text] of [
-      [{ fail: notFound(B, "gone") }, '"gone" not found'],
-      [{ fail: forbidden("get", B, "pg") }, "(Forbidden)"],
-      [{ out: "" }, "did not print JSON (no output)"],
-      [{ hang: true }, "no answer within 35 seconds"],
-      [{ fail: SAID.unauthorized }, "did not accept the credentials"],
-    ] as Array<[Answer, string]>
-  ) {
-    await withScript([{ args: getArgs(B, "gone", "pg"), ...answer }], {
-      namespace: "pg",
-    }, async (c) => {
-      const e = await assertRejects(
-        () => backup.methods.get.execute({ name: "gone" }, c.context),
-        Error,
-      );
-      assertStringIncludes(e.message, text);
-      assertEquals(c.written, []);
-    });
-  }
-});
-
-Deno.test("get records a failed Backup without failing", async () => {
-  await withScript(
-    [{ args: getArgs(B, "bad-1", "pg"), out: backupFailed }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await backup.methods.get.execute({ name: "bad-1" }, c.context);
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals((c.written[0].data as { failed: boolean }).failed, true);
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("hostile names, clusters and namespaces are refused before anything is spawned", async () => {
-  for (const bad of HOSTILE) {
-    await withScript([], { namespace: "pg" }, async (c, s) => {
-      await assertRejects(
-        () => backup.methods.get.execute({ name: bad }, c.context),
-        Error,
-      );
-      await assertRejects(
-        () => backup.methods.list.execute({ cluster: bad }, c.context),
-        Error,
-        "is not a Kubernetes object name",
-      );
-      await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: bad || "-", cluster: "one" }),
-            c.context,
-          ),
-        Error,
-        "is not a Kubernetes object name",
-      );
-      await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: bad || "-" }),
-            c.context,
-          ),
-        Error,
-        "is not a Kubernetes object name",
-      );
-      if (bad !== "") {
-        await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one", namespace: bad }),
-              c.context,
-            ),
-          Error,
-          "is not a Kubernetes namespace name",
-        );
-      }
-      assertEquals(s.calls, []);
-      assertEquals(c.written, []);
-    });
-  }
-});
-
-Deno.test("create needs a namespace", async () => {
-  await withScript([], { namespace: "" }, async (c) => {
-    await assertRejects(
-      () =>
-        backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        ),
-      Error,
-      "namespace is required for create",
-    );
-  });
-});
-
-Deno.test("create checks the Cluster, creates the Backup, waits and records it completed", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-      { args: getArgs(B, "b1", "pg"), out: live("running") },
-      {
-        args: getArgs(B, "b1", "pg"),
-        out: live("completed", { backupId: "id1" }),
-      },
-    ],
-    { namespace: "pg", kubeconfig: "/tmp/kc", context: "kind-x" },
-    async (c, s) => {
-      const r = await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written.length, 1);
-      assertEquals([c.written[0].spec, c.written[0].name], [
-        "backup",
-        "pg--b1",
-      ]);
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      BackupSchema.strict().parse(d);
-      assertEquals([d.completed, d.backupId], [true, "id1"]);
-      assertEquals(s.slept, [5000, 5000]);
-      assertStringIncludes(c.logs.at(-1)!, "Backup b1 completed");
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("create sends the plugin request as the CRD spells it", async () => {
-  const spec = {
-    cluster: { name: "three" },
-    method: "plugin",
-    target: "primary",
-    pluginConfiguration: { name: PLUGIN },
-  };
-  await withScript(
-    [
-      { args: getArgs(C, "three", "pg"), out: clusterThree },
-      { args: getArgs(B, "p1", "pg"), fail: notFound(B, "p1") },
-      {
-        args: CREATE,
-        stdin: manifest("p1", spec),
-        out: { ...manifest("p1", spec), status: { phase: "completed" } },
-      },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await backup.methods.create.execute(
-        args({
-          name: "p1",
-          cluster: "three",
-          method: "plugin",
-          target: "primary",
-          pluginConfiguration: { name: PLUGIN },
-        }),
-        c.context,
-      );
-      assertEquals(s.slept, []);
-      assertEquals(
-        (c.written[0].data as { pluginName: string }).pluginName,
-        PLUGIN,
-      );
-    },
-  );
-});
-
-Deno.test("create twice with the same name and request creates once", async () => {
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), out: live("completed") },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(c.written.length, 1);
-      assertEquals(s.slept, []);
-      assert(
-        c.logs.some((l) => l.includes("already exists with the same request")),
-      );
-      assertFalse(s.kubectl.some((call) => call.verb === "create"));
-    },
-  );
-});
-
-Deno.test("create refuses a name that is taken by a different request", async () => {
-  await withScript(
-    [
-      { args: getArgs(C, "three", "pg"), out: clusterThree },
-      { args: getArgs(B, "b1", "pg"), out: live("completed") },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({
-              name: "b1",
-              cluster: "three",
-              method: "plugin",
-              pluginConfiguration: { name: PLUGIN },
-            }),
-            c.context,
-          ),
-        Error,
-      );
-      assertStringIncludes(
-        e.message,
-        "already exists in namespace pg with a different request",
-      );
-      assertStringIncludes(e.message, "(cluster, method, pluginConfiguration)");
-      assertEquals(c.written, []);
-      assertFalse(s.kubectl.some((call) => call.verb === "create"));
-    },
-  );
-});
-
-Deno.test("create refuses a missing Cluster and one without the method, and creates nothing", async () => {
-  await withScript(
-    [{ args: getArgs(C, "gone", "pg"), fail: notFound(C, "gone") }],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: "gone" }),
-            c.context,
-          ),
-        Error,
-      );
-      assertStringIncludes(
-        e.message,
-        "was not created: there is no Cluster gone in namespace pg",
-      );
-      assertEquals(c.written, []);
-    },
-  );
-  await withScript(
-    [{ args: getArgs(C, "nobackup", "pg"), out: clusterNoBackup }],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: "nobackup" }),
-            c.context,
-          ),
-        Error,
-      );
-      assertStringIncludes(
-        e.message,
-        "was not created: the Cluster has no spec.backup.barmanObjectStore",
-      );
-      assertEquals(c.written, []);
-    },
-  );
-});
-
-Deno.test("create fails before creating when a check cannot be made", async () => {
-  const cases: Array<[Array<{ args: string[] } & Answer>, string]> = [
-    [
-      [{ args: getArgs(C, "one", "pg"), fail: forbidden("get", C, "pg") }],
-      "(Forbidden)",
-    ],
-    [[{ args: getArgs(C, "one", "pg"), out: "garbage" }], "did not print JSON"],
-    [
-      [{ args: getArgs(C, "one", "pg"), fail: SAID.missingCrd("clusters") }],
-      MISSING_CRD,
-    ],
-    [
-      // No object is named: the path is not served, so it is not "no Cluster".
-      [{
-        args: getArgs(C, "one", "pg"),
-        fail:
-          "Error from server (NotFound): the server could not find the requested resource\n",
-      }],
-      MISSING_CRD,
-    ],
-    [
-      [{ args: getArgs(C, "one", "pg"), fail: SAID.badToken }],
-      "did not accept the credentials",
-    ],
-    [
-      [{ args: getArgs(C, "one", "pg"), hang: true }],
-      "no answer within 35 seconds",
-    ],
-    [
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: forbidden("get", B, "pg") },
-      ],
-      "(Forbidden)",
-    ],
-    [
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), hang: true },
-      ],
-      "no answer within 35 seconds",
-    ],
-  ];
-  for (const [calls, text] of cases) {
-    await withScript(calls, { namespace: "pg" }, async (c, s) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: "one" }),
-            c.context,
-          ),
-        Error,
-      );
-      assertStringIncludes(e.message, text);
-      assertEquals(c.written, []);
-      assertFalse(s.kubectl.some((call) => call.verb === "create"));
-    });
-  }
-});
-
-Deno.test("a create the API server refuses by name is an error at once, and nothing is recorded", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  for (
-    const [answer, text] of [
-      [{ fail: forbidden("create", B, "pg") }, "cannot create resource"],
-      [{ fail: SAID.noKind("Backup", "postgresql.cnpg.io/v1") }, MISSING_CRD],
-      [{ fail: SAID.badToken }, "did not accept the credentials"],
-      [{ fail: SAID.refused }, "could not be reached"],
-      [{ notInstalled: true }, "kubectl is not on PATH"],
-    ] as Array<[Answer, string]>
-  ) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c, s) => {
-        const e = await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertEquals(c.written, []);
-        assertEquals(s.slept, []);
-        // No read after the refusal: the script holds none.
-        assertEquals(s.kubectl.length, 3);
-      },
-    );
-  }
-});
-
-/** The ways a create can end without saying whether it was applied. */
-const UNCONFIRMED: Array<[string, Answer, string]> = [
-  ["an answer that is not JSON", { out: "created" }, "did not print JSON"],
-  ["no answer in time", { hang: true }, "no answer within 35 seconds"],
-  [
-    "a Backup made by another run",
-    { fail: SAID.alreadyExists(B, "b1") },
-    "(AlreadyExists)",
-  ],
-  ["an answer that is not the Backup", { out: {} }, "did not return Backup"],
-  [
-    "an answer that is another Backup",
-    { out: { ...live(), metadata: { name: "b2", namespace: "pg" } } },
-    "did not return Backup pg/b1",
-  ],
-  [
-    "a refusal kubectl gives no name to",
-    {
-      fail:
-        'Error from server (BadRequest): admission webhook "vbackup.cnpg.io" denied the request',
-    },
-    "denied the request",
-  ],
-];
-
-Deno.test("an unconfirmed create is read back once: the Backup is there, so it was created", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  for (const [what, answer, text] of UNCONFIRMED) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), ...answer },
-        { args: getArgs(B, "b1", "pg"), out: live("running") },
-        { args: getArgs(B, "b1", "pg"), out: live("completed") },
-      ],
-      { namespace: "pg" },
-      async (c, s) => {
-        const r = await backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        );
-        assertEquals(r.dataHandles.length, 1, what);
-        assertEquals(c.written.map((w) => w.name), ["pg--b1"], what);
-        const d = c.written[0].data as ReturnType<typeof parseBackup>;
-        assertEquals([d.name, d.namespace, d.completed], ["b1", "pg", true]);
-        assertEquals(s.slept, [5000], what);
-        const warning = c.logs.find((l) => l.includes("was not confirmed"))!;
-        assertStringIncludes(warning, text);
-        assertStringIncludes(warning, "is taken as created");
-        assertFalse(c.logs.some((l) => l === "Backup b1 created"), what);
-      },
-    );
-  }
-});
-
-Deno.test("an unconfirmed create whose Backup is not there is the error it was", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  for (const [what, answer, text] of UNCONFIRMED) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), ...answer },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      ],
-      { namespace: "pg" },
-      async (c, s) => {
-        const e = await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          KubectlError,
-        );
-        assertStringIncludes(e.message, text, what);
-        assertEquals(c.written, [], what);
-        assertEquals(s.slept, [], what);
-      },
-    );
-  }
-});
-
-Deno.test("an unconfirmed create whose Backup asks for something else is refused", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  const other = {
-    ...manifest("b1", { cluster: { name: "three" }, method: "plugin" }),
-    status: { phase: "running" },
-  };
-  for (const [what, answer] of UNCONFIRMED) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), ...answer },
-        { args: getArgs(B, "b1", "pg"), out: other },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          Error,
-          "already exists in namespace pg with a different request (cluster, method)",
-        );
-        assertEquals(c.written, [], what);
-      },
-    );
-  }
-});
-
-Deno.test("an unconfirmed create that cannot be read back says both, and a cancelled read ends the run", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  for (
-    const [answer, text] of [
-      [{ fail: forbidden("get", B, "pg") }, "(Forbidden)"],
-      [{ hang: true }, "no answer within 35 seconds"],
-      [{ out: {} }, "did not return Backup pg/b1"],
-    ] as Array<[Answer, string]>
-  ) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), out: "created" },
-        { args: getArgs(B, "b1", "pg"), ...answer },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        const e = await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          Error,
-        );
-        assertStringIncludes(e.message, "the create was not confirmed");
-        assertStringIncludes(e.message, "did not print JSON");
-        assertStringIncludes(e.message, "could not be read back");
-        assertStringIncludes(e.message, text);
-        assertStringIncludes(e.message, "run get to see whether it exists");
-        assertEquals(c.written, []);
-      },
-    );
-  }
-  const stop = new AbortController();
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: "created" },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: "one" }),
-            c.context,
-          ),
-        Error,
-      );
-      assert(isCancelled(e), e.message);
-      assertEquals(c.written, []);
-    },
-    {
-      signal: stop.signal,
-      handler: () => {
-        stop.abort();
-        return {};
-      },
-    },
-  );
-});
-
-Deno.test("a parameter value is blanked in the error of the create call, a short one is not", async () => {
-  const opaque = "zq8Lw0pXv7Rt2KyM";
-  const parameters = { opaqueThing: opaque, mode: "on" };
-  const spec = {
-    cluster: { name: "three" },
-    method: "plugin",
-    pluginConfiguration: { name: PLUGIN, parameters },
-  };
-  assert(opaque.length >= OPAQUE_MIN_LENGTH && "on".length < OPAQUE_MIN_LENGTH);
-  await withScript(
-    [
-      { args: getArgs(C, "three", "pg"), out: clusterThree },
-      { args: getArgs(B, "p1", "pg"), fail: notFound(B, "p1") },
-      {
-        args: CREATE,
-        stdin: manifest("p1", spec),
-        fail:
-          `Error from server (Forbidden): admission webhook "vbackup.cnpg.io" denied the request: opaqueThing ${opaque} is not allowed in mode on\n`,
-      },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({
-              name: "p1",
-              cluster: "three",
-              method: "plugin",
-              pluginConfiguration: { name: PLUGIN, parameters },
-            }),
-            c.context,
-          ),
-        Error,
-      );
-      assertFalse(everything(c, e).includes(opaque));
-      assertStringIncludes(
-        e.message,
-        "opaqueThing [redacted] is not allowed in mode on",
-      );
-      assertStringIncludes(e.message, "denied the request");
-    },
-  );
-});
-
-Deno.test("a Backup that fails is recorded as failed and the method succeeds", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-      {
-        args: getArgs(B, "b1", "pg"),
-        out: live("failed", {
-          error: `no bucket at https://k:${PLANTED.password}@s3.example.org`,
-        }),
-      },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      const r = await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.failed, d.finished, d.completed], [true, true, false]);
-      assertEquals(d.error, "no bucket at https://s3.example.org");
-      assertEquals(s.slept, [5000]);
-      assertStringIncludes(c.logs.at(-1)!, "Backup b1 failed: no bucket");
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("a Backup still running after the wait is recorded as it stands", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  const polls = Array.from({ length: 4 }, () => ({
-    args: getArgs(B, "b1", "pg"),
-    out: live("running"),
-  }));
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-      ...polls,
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one", waitSeconds: 10, pollSeconds: 3 }),
-        c.context,
-      );
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.phase, d.finished], ["running", false]);
-      assertEquals(s.slept, [3000, 3000, 3000, 1000]);
-      assertStringIncludes(
-        c.logs.at(-1)!,
-        "is running after 10 s; run get for the result",
-      );
-    },
-  );
-});
-
-Deno.test("waitSeconds 0 records the Backup without reading it again", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one", waitSeconds: 0 }),
-        c.context,
-      );
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.name, d.phase, d.finished], ["b1", null, false]);
-      assertEquals(s.slept, []);
-    },
-  );
-});
-
-Deno.test("a read that fails while waiting does not fail a create that was applied", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-      { args: getArgs(B, "b1", "pg"), out: live("running") },
-      { args: getArgs(B, "b1", "pg"), fail: "Unable to connect to the server" },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      const r = await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.phase, d.finished], ["running", false]);
-      assertEquals(s.slept, [5000, 5000]);
-      assert(c.logs.some((l) => l.includes("could not be read while waiting")));
-    },
-  );
-});
-
-Deno.test("a re-run with onlineConfiguration is the same request although the API server filled in a default", async () => {
-  // As stored by the API server: the CRD defaults waitForArchive to true.
-  const stored = {
-    cluster: { name: "one" },
-    method: "barmanObjectStore",
-    online: true,
-    onlineConfiguration: { immediateCheckpoint: true, waitForArchive: true },
-  };
-  const request = {
-    name: "b1",
-    cluster: "one",
-    online: true,
-    onlineConfiguration: { immediateCheckpoint: true },
-  };
-  assertEquals(specDifferences(stored, desiredSpec(args(request))), []);
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      {
-        args: getArgs(B, "b1", "pg"),
-        out: { ...manifest("b1", stored), status: { phase: "completed" } },
-      },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await backup.methods.create.execute(args(request), c.context);
-      assertEquals(c.written.map((w) => w.name), ["pg--b1"]);
-      assertFalse(s.kubectl.some((call) => call.verb === "create"));
-    },
-  );
-});
-
 Deno.test("a nested field is compared only where the request sets it, and a list as a whole", () => {
   const same = (existing: unknown, desired: unknown) =>
     specDifferences(
@@ -1284,91 +465,6 @@ Deno.test("a nested field is compared only where the request sets it, and a list
   // A scalar the request sets is never satisfied by an object, or the reverse.
   assertEquals(same({ online: { a: 1 } }, { online: true }), ["online"]);
   assertEquals(same({ online: true }, { online: {} }), ["online"]);
-});
-
-Deno.test("an answer that is not the Backup that was asked for is an error and no record", async () => {
-  const wrong: unknown[] = [
-    [],
-    {},
-    { kind: "Backup" },
-    { ...live("completed"), metadata: { name: "b2", namespace: "pg" } },
-    { ...live("completed"), metadata: { name: "b1", namespace: "other" } },
-    { ...live("completed"), kind: "Cluster" },
-    { kind: "Status", status: "Failure", metadata: {} },
-    list([live("completed")]),
-  ];
-  for (const out of wrong) {
-    await withScript(
-      [{ args: getArgs(B, "b1", "pg"), out }],
-      { namespace: "pg" },
-      async (c) => {
-        await assertRejects(
-          () => backup.methods.get.execute({ name: "b1" }, c.context),
-          KubectlError,
-          "kubectl did not return Backup pg/b1",
-        );
-        assertEquals(c.written, [], JSON.stringify(out));
-      },
-    );
-    // create: the Cluster that is checked, and the Backup that may exist.
-    await withScript(
-      [{ args: getArgs(C, "one", "pg"), out }],
-      { namespace: "pg" },
-      async (c, s) => {
-        await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          KubectlError,
-          "kubectl did not return Cluster pg/one",
-        );
-        assertEquals(c.written, []);
-        assertFalse(s.kubectl.some((call) => call.verb === "create"));
-      },
-    );
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), out },
-      ],
-      { namespace: "pg" },
-      async (c, s) => {
-        await assertRejects(
-          () =>
-            backup.methods.create.execute(
-              args({ name: "b1", cluster: "one" }),
-              c.context,
-            ),
-          KubectlError,
-          "kubectl did not return Backup pg/b1",
-        );
-        assertEquals(c.written, []);
-        assertFalse(s.kubectl.some((call) => call.verb === "create"));
-      },
-    );
-  }
-});
-
-Deno.test("an answer that is not the Backup while waiting is a warning, and the last good read stands", async () => {
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    await backup.methods.create.execute(
-      args({ name: "b1", cluster: "one" }),
-      c.context,
-    );
-    assertEquals(k.slept, [5000, 5000]);
-    const d = c.written[0].data as ReturnType<typeof parseBackup>;
-    assertEquals([d.name, d.namespace, d.phase], ["b1", "pg", "running"]);
-    assert(
-      c.logs.some((l) =>
-        l.includes("could not be read while waiting") &&
-        l.includes("did not return Backup pg/b1")
-      ),
-    );
-  }, {
-    handler: flow((n) => n === 1 ? { out: live("running") } : { out: {} }),
-  });
 });
 
 Deno.test("a Backup has a reason when it failed, or has not ended for too long", () => {
@@ -1444,411 +540,6 @@ Deno.test("a Backup has a reason when it failed, or has not ended for too long",
   );
 });
 
-Deno.test("list names a Backup that has not ended for longer than the definition allows", async () => {
-  const ago = (seconds: number) =>
-    new Date(Date.now() - seconds * 1000).toISOString();
-  const items = list([
-    scheduled("fresh", ago(30), "running"),
-    scheduled("stuck", ago(7200), "running"),
-    { ...scheduled("mute", ago(7200), "x"), status: {} },
-    scheduled("done", ago(7200), "completed"),
-  ]);
-  const lines = async (globalArgs: Record<string, unknown>) => {
-    let found: Array<Record<string, unknown>> = [];
-    await withScript(
-      [{ args: listCall(B, "pg"), out: items }],
-      { namespace: "pg", ...globalArgs },
-      async (c) => {
-        await backup.methods.list.execute({}, c.context);
-        const inv = backup.resources.inventory.schema.strict().parse(
-          c.written.at(-1)!.data,
-        );
-        assertEquals(
-          inv.unhealthyCount,
-          inv.items.filter((i) => !i.healthy).length,
-        );
-        found = inv.items;
-        // The age is in the record too.
-        const stuck = c.written.find((w) => w.name === "pg--stuck")!
-          .data as ReturnType<typeof parseBackup>;
-        assert(
-          stuck.unfinishedSeconds! >= 7200 && stuck.unfinishedSeconds! < 7260,
-        );
-      },
-    );
-    return Object.fromEntries(
-      found.map((i) => [String(i.name), [i.healthy, i.reason]]),
-    ) as Record<string, [unknown, unknown]>;
-  };
-  // The default is an hour.
-  const byDefault = await lines({});
-  assertEquals(byDefault.fresh, [true, null]);
-  assertEquals(byDefault.done, [true, null]);
-  assertEquals(byDefault.stuck[0], false);
-  assert(
-    /^still running after 72\d\d s, longer than 3600 s$/.test(
-      String(byDefault.stuck[1]),
-    ),
-    String(byDefault.stuck[1]),
-  );
-  assertEquals(byDefault.mute[0], false);
-  assert(
-    /^without a phase after 72\d\d s, longer than 3600 s$/.test(
-      String(byDefault.mute[1]),
-    ),
-    String(byDefault.mute[1]),
-  );
-  // A definition that allows three hours names none; ten seconds names three.
-  const patient = await lines({ unfinishedAfterSeconds: 10800 });
-  assertEquals(Object.values(patient).map((v) => v[0]), [
-    true,
-    true,
-    true,
-    true,
-  ]);
-  const strict = await lines({ unfinishedAfterSeconds: 10 });
-  assertEquals(
-    [strict.fresh[0], strict.stuck[0], strict.mute[0], strict.done[0]],
-    [false, false, false, true],
-  );
-});
-
-Deno.test("list writes an inventory that names each failed Backup and why", async () => {
-  // Made a minute ago: far younger than the hour after which it is named.
-  const running = scheduled(
-    "n-2",
-    new Date(Date.now() - 60_000).toISOString(),
-    "running",
-  );
-  await withScript(
-    [{
-      args: listCall(B, "pg"),
-      out: list([backupCompleted, backupFailed, running]),
-    }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await backup.methods.list.execute({}, c.context);
-      assertEquals(r.dataHandles.length, 4);
-      const last = c.written.at(-1)!;
-      assertEquals([last.spec, last.name], ["inventory", "inventory_ns_pg"]);
-      const inv = backup.resources.inventory.schema.strict().parse(last.data);
-      assertEquals(
-        [inv.namespace, inv.count, inv.healthyCount, inv.unhealthyCount],
-        ["pg", 3, 2, 1],
-      );
-      assertEquals(inv.items, [
-        {
-          namespace: "pg",
-          name: "manual-1",
-          dataName: "pg--manual-1",
-          healthy: true,
-          reason: null,
-          phase: "completed",
-        },
-        {
-          namespace: "pg",
-          name: "bad-1",
-          dataName: "pg--bad-1",
-          healthy: false,
-          reason:
-            "failed: exit status 4: could not reach https://s3.example.org with Bearer [redacted]",
-          phase: "failed",
-        },
-        // A Backup that still runs has not failed.
-        {
-          namespace: "pg",
-          name: "n-2",
-          dataName: "pg--n-2",
-          healthy: true,
-          reason: null,
-          phase: "running",
-        },
-      ]);
-      assertEquals(
-        inv.items.map((i) => i.dataName),
-        c.written.slice(0, 3).map((w) => w.name),
-      );
-      noSecret(everything(c));
-    },
-  );
-});
-
-Deno.test("a list of one Cluster's Backups writes no inventory, an empty list writes an empty one", async () => {
-  await withScript(
-    [{ args: listCall(B, "pg"), out: list([backupCompleted, backupFailed]) }],
-    { namespace: "pg" },
-    async (c) => {
-      const r = await backup.methods.list.execute(
-        { cluster: "one" },
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["backup", "pg--manual-1"],
-      ]);
-      assertStringIncludes(c.logs.at(-1)!, "no inventory");
-    },
-  );
-  await withScript(
-    [{ args: listCall(B, ""), out: list([]) }],
-    { namespace: "" },
-    async (c) => {
-      const r = await backup.methods.list.execute({ namespace: "" }, c.context);
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(c.written.map((w) => [w.spec, w.name]), [
-        ["inventory", "inventory_all"],
-      ]);
-      const inv = c.written[0].data as Record<string, unknown>;
-      assertEquals([inv.namespace, inv.count, inv.items], [null, 0, []]);
-    },
-  );
-});
-
-Deno.test("a list in which two Backups share a data name writes nothing", async () => {
-  const named = (namespace: string, name: string) => ({
-    ...backupCompleted,
-    metadata: { name, namespace },
-  });
-  await withScript(
-    [{
-      args: listCall(B, ""),
-      out: list([backupCompleted, named("a", "b--c"), named("a--b", "c")]),
-    }],
-    { namespace: "" },
-    async (c) => {
-      await assertRejects(
-        () => backup.methods.list.execute({}, c.context),
-        Error,
-        "Backup a/b--c and a--b/c would both be stored as a--b--c",
-      );
-      assertEquals(c.written, []);
-    },
-  );
-});
-
-/**
- * A fake cluster for `create`: the Cluster exists, the Backup does not, the
- * create is accepted, and `read(n)` answers the nth read of the Backup while
- * waiting. `slow` is how long each call takes on the fake clock.
- */
-function flow(
-  read: (n: number, k: Fake) => Answer,
-  slow: { before?: number; read?: number } = {},
-) {
-  let reads = 0;
-  let created = false;
-  return (call: KubectlCall, k: Fake): Answer | undefined => {
-    if (!created) k.advance(slow.before ?? 0);
-    if (call.verb === "create") {
-      created = true;
-      return { out: live() };
-    }
-    if (call.verb !== "get") return undefined;
-    if (call.resource === C) return { out: clusterOne };
-    if (!created) return { fail: notFound(B, "b1") };
-    k.advance(slow.read ?? 0);
-    return read(++reads, k);
-  };
-}
-
-Deno.test("the time the reads take counts as waited", async () => {
-  // 20 s asked for, a read every 5 s, each read takes 6 s: two reads fit.
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    await backup.methods.create.execute(
-      args({ name: "b1", cluster: "one", waitSeconds: 20 }),
-      c.context,
-    );
-    assertEquals(k.slept, [5000, 5000]);
-    assertEquals(k.kubectl.filter((x) => x.verb === "get").length, 4);
-    assertStringIncludes(
-      c.logs.at(-1)!,
-      "is running after 22 s; run get for the result",
-    );
-    assertEquals((c.written[0].data as { finished: boolean }).finished, false);
-  }, { handler: flow(() => ({ out: live("running") }), { read: 6000 }) });
-});
-
-Deno.test("the longest wait is kept in full when the cluster answers at once", async () => {
-  assertFalse(
-    CreateArgsSchema.safeParse({
-      name: "b",
-      cluster: "one",
-      waitSeconds: MAX_WAIT_SECONDS + 1,
-    }).success,
-  );
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    await backup.methods.create.execute(
-      args({
-        name: "b1",
-        cluster: "one",
-        waitSeconds: MAX_WAIT_SECONDS,
-        pollSeconds: 30,
-      }),
-      c.context,
-    );
-    assertEquals(k.slept, [30000, 30000, 30000, 30000]);
-    assertStringIncludes(c.logs.at(-1)!, "is running after 120 s");
-  }, { handler: flow(() => ({ out: live("running") })) });
-});
-
-Deno.test("with the longest wait and the slowest cluster, create ends inside its limit", async () => {
-  // The limit itself leaves room under 180 s for what swamp does around it.
-  assert(CREATE_LIMIT_MS <= 170_000);
-  assert(MAX_WAIT_SECONDS * 1000 + KUBECTL_CALL_LIMIT_MS < CREATE_LIMIT_MS);
-  // Every call takes as long as a call can: its limit, then being stopped.
-  for (const pollSeconds of [1, 5, 30]) {
-    let clock = 0;
-    const slowest = flow(() => ({ out: live("running") }));
-    await withScript([], { namespace: "pg" }, async (c, k) => {
-      await backup.methods.create.execute(
-        args({
-          name: "b1",
-          cluster: "one",
-          waitSeconds: MAX_WAIT_SECONDS,
-          pollSeconds,
-        }),
-        c.context,
-      );
-      const total = clock + k.slept.reduce((a, b) => a + b, 0);
-      assert(total <= CREATE_LIMIT_MS, `${pollSeconds}: ${total} ms`);
-      // Three calls before the wait, then exactly one read fits.
-      assertEquals(k.kubectl.length, 4, String(pollSeconds));
-      assertEquals(k.slept, [Math.min(pollSeconds * 1000, 14000)]);
-      assertEquals(c.written.length, 1);
-    }, {
-      handler: (call, k) => {
-        clock += KUBECTL_CALL_LIMIT_MS;
-        k.advance(KUBECTL_CALL_LIMIT_MS);
-        return slowest(call, k);
-      },
-    });
-  }
-});
-
-Deno.test("when the calls before the wait used the whole limit, the Backup is recorded unread", async () => {
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    await backup.methods.create.execute(
-      args({ name: "b1", cluster: "one", waitSeconds: MAX_WAIT_SECONDS }),
-      c.context,
-    );
-    assertEquals(k.slept, []);
-    assertEquals(k.kubectl.length, 3);
-    assertStringIncludes(c.logs.at(-1)!, "after 0 s; run get for the result");
-    assertEquals(c.written.length, 1);
-  }, {
-    handler: flow(() => ({ out: live("completed") }), { before: 60_000 }),
-  });
-});
-
-Deno.test("a run cancelled while the Backup is read is thrown on, not taken for a slow cluster", async () => {
-  const stop = new AbortController();
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    const e = await assertRejects(
-      () =>
-        backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        ),
-      KubectlError,
-    );
-    assertEquals(e.kind, "cancelled");
-    assertStringIncludes(e.message, "was cancelled");
-    assertEquals(k.slept, [5000, 5000]);
-    assertEquals(c.written, []);
-    assertFalse(c.logs.some((l) => l.includes("could not be read")));
-  }, {
-    signal: stop.signal,
-    handler: flow((n) => {
-      if (n === 2) stop.abort();
-      return { out: live("running") };
-    }),
-  });
-});
-
-Deno.test("a run cancelled between two reads ends at the wait", async () => {
-  const stop = new AbortController();
-  await withScript([], { namespace: "pg" }, async (c, k) => {
-    const e = await assertRejects(
-      () =>
-        backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        ),
-      Error,
-      "cancelled",
-    );
-    assert(isCancelled(e), "a cancelled wait is a cancelled run");
-    assertEquals(k.slept, [5000]);
-    assertEquals(k.kubectl.filter((x) => x.verb === "get").length, 3);
-    assertEquals(c.written, []);
-  }, {
-    signal: stop.signal,
-    handler: flow(() => {
-      // After this read has been answered, before the next wait begins.
-      queueMicrotask(() => stop.abort());
-      return { out: live("running") };
-    }),
-  });
-});
-
-Deno.test("a run cancelled before the create makes no Backup", async () => {
-  const stop = new AbortController();
-  await withScript(
-    [{ args: getArgs(C, "one", "pg"), out: clusterOne }],
-    { namespace: "pg" },
-    async (c, k) => {
-      const e = await assertRejects(
-        () =>
-          backup.methods.create.execute(
-            args({ name: "b1", cluster: "one" }),
-            c.context,
-          ),
-        KubectlError,
-      );
-      assertEquals(e.kind, "cancelled");
-      assertFalse(k.kubectl.some((x) => x.verb === "create"));
-      assertEquals(c.written, []);
-    },
-    {
-      signal: stop.signal,
-      handler: () => {
-        stop.abort();
-        return {};
-      },
-    },
-  );
-});
-
-Deno.test("every other failed read while waiting is a warning with its reason, and the record stands", async () => {
-  for (
-    const [answer, text] of [
-      [{ fail: SAID.badToken }, "did not accept the credentials"],
-      [{ fail: SAID.refused }, "could not be reached"],
-      [{ hang: true }, "no answer within 35 seconds"],
-      [{ fail: notFound(B, "b1") }, '"b1" not found'],
-      [{ out: "<html>" }, "did not print JSON"],
-    ] as Array<[Answer, string]>
-  ) {
-    await withScript([], { namespace: "pg" }, async (c, k) => {
-      const r = await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(r.dataHandles.length, 1);
-      assertEquals(k.slept, [5000, 5000]);
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.name, d.phase, d.finished], ["b1", "running", false]);
-      const warning = c.logs.find((l) =>
-        l.includes("could not be read while waiting")
-      )!;
-      assertStringIncludes(warning, text);
-      assertFalse(warning.includes("E1110"));
-    }, {
-      handler: flow((n) => n === 1 ? { out: live("running") } : answer),
-    });
-  }
-});
-
 Deno.test("plugin parameters are compared as a whole map: fewer or none is another request", () => {
   const same = (existing: unknown, desired: unknown) =>
     specDifferences(
@@ -1909,188 +600,170 @@ Deno.test("plugin parameters are compared as a whole map: fewer or none is anoth
   );
 });
 
-Deno.test("create does not take over a Backup another caller made with more plugin parameters", async () => {
-  const theirs = {
-    ...manifest("p1", {
-      cluster: { name: "three" },
-      method: "plugin",
-      pluginConfiguration: {
-        name: PLUGIN,
-        parameters: { serverName: "other-server" },
-      },
-    }),
-    status: { phase: "completed" },
-  };
-  const mine = {
-    name: "p1",
-    cluster: "three",
-    method: "plugin",
-    pluginConfiguration: { name: PLUGIN },
-  };
-  const spec = {
-    cluster: { name: "three" },
-    method: "plugin",
-    pluginConfiguration: { name: PLUGIN },
-  };
-  // Found before the create.
-  await withScript(
-    [
-      { args: getArgs(C, "three", "pg"), out: clusterThree },
-      { args: getArgs(B, "p1", "pg"), out: theirs },
-    ],
-    { namespace: "pg" },
-    async (c, s) => {
-      await assertRejects(
-        () => backup.methods.create.execute(args(mine), c.context),
-        Error,
-        "already exists in namespace pg with a different request (pluginConfiguration)",
-      );
-      assertEquals(c.written, []);
-      assertFalse(s.kubectl.some((call) => call.verb === "create"));
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+const B = "backups.postgresql.cnpg.io";
+const C = "clusters.postgresql.cnpg.io";
+
+Deno.test("list records each Backup and an inventory naming the failed one, with no credential", async () => {
+  using h = harness({
+    [`kubectl get ${B} -n pg`]: {
+      stdout: list([backupCompleted, backupFailed]),
     },
+  });
+  await model.methods.list.execute({ namespace: "pg" }, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["backup", "pg--manual-1"],
+    ["backup", "pg--bad-1"],
+    ["inventory", "inventory_ns_pg"],
+  ]);
+  assertEquals([w[2].data.count, w[2].data.unhealthyCount], [2, 1]);
+  noSecret(JSON.stringify([w, h.logs()]));
+});
+
+Deno.test("list of one Cluster's Backups records those and no inventory, and says so", async () => {
+  using h = harness({
+    [`kubectl get ${B} -n pg`]: {
+      stdout: list([backupCompleted, backupFailed]),
+    },
+  });
+  await model.methods.list.execute(
+    { namespace: "pg", cluster: "one" },
+    h.context,
   );
-  // Made by another run between the check and the create.
-  await withScript(
-    [
-      { args: getArgs(C, "three", "pg"), out: clusterThree },
-      { args: getArgs(B, "p1", "pg"), fail: notFound(B, "p1") },
-      {
-        args: CREATE,
-        stdin: manifest("p1", spec),
-        fail: SAID.alreadyExists(B, "p1"),
-      },
-      { args: getArgs(B, "p1", "pg"), out: theirs },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      await assertRejects(
-        () => backup.methods.create.execute(args(mine), c.context),
-        Error,
-        "different request (pluginConfiguration)",
-      );
-      assertEquals(c.written, []);
-    },
+  assertEquals(h.written().map((x) => x.name), ["pg--manual-1"]);
+  assert(
+    h.logs().includes(
+      "Recorded {count} Backups of Cluster {cluster}; no inventory for a list of one Cluster",
+    ),
   );
 });
 
-Deno.test("the record of create says whether this run made the Backup or found it", async () => {
-  const spec = { cluster: { name: "one" }, method: "barmanObjectStore" };
-  const adopted = (c: { written: Array<{ data: unknown }> }) =>
-    (c.written[0].data as ReturnType<typeof parseBackup>).adopted;
-  // Created and confirmed, read again while waiting: not adopted.
-  await withScript(
-    [
-      { args: getArgs(C, "one", "pg"), out: clusterOne },
-      { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-      { args: CREATE, stdin: manifest("b1", spec), out: live() },
-      { args: getArgs(B, "b1", "pg"), out: live("completed") },
-    ],
-    { namespace: "pg" },
-    async (c) => {
-      await backup.methods.create.execute(
-        args({ name: "b1", cluster: "one" }),
-        c.context,
-      );
-      assertEquals(adopted(c), false);
-      BackupSchema.strict().parse(c.written[0].data);
-    },
+Deno.test("list passes on a refused list and records nothing", async () => {
+  using h = harness({ [`kubectl get ${B} -A`]: forbidden("list", B) });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "forbidden",
   );
-  // Already there with the same request: adopted, also after a read.
-  for (const first of ["completed", "running"]) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), out: live(first) },
-        ...(first === "running"
-          ? [{ args: getArgs(B, "b1", "pg"), out: live("completed") }]
-          : []),
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        );
-        assertEquals(adopted(c), true, first);
-      },
-    );
-  }
-  // Not confirmed and read back, whoever made it: adopted.
-  for (const [what, answer] of UNCONFIRMED) {
-    await withScript(
-      [
-        { args: getArgs(C, "one", "pg"), out: clusterOne },
-        { args: getArgs(B, "b1", "pg"), fail: notFound(B, "b1") },
-        { args: CREATE, stdin: manifest("b1", spec), ...answer },
-        { args: getArgs(B, "b1", "pg"), out: live("completed") },
-      ],
-      { namespace: "pg" },
-      async (c) => {
-        await backup.methods.create.execute(
-          args({ name: "b1", cluster: "one" }),
-          c.context,
-        );
-        assertEquals(adopted(c), true, what);
-      },
-    );
-  }
-  // list and get do not know, and say so.
-  assertEquals(parseBackup(backupCompleted).adopted, null);
-  await withScript(
-    [{ args: getArgs(B, "b1", "pg"), out: live("completed") }],
-    { namespace: "pg" },
-    async (c) => {
-      await backup.methods.get.execute({ name: "b1" }, c.context);
-      assertEquals(adopted(c), null);
-    },
-  );
+  assertEquals(h.written(), []);
 });
 
-Deno.test("the slowest create with a read-back: four calls at their limit, no wait, inside the limit", async () => {
-  assert(4 * KUBECTL_CALL_LIMIT_MS <= CREATE_LIMIT_MS);
-  for (const pollSeconds of [1, 5, 30]) {
-    let clock = 0;
-    let reads = 0;
-    await withScript([], { namespace: "pg" }, async (c, k) => {
-      await backup.methods.create.execute(
-        args({
-          name: "b1",
-          cluster: "one",
-          waitSeconds: MAX_WAIT_SECONDS,
-          pollSeconds,
-        }),
-        c.context,
-      );
-      // The Cluster, the Backup, the create, the read-back: nothing after.
-      assertEquals(k.kubectl.map((x) => x.verb), [
-        "get",
-        "get",
-        "create",
-        "get",
-      ]);
-      assertEquals(k.slept, []);
-      const total = clock + k.slept.reduce((a, b) => a + b, 0);
-      assertEquals(total, 4 * KUBECTL_CALL_LIMIT_MS);
-      assert(total <= CREATE_LIMIT_MS, `${total} ms`);
-      const d = c.written[0].data as ReturnType<typeof parseBackup>;
-      assertEquals([d.name, d.phase, d.finished, d.adopted], [
-        "b1",
-        "running",
-        false,
-        true,
-      ]);
-      assertStringIncludes(c.logs.at(-1)!, "after 0 s; run get for the result");
-    }, {
-      handler: (call, k) => {
-        clock += KUBECTL_CALL_LIMIT_MS;
-        k.advance(KUBECTL_CALL_LIMIT_MS);
-        // The create is stopped at its limit; the Backup is there all the same.
-        if (call.verb === "create") return { hang: true };
-        if (call.resource === C) return { out: clusterOne };
-        return ++reads === 1
-          ? { fail: notFound(B, "b1") }
-          : { out: live("running") };
+Deno.test("get records one Backup and logs its phase", async () => {
+  using h = harness({
+    [`kubectl get ${B} manual-1 -n pg`]: { stdout: backupCompleted },
+  });
+  await model.methods.get.execute(
+    { name: "manual-1", namespace: "pg" },
+    h.context,
+  );
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["backup", "pg--manual-1"]]);
+  assertEquals([w[0].data.phase, w[0].data.completed], ["completed", true]);
+  assert(h.logs().includes("Backup {name} is {phase}"));
+  noSecret(JSON.stringify(w));
+});
+
+Deno.test("get of an answer that is another object fails and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${B} other -n pg`]: { stdout: backupCompleted },
+  });
+  await assertRejects(
+    () =>
+      model.methods.get.execute({ name: "other", namespace: "pg" }, h.context),
+    Error,
+    "did not return Backup pg/other",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("create sends the Backup on standard input and records it as created", async () => {
+  using h = harness({
+    [`kubectl get ${C} one -n pg`]: { stdout: clusterOne },
+    [`kubectl get ${B} manual-1 -n pg`]: notFound(B, "manual-1"),
+    [`kubectl create -f - -n pg`]: { stdout: backupCompleted },
+  });
+  await model.methods.create.execute(
+    args({ name: "manual-1", namespace: "pg", cluster: "one" }),
+    h.context,
+  );
+  assertEquals(JSON.parse(h.calls[2].stdin!), {
+    apiVersion: "postgresql.cnpg.io/v1",
+    kind: "Backup",
+    metadata: { name: "manual-1", namespace: "pg" },
+    spec: { cluster: { name: "one" }, method: "barmanObjectStore" },
+  });
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["backup", "pg--manual-1"]]);
+  assertEquals([w[0].data.adopted, w[0].data.completed], [false, true]);
+  assert(h.logs().includes("Backup {name} created"));
+  assert(h.logs().includes("Backup {name} completed"));
+});
+
+Deno.test("create of a Backup that exists with the same request creates nothing and records it adopted", async () => {
+  using h = harness({
+    [`kubectl get ${C} one -n pg`]: { stdout: clusterOne },
+    [`kubectl get ${B} manual-1 -n pg`]: { stdout: backupCompleted },
+  });
+  await model.methods.create.execute(
+    args({ name: "manual-1", namespace: "pg", cluster: "one" }),
+    h.context,
+  );
+  assertEquals(h.calls.length, 2);
+  assertEquals(h.written()[0].data.adopted, true);
+});
+
+Deno.test("create refuses a Cluster without the method's configuration and sends nothing", async () => {
+  using h = harness({
+    [`kubectl get ${C} nobackup -n pg`]: { stdout: clusterNoBackup },
+  });
+  await assertRejects(
+    () =>
+      model.methods.create.execute(
+        args({ name: "b1", namespace: "pg", cluster: "nobackup" }),
+        h.context,
+      ),
+    Error,
+    "Backup b1 was not created: the Cluster has no spec.backup.barmanObjectStore",
+  );
+  assertEquals([h.calls.length, h.written().length], [1, 0]);
+});
+
+Deno.test("create refuses a missing Cluster", async () => {
+  using h = harness({
+    [`kubectl get ${C} gone -n pg`]: notFound(C, "gone"),
+  });
+  await assertRejects(
+    () =>
+      model.methods.create.execute(
+        args({ name: "b1", namespace: "pg", cluster: "gone" }),
+        h.context,
+      ),
+    Error,
+    "there is no Cluster gone in namespace pg",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("create refuses a Backup of the same name with another request", async () => {
+  using h = harness({
+    [`kubectl get ${C} one -n pg`]: { stdout: clusterOne },
+    [`kubectl get ${B} manual-1 -n pg`]: {
+      stdout: {
+        ...backupCompleted,
+        spec: { cluster: { name: "one" }, method: "volumeSnapshot" },
       },
-    });
-  }
+    },
+  });
+  await assertRejects(
+    () =>
+      model.methods.create.execute(
+        args({ name: "manual-1", namespace: "pg", cluster: "one" }),
+        h.context,
+      ),
+    Error,
+    "already exists in namespace pg with a different request (method)",
+  );
+  assertEquals(h.written(), []);
 });

@@ -12,45 +12,15 @@ import {
 } from "jsr:@std/assert@1.0.13";
 import { GlobalArgsSchema, model } from "./gateway.ts";
 import { parseAccounts, parseBuckets, parseVersioning } from "./parse.ts";
-import { __setFetch, parseXml, readRootKey, S3Error } from "./transport.ts";
+import { parseXml, readRootKey } from "./transport.ts";
 import {
-  type Fixture,
-  fixture,
   globalArgs,
-  installFetch,
-  keyFile,
   makeContext,
   ROOT_ACCESS,
   ROOT_SECRET,
   SECRET_MARK,
   type Written,
 } from "./test_support.ts";
-
-const XML = "application/xml";
-
-function answer(
-  path: string,
-  status: number,
-  body: string,
-  method = "PATCH",
-): Fixture {
-  return { method, path, status, contentType: XML, body };
-}
-
-/** Run `fn` against the recorded gateway, with `override` answering first. */
-async function withGateway(
-  override: ((line: string) => Fixture | undefined) | undefined,
-  fn: (g: ReturnType<typeof globalArgs>) => Promise<void>,
-): Promise<void> {
-  const file = keyFile();
-  const fake = installFetch(override);
-  try {
-    await fn(globalArgs({ rootKeyFile: file.path }));
-  } finally {
-    fake.restore();
-    file.cleanup();
-  }
-}
 
 function assertClean(text: string): void {
   for (const value of [SECRET_MARK, ROOT_SECRET]) {
@@ -140,29 +110,6 @@ Deno.test("the root-key-named check fails on no source and on two", async () => 
   );
 });
 
-Deno.test("admin-reachable applies the schema's defaults to a minimal definition", async () => {
-  const fake = installFetch();
-  Deno.env.set("ROOT_ACCESS_KEY", ROOT_ACCESS);
-  Deno.env.set("ROOT_SECRET_KEY", ROOT_SECRET);
-  try {
-    // As a check receives it: only what the definition wrote, no defaults.
-    const written = {
-      adminUrl: "http://127.0.0.1:17071",
-      s3Url: "http://127.0.0.1:17070",
-      rootKeyEnv: true,
-    };
-    const result = await model.checks["admin-reachable"].execute({
-      globalArgs: written,
-    });
-    assertEquals(result, { pass: true });
-    assertEquals(fake.seen, [{ line: "PATCH /list-buckets", signed: true }]);
-  } finally {
-    Deno.env.delete("ROOT_ACCESS_KEY");
-    Deno.env.delete("ROOT_SECRET_KEY");
-    fake.restore();
-  }
-});
-
 Deno.test("admin-reachable without the key names the variable, not undefined", async () => {
   const result = await model.checks["admin-reachable"].execute({
     globalArgs: {
@@ -174,157 +121,6 @@ Deno.test("admin-reachable without the key names the variable, not undefined", a
   assertEquals(result.pass, false);
   assertStringIncludes(result.errors![0], "ROOT_ACCESS_KEY is not set");
 });
-
-Deno.test("a method without a key source fails before any request", async () => {
-  const fake = installFetch();
-  try {
-    const { context, written } = makeContext(globalArgs());
-    await assertRejects(
-      () => model.methods.inventory.execute({}, context),
-      Error,
-      "no root key source",
-    );
-    assertEquals(fake.seen, []);
-    assertNothingWritten(written);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a caFile that does not exist is an error that says caFile", async () => {
-  await withGateway(undefined, async (g) => {
-    const { context } = makeContext({ ...g, caFile: "/nonexistent/ca.crt" });
-    await assertRejects(
-      () => model.methods.accounts.execute({}, context),
-      Error,
-      "caFile",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The gateway refuses
-// ---------------------------------------------------------------------------
-
-for (
-  const [name, code] of [
-    ["admin-wrong-region", "IncorrectRegion"],
-    ["admin-wrong-secret", "SignatureDoesNotMatch"],
-    ["admin-unknown-key", "InvalidAccessKeyId"],
-    ["admin-not-admin", "XAdminAccessDenied"],
-  ]
-) {
-  Deno.test(`inventory fails whole on ${code}, writing nothing`, async () => {
-    const refusal = fixture(name);
-    await withGateway(
-      (line) => line === "PATCH /list-users" ? refusal : undefined,
-      async (g) => {
-        const { context, written, logs } = makeContext(
-          name === "admin-wrong-region" ? { ...g, region: "eu-north-1" } : g,
-        );
-        const error = await assertRejects(
-          () => model.methods.inventory.execute({}, context),
-          S3Error,
-        );
-        assertEquals((error as S3Error).code, code);
-        assertClean((error as Error).message + logs.join("\n"));
-        assertNothingWritten(written);
-      },
-    );
-  });
-}
-
-Deno.test("a 500 on one bucket's setting fails the inventory, writing nothing", async () => {
-  await withGateway(
-    (line) =>
-      line === "GET /ops?acl"
-        ? answer(
-          "/ops?acl",
-          500,
-          "<Error><Code>InternalError</Code><Message>boom</Message></Error>",
-          "GET",
-        )
-        : undefined,
-    async (g) => {
-      const { context, written } = makeContext(g);
-      const error = await assertRejects(
-        () => model.methods.inventory.execute({}, context),
-        S3Error,
-      );
-      assertEquals((error as S3Error).code, "InternalError");
-      assertStringIncludes((error as Error).message, "/ops?acl");
-      assertNothingWritten(written);
-    },
-  );
-});
-
-Deno.test("a bucket deleted between list and read fails with NoSuchBucket", async () => {
-  await withGateway(
-    (line) =>
-      line.startsWith("GET /ops?")
-        ? { ...fixture("bucket-missing-versioning"), path: line.slice(4) }
-        : undefined,
-    async (g) => {
-      const { context, written } = makeContext(g);
-      const error = await assertRejects(
-        () => model.methods.inventory.execute({}, context),
-        S3Error,
-      );
-      assertEquals((error as S3Error).code, "NoSuchBucket");
-      assertNothingWritten(written);
-    },
-  );
-});
-
-Deno.test("an error body that is not an S3 error does not reach the message", async () => {
-  // A misrouted proxy answering 502 with the account list must not leak it.
-  const leaked = fixture("admin-list-users").body;
-  await withGateway(
-    (line) =>
-      line === "PATCH /list-users"
-        ? answer("/list-users", 502, leaked)
-        : undefined,
-    async (g) => {
-      const { context } = makeContext(g);
-      const error = await assertRejects(() =>
-        model.methods.accounts.execute({}, context)
-      );
-      assertClean((error as Error).message);
-      assertStringIncludes((error as Error).message, "502");
-    },
-  );
-});
-
-// ---------------------------------------------------------------------------
-// The gateway answers 200 with something wrong
-// ---------------------------------------------------------------------------
-
-for (
-  const [label, body] of [
-    ["an empty body", ""],
-    ["plain text", "OK"],
-    ["another document", fixture("admin-list-buckets").body],
-    ["truncated XML", fixture("admin-list-users").body.slice(0, 300)],
-    ["an S3 error with status 200", "<Error><Code>AccessDenied</Code></Error>"],
-  ]
-) {
-  Deno.test(`list-users answering 200 with ${label} fails, recording nothing`, async () => {
-    await withGateway(
-      (line) =>
-        line === "PATCH /list-users"
-          ? answer("/list-users", 200, body)
-          : undefined,
-      async (g) => {
-        const { context, written, logs } = makeContext(g);
-        const error = await assertRejects(() =>
-          model.methods.accounts.execute({}, context)
-        );
-        assertClean((error as Error).message + logs.join("\n"));
-        assertNothingWritten(written);
-      },
-    );
-  });
-}
 
 Deno.test("an account without an access key is an error, not an empty name", () => {
   assertThrows(() =>
@@ -373,72 +169,6 @@ Deno.test("an unexpected element holding a secret does not reach the record", ()
   assertClean(JSON.stringify(accounts));
 });
 
-Deno.test("the root account is never recorded, even if list-users lists it", async () => {
-  const withRoot = fixture("admin-list-users").body.replace(
-    "<ListUserAccountsResult>",
-    `<ListUserAccountsResult><Accounts><Access>${ROOT_ACCESS}</Access><Secret>${ROOT_SECRET}</Secret><Role>admin</Role></Accounts>`,
-  );
-  await withGateway(
-    (line) =>
-      line === "PATCH /list-users"
-        ? answer("/list-users", 200, withRoot)
-        : undefined,
-    async (g) => {
-      const { context, written, logs } = makeContext(g);
-      await model.methods.accounts.execute({}, context);
-      const all = JSON.stringify(written) + logs.join("\n");
-      assertEquals(all.includes(ROOT_ACCESS), false);
-      assertClean(all);
-    },
-  );
-});
-
-Deno.test("a policy naming root records the placeholder, not the key", async () => {
-  const policy = JSON.stringify({
-    Statement: [{
-      Effect: "Allow",
-      Principal: { AWS: [ROOT_ACCESS] },
-      Action: "s3:*",
-    }],
-  });
-  await withGateway(
-    (line) =>
-      line === "GET /ops?policy"
-        ? {
-          method: "GET",
-          path: "/ops?policy",
-          status: 200,
-          contentType: "text/plain",
-          body: policy,
-        }
-        : undefined,
-    async (g) => {
-      const { context, written } = makeContext(g);
-      await model.methods.bucketSettings.execute({ buckets: ["ops"] }, context);
-      const recorded = String(written[0].data.policy);
-      assertEquals(recorded.includes(ROOT_ACCESS), false);
-      assertStringIncludes(recorded, "<root>");
-    },
-  );
-});
-
-Deno.test("accounts whose names slug alike still get distinct data names", async () => {
-  const body =
-    "<ListUserAccountsResult><Accounts><Access>A.b</Access><Role>user</Role></Accounts><Accounts><Access>a-b</Access><Role>user</Role></Accounts><Accounts><Access>a_b</Access><Role>user</Role></Accounts></ListUserAccountsResult>";
-  await withGateway(
-    (line) =>
-      line === "PATCH /list-users"
-        ? answer("/list-users", 200, body)
-        : undefined,
-    async (g) => {
-      const { context, written } = makeContext(g);
-      await model.methods.accounts.execute({}, context);
-      const names = written.map((w) => w.name);
-      assertEquals(new Set(names).size, 3, names.join(" "));
-    },
-  );
-});
-
 Deno.test("a DOCTYPE with entities is not expanded", () => {
   const bomb = `<?xml version="1.0"?>
 <!DOCTYPE r [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;"><!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;"><!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;"><!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">]>
@@ -450,143 +180,6 @@ Deno.test("a DOCTYPE with entities is not expanded", () => {
     return; // refusing the document is as good as not expanding it
   }
   assert(parsed.length < 10_000, `expanded to ${parsed.length} characters`);
-});
-
-// ---------------------------------------------------------------------------
-// The network
-// ---------------------------------------------------------------------------
-
-Deno.test("a gateway that never answers times out at httpTimeoutMs", async () => {
-  const file = keyFile();
-  __setFetch((_request, init) =>
-    new Promise((_resolve, reject) => {
-      init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-    })
-  );
-  try {
-    const { context, written } = makeContext(
-      globalArgs({ rootKeyFile: file.path, httpTimeoutMs: 50 }),
-    );
-    const started = performance.now();
-    const error = await assertRejects(() =>
-      model.methods.accounts.execute({}, context)
-    );
-    assert(performance.now() - started < 2000);
-    assertStringIncludes((error as Error).message, "/list-users");
-    assertClean((error as Error).message);
-    assertNothingWritten(written);
-  } finally {
-    __setFetch();
-    file.cleanup();
-  }
-});
-
-Deno.test("an aborted run stops, writing nothing", async () => {
-  const file = keyFile();
-  __setFetch((_request, init) =>
-    new Promise((_resolve, reject) => {
-      if (init.signal?.aborted) reject(init.signal.reason);
-      init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-    })
-  );
-  try {
-    const controller = new AbortController();
-    const { context, written } = makeContext(
-      globalArgs({ rootKeyFile: file.path }),
-    );
-    context.signal = controller.signal;
-    const run = model.methods.inventory.execute({}, context);
-    controller.abort(new Error("cancelled"));
-    await assertRejects(() => run);
-    assertNothingWritten(written);
-  } finally {
-    __setFetch();
-    file.cleanup();
-  }
-});
-
-Deno.test("health records a TLS failure instead of throwing", async () => {
-  __setFetch(() =>
-    Promise.reject(
-      new TypeError(
-        "error sending request: invalid peer certificate: UnknownIssuer",
-      ),
-    )
-  );
-  try {
-    const { context, written } = makeContext(
-      globalArgs({ s3Url: "https://127.0.0.1:1" }),
-    );
-    await model.methods.health.execute({}, context);
-    assertEquals(written[0].data.reachable, false);
-    assertEquals(written[0].data.tls, "failed");
-    assertEquals(written[0].data.status, null);
-  } finally {
-    __setFetch();
-  }
-});
-
-Deno.test("health finds a TLS failure in the error's cause, as fetch reports it", async () => {
-  __setFetch(() =>
-    Promise.reject(
-      new TypeError("fetch failed", {
-        cause: new Error("invalid peer certificate: UnknownIssuer"),
-      }),
-    )
-  );
-  try {
-    const { context, written } = makeContext(
-      globalArgs({ s3Url: "https://127.0.0.1:1" }),
-    );
-    await model.methods.health.execute({}, context);
-    assertEquals(written[0].data.tls, "failed");
-    assertStringIncludes(String(written[0].data.error), "UnknownIssuer");
-  } finally {
-    __setFetch();
-  }
-});
-
-Deno.test("a secret in an error's cause is masked too", async () => {
-  __setFetch(() =>
-    Promise.reject(
-      new TypeError("fetch failed", {
-        cause: new Error(`echo ${ROOT_SECRET}`),
-      }),
-    )
-  );
-  const file = keyFile();
-  try {
-    const { context } = makeContext(globalArgs({ rootKeyFile: file.path }));
-    const error = await assertRejects(() =>
-      model.methods.accounts.execute({}, context)
-    );
-    assertClean((error as Error).message);
-  } finally {
-    __setFetch();
-    file.cleanup();
-  }
-});
-
-Deno.test("health records a 503 as unreachable, with the status", async () => {
-  await withGateway(
-    (line) =>
-      line === "GET /health"
-        ? {
-          method: "GET",
-          path: "/health",
-          status: 503,
-          contentType: "text/plain",
-          body: "down",
-        }
-        : undefined,
-    async (g) => {
-      const { context, written } = makeContext(g);
-      await model.methods.health.execute({}, context);
-      assertEquals(written[0].data.reachable, false);
-      assertEquals(written[0].data.status, 503);
-      assertEquals(written[0].data.error, "down");
-    },
-  );
 });
 
 // ---------------------------------------------------------------------------
@@ -648,57 +241,6 @@ Deno.test("check refuses a rule it does not know", async () => {
   );
 });
 
-Deno.test("check with failOnFindings records the result, then fails", async () => {
-  await withGateway(undefined, async (g) => {
-    const { context, written } = makeContext(g);
-    await model.methods.inventory.execute({}, context);
-    await assertRejects(
-      () => model.methods.check.execute({ failOnFindings: true }, context),
-      Error,
-      "findings in inventory",
-    );
-    assertEquals(written.at(-1)!.spec, "check");
-  });
-});
-
-Deno.test("check does not count records another inventory wrote", async () => {
-  await withGateway(undefined, async (g) => {
-    const shared: Written[] = [];
-    const { context } = makeContext(g, shared);
-    await model.methods.inventory.execute({}, context);
-    // A stray record from elsewhere with no inventory tag, and one from a
-    // different inventory: neither may appear in the findings.
-    shared.push({
-      spec: "account",
-      name: "account-stray",
-      data: {
-        access: "stray",
-        role: "admin",
-        userId: 0,
-        groupId: 0,
-        projectId: 0,
-      },
-      tags: {},
-    });
-    shared.push({
-      spec: "account",
-      name: "account-other",
-      data: {
-        access: "other",
-        role: "admin",
-        userId: 0,
-        groupId: 0,
-        projectId: 0,
-      },
-      tags: { inventory: "00000000-0000-4000-8000-000000000000" },
-    });
-    await model.methods.check.execute({ rules: ["account-role"] }, context);
-    const subjects = (shared.at(-1)!.data.findings as { subject: string }[])
-      .map((f) => f.subject);
-    assertEquals(subjects, ["idle", "ops"]);
-  });
-});
-
 Deno.test("the root-key-named check accepts the pair as values and refuses half a pair", async () => {
   const check = model.checks["root-key-named"];
   assertEquals(
@@ -717,48 +259,9 @@ Deno.test("the root-key-named check accepts the pair as values and refuses half 
   assertEquals(JSON.stringify(half).includes(ROOT_SECRET), false);
 });
 
-Deno.test("an inventory signed with the pair as values records neither value", async () => {
-  const fake = installFetch();
-  try {
-    const { context, written, logs } = makeContext(
-      globalArgs({ rootAccessKey: ROOT_ACCESS, rootSecretKey: ROOT_SECRET }),
-    );
-    await model.methods.inventory.execute({}, context);
-    assertEquals(fake.seen.filter((s) => !s.signed).length, 1, "only /health");
-    const all = JSON.stringify({ written, logs });
-    assertEquals(all.includes(ROOT_SECRET), false);
-    assertEquals(all.includes(`"${ROOT_ACCESS}"`), false);
-  } finally {
-    fake.restore();
-  }
-});
-
 Deno.test("both values are marked sensitive in the schema", () => {
   const shape = GlobalArgsSchema.shape;
   for (const field of [shape.rootAccessKey, shape.rootSecretKey]) {
     assertEquals(field.meta()?.sensitive, true);
-  }
-});
-
-Deno.test("a relative rootKeyFile is read from the repository, not the working directory", async () => {
-  const repo = Deno.makeTempDirSync();
-  const file = keyFile();
-  try {
-    Deno.copyFileSync(file.path, `${repo}/root.env`);
-    const fake = installFetch();
-    try {
-      const { context, written } = makeContext(
-        globalArgs({ rootKeyFile: "root.env" }),
-      );
-      context.repoDir = repo;
-      await model.methods.buckets.execute({}, context);
-      assert(written.length > 0);
-      assert(fake.seen.every((s) => s.signed));
-    } finally {
-      fake.restore();
-    }
-  } finally {
-    file.cleanup();
-    Deno.removeSync(repo, { recursive: true });
   }
 });

@@ -1,7 +1,6 @@
 /**
- * Tests of the shared process layer and of its strict fake. They run once,
- * here in `lib/`, not in every extension. The negative tests come first:
- * each pins one safety property the layer exists for.
+ * Tests of the shared process layer. They run once, here in `lib/`, not in
+ * every extension: its pure functions, and the real spawn against `sh`.
  *
  * Needs `--allow-run=sh`: the real spawn is tested against `sh`.
  */
@@ -14,42 +13,32 @@ import {
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
 import {
-  __setSleep,
-  __setSpawn,
   assertDataName,
   brief,
-  cancelledError,
-  CHECK_TIMEOUT_MS,
-  cliCheck,
   CliError,
   cliError,
-  cliProblem,
-  DEFAULT_MAX_OUTPUT_BYTES,
-  DEFAULT_TIMEOUT_MS,
   describeArgs,
   encodedName,
   isCliError,
   MAX_DATA_NAME_BYTES,
-  MAX_TIMEOUT_MS,
-  now,
   parseJson,
-  pollBudget,
   positionalArg,
   redact,
   runCli,
   safeStderr,
   shown,
-  sleep,
   spawnProcess,
   STDERR_LIMIT,
   tryCli,
   valueArg,
   withoutNoise,
 } from "./cli.ts";
-import { CAPTURE, fakeCli, HOSTILE, knownFlags, withCli } from "./cli_fake.ts";
+import { HOSTILE } from "./test_inputs.ts";
 
 const TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+
 const PASSWORD = "PLANTED-passw0rd";
+
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
 // ---------------------------------------------------------------------------
@@ -94,31 +83,6 @@ Deno.test("valueArg lets a leading dash through and refuses line breaks", () => 
   for (const bad of ["a\nb", "a\rb", "a\0b", undefined, 7]) {
     assertThrows(() => valueArg(bad, "note"), Error, "note ");
   }
-});
-
-Deno.test("a call needs a binary, text arguments and a time limit above zero", async () => {
-  await withCli({ calls: [] }, async (k) => {
-    for (const timeoutMs of [0, -1, NaN, Infinity]) {
-      await assertRejects(
-        () => tryCli("tool", [], { timeoutMs }),
-        Error,
-        "needs a time limit above zero",
-      );
-    }
-    await assertRejects(() => tryCli("", []), Error, "not a binary");
-    await assertRejects(() => tryCli("a\0b", []), Error, "not a binary");
-    await assertRejects(
-      () => tryCli("tool", ["a\0b"]),
-      Error,
-      "argument that is not text",
-    );
-    await assertRejects(
-      () => tryCli("tool", [7 as unknown as string]),
-      Error,
-      "argument that is not text",
-    );
-    assertEquals(k.calls, []);
-  });
 });
 
 Deno.test("arguments are passed without a shell", async () => {
@@ -246,94 +210,6 @@ Deno.test("noise lines are dropped by the caller's filter, and the last one kept
   assertEquals(safeStderr("DEBUG a\nerror: real", { noise }), "error: real");
 });
 
-Deno.test("a failed command is a CliError: kind, exit code, one bounded line, nothing secret", async () => {
-  const e = await withCli({
-    calls: [{
-      bin: "tool",
-      args: ["push", "--password", PASSWORD, "img"],
-      code: 3,
-      fail:
-        `DEBUG chatter\nerror: denied for https://u:${PASSWORD}@r.example\n` +
-        `Authorization: Bearer ${TOKEN}\n` + "x".repeat(5000),
-      stdout: `payload ${PASSWORD}`,
-    }],
-  }, () =>
-    assertRejects(
-      () =>
-        runCli("tool", ["push", "--password", PASSWORD, "img"], {
-          noise: (l) => l.startsWith("DEBUG "),
-        }),
-      CliError,
-    ));
-  assertEquals([e.kind, e.code, e.bin, e.name], [
-    "failed",
-    3,
-    "tool",
-    "CliError",
-  ]);
-  assertStringIncludes(
-    e.message,
-    "tool push --password [redacted] img failed (exit 3): error: denied for https://r.example",
-  );
-  for (const t of [e.message, e.stderr, String(e), JSON.stringify(e)]) {
-    assertFalse(t.includes(PASSWORD), t.slice(0, 200));
-    assertFalse(t.includes(TOKEN));
-    assertFalse(t.includes("payload"));
-    assertFalse(t.includes("DEBUG"));
-  }
-  assertFalse(e.message.includes("\n"));
-  assert(e.message.length < 700, String(e.message.length));
-  assert(isCliError(e) && isCliError(e, "timeout", "failed"));
-  assertFalse(isCliError(e, "timeout"));
-  assertFalse(isCliError(new Error("x")));
-});
-
-Deno.test("standard output is not in an error unless asked for, and then redacted and bounded", async () => {
-  const call = {
-    bin: "tool",
-    args: ["x"],
-    code: 1,
-    stdout: `out ${PASSWORD} password=abc ` + "z".repeat(900),
-  };
-  await withCli(
-    { calls: [call, call, { ...call, fail: "on stderr" }] },
-    async () => {
-      const silent = await assertRejects(() => runCli("tool", ["x"]), CliError);
-      assertStringIncludes(silent.message, "(no error output)");
-      assertFalse(silent.message.includes("out "));
-      const asked = await assertRejects(
-        () =>
-          runCli("tool", ["x"], { stdoutInError: true, secrets: [PASSWORD] }),
-        CliError,
-      );
-      assertStringIncludes(
-        asked.message,
-        "failed (exit 1): out [redacted] password=[redacted] zzz",
-      );
-      assert(asked.message.length < 500);
-      // Standard error wins when there is some.
-      const both = await assertRejects(
-        () => runCli("tool", ["x"], { stdoutInError: true }),
-        CliError,
-      );
-      assertStringIncludes(both.message, "failed (exit 1): on stderr");
-    },
-  );
-});
-
-Deno.test("the caller can name the command, so arguments that say too much stay out", async () => {
-  await withCli({
-    calls: [{ bin: "tool", args: ["sign", "--key", "k", "ref"], fail: "boom" }],
-  }, async () => {
-    const e = await assertRejects(
-      () =>
-        runCli("tool", ["sign", "--key", "k", "ref"], { what: "tool sign" }),
-      CliError,
-    );
-    assertEquals(e.message, "tool sign failed (exit 1): boom");
-  });
-});
-
 Deno.test("environment additions reach the process and nothing else", async () => {
   const r = await runCli("sh", ["-c", 'printf "%s" "$PLANTED_VAR"; exit 0'], {
     env: { PLANTED_VAR: PASSWORD },
@@ -378,97 +254,6 @@ Deno.test("environment additions reach the process and nothing else", async () =
     { env: { ONLY: "this" }, timeoutMs: 5000 },
   );
   assertEquals(inherited.stdout, "home|this");
-});
-
-// ---------------------------------------------------------------------------
-// Negative: failures are named
-// ---------------------------------------------------------------------------
-
-Deno.test("a binary that is not there, a hang and a cancelled run each have their kind", async () => {
-  const abort = new AbortController();
-  await withCli({
-    calls: [
-      { bin: "tool", args: ["a"], notInstalled: true },
-      { bin: "/opt/tool", args: ["a"], notInstalled: true },
-      { bin: "tool", args: ["b"], hang: true },
-      { bin: "tool", args: ["b"], hang: true },
-      { bin: "tool", args: ["c"], hang: "until-cancelled" },
-    ],
-  }, async (k) => {
-    const missing = await assertRejects(() => runCli("tool", ["a"]), CliError);
-    assertEquals([missing.kind, missing.code], ["not-installed", null]);
-    assertEquals(
-      missing.message,
-      "tool is not on PATH; install it or put it on the PATH this repository runs with",
-    );
-    const hinted = await assertRejects(
-      () => tryCli("/opt/tool", ["a"], { installHint: "set toolBinary" }),
-      CliError,
-    );
-    assertEquals(hinted.message, "/opt/tool was not found; set toolBinary");
-    __setSpawn(() => Promise.reject(new Deno.errors.NotFound("x")));
-    const path = await assertRejects(() => tryCli("/opt/tool", []), CliError);
-    assertEquals(
-      path.message,
-      "/opt/tool was not found; install it there or correct the path",
-    );
-    __setSpawn(k.spawn);
-
-    const hung = await assertRejects(() => runCli("tool", ["b"]), CliError);
-    assertEquals(hung.kind, "timeout");
-    assertEquals(
-      hung.message,
-      `tool b failed: no answer within ${
-        DEFAULT_TIMEOUT_MS / 1000
-      } seconds; the process was stopped`,
-    );
-    const hung2 = await assertRejects(
-      () => runCli("tool", ["b"], { timeoutMs: 1500 }),
-      CliError,
-    );
-    assertStringIncludes(hung2.message, "within 1.5 seconds");
-
-    const p = assertRejects(
-      () => runCli("tool", ["c"], { signal: abort.signal }),
-      CliError,
-    );
-    abort.abort();
-    const cancelled = await p;
-    assertEquals(cancelled.kind, "cancelled");
-    assertEquals(cancelled.message, "tool c was cancelled");
-  });
-  // Any other spawn error is not swallowed or renamed.
-  __setSpawn(() => Promise.reject(new Deno.errors.NotCapable("no run")));
-  try {
-    await assertRejects(() => runCli("tool", []), Deno.errors.NotCapable);
-  } finally {
-    __setSpawn();
-  }
-});
-
-Deno.test("tryCli reports a failure without throwing, and cliError turns it into the same error", async () => {
-  await withCli({
-    calls: [
-      {
-        bin: "tool",
-        args: ["get", "x"],
-        code: 4,
-        fail: "Error: NotFound\n",
-        stdout: "partial",
-      },
-      { bin: "tool", args: ["get", "y"], out: "ok\n" },
-    ],
-  }, async () => {
-    const r = await tryCli("tool", ["get", "x"]);
-    assertEquals(
-      [r.success, r.code, r.stdout, r.stderr, r.timedOut, r.cancelled],
-      [false, 4, "partial", "Error: NotFound", false, false],
-    );
-    const e = cliError("tool", ["get", "x"], r);
-    assertEquals(e.message, "tool get x failed (exit 4): Error: NotFound");
-    const ok = await tryCli("tool", ["get", "y"]);
-    assertEquals([ok.success, ok.code, ok.stdout], [true, 0, "ok\n"]);
-  });
 });
 
 Deno.test("output that is not JSON is a named error that does not show the output", () => {
@@ -590,331 +375,6 @@ Deno.test("standard input reaches the process, bytes come back as bytes, and a p
 });
 
 // ---------------------------------------------------------------------------
-// Negative: polls
-// ---------------------------------------------------------------------------
-
-Deno.test("slow reads count against a poll's budget", async () => {
-  await withCli({ calls: [] }, async (k) => {
-    const budget = pollBudget(20_000);
-    let reads = 0;
-    while (await budget.wait(5000)) {
-      reads++;
-      k.advance(7000); // each read takes seven seconds
-    }
-    // 5 + 7, then 5 + 7 = 24 s used: no third wait. Without the reads
-    // counted there would be four.
-    assertEquals(reads, 2);
-    assertEquals(k.slept, [5000, 5000]);
-    assertEquals(budget.usedMs(), 24_000);
-    assertEquals(budget.leftMs(), 0);
-    assertEquals(await budget.wait(5000), false);
-  });
-  await withCli({ calls: [] }, async (k) => {
-    const budget = pollBudget(12_000);
-    const waits: boolean[] = [];
-    for (let i = 0; i < 4; i++) waits.push(await budget.wait(5000));
-    // The last wait is cut to what is left, and then there is none.
-    assertEquals(waits, [true, true, true, false]);
-    assertEquals(k.slept, [5000, 5000, 2000]);
-    assertEquals(await pollBudget(0).wait(1000), false);
-  });
-});
-
-Deno.test("a wait ends when the run is cancelled", async () => {
-  const abort = new AbortController();
-  const p = assertRejects(
-    () => sleep(60_000, abort.signal),
-    Error,
-    "cancelled",
-  );
-  abort.abort();
-  await p;
-  await assertRejects(() => sleep(1, abort.signal), Error, "cancelled");
-  await sleep(1);
-  const asked: number[] = [];
-  __setSleep((ms) => {
-    asked.push(ms);
-    return Promise.resolve();
-  });
-  try {
-    await sleep(60_000);
-    assertEquals(asked, [60_000]);
-  } finally {
-    __setSleep();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Happy paths
-// ---------------------------------------------------------------------------
-
-Deno.test("runCli passes input, environment, directory and limit through, and returns the output", async () => {
-  await withCli({
-    calls: [{
-      bin: "tool",
-      args: ["apply", "-f", "-"],
-      stdin: { a: 1 },
-      env: { TOOL_HOME: "/h" },
-      clearEnv: true,
-      cwd: "/work",
-      timeoutMs: 300_000,
-      out: { ok: true },
-    }, {
-      bin: "tool",
-      args: ["login", "--password-stdin"],
-      stdin: "plain text\n",
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-    }],
-  }, async (k) => {
-    const r = await runCli("tool", ["apply", "-f", "-"], {
-      stdin: '{"a":1}',
-      env: { TOOL_HOME: "/h" },
-      clearEnv: true,
-      cwd: "/work",
-      timeoutMs: 300_000,
-    });
-    assertEquals(parseJson(r.stdout, "tool apply"), { ok: true });
-    assertEquals([r.success, r.code, r.stderr], [true, 0, ""]);
-    await runCli("tool", ["login", "--password-stdin"], {
-      stdin: "plain text\n",
-    });
-    assertEquals(k.calls.length, 2);
-    assertEquals(k.calls[0].cwd, "/work");
-  });
-});
-
-Deno.test("a pre-flight check passes when the binary runs and says what is wrong when it does not", async () => {
-  const check = cliCheck({
-    bin: (g) => String(g.toolBinary ?? "tool"),
-    args: ["version"],
-    description: "toolBinary runs and reports its version",
-    installHint: "install tool or set toolBinary",
-  });
-  assertEquals([check.description, check.labels], [
-    "toolBinary runs and reports its version",
-    ["live"],
-  ]);
-  await withCli({
-    calls: [
-      {
-        bin: "tool",
-        args: ["version"],
-        out: "v1",
-        timeoutMs: CHECK_TIMEOUT_MS,
-      },
-      { bin: "/opt/tool", args: ["version"], out: "v1" },
-      { bin: "tool", args: ["version"], fail: `boom password=${PASSWORD}` },
-      { bin: "tool", args: ["version"], notInstalled: true },
-      { bin: "tool", args: ["version"], hang: true },
-      { bin: "tool", args: ["version"], code: 2, stdout: "usage on stdout" },
-    ],
-  }, async () => {
-    assertEquals(await check.execute(), { pass: true });
-    assertEquals(
-      await check.execute({ globalArgs: { toolBinary: "/opt/tool" } }),
-      { pass: true },
-    );
-    assertEquals(await check.execute({}), {
-      pass: false,
-      errors: ["tool version failed (exit 1): boom password=[redacted]"],
-    });
-    assertEquals((await check.execute()).errors, [
-      "tool was not found; install tool or set toolBinary",
-    ]);
-    assertStringIncludes(
-      (await check.execute()).errors![0],
-      "no answer within 20 seconds",
-    );
-    assertEquals(
-      await cliProblem("tool", ["version"]),
-      "tool version failed (exit 2): usage on stdout",
-    );
-  });
-  __setSpawn(() => Promise.reject(new Error("no permission")));
-  try {
-    assertEquals(
-      await cliProblem("tool", ["version"]),
-      "tool could not be run: no permission",
-    );
-  } finally {
-    __setSpawn();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// The fake is as strict as it says
-// ---------------------------------------------------------------------------
-
-Deno.test("the fake refuses a call that was not scripted, in any detail", async () => {
-  const spawn = (
-    o: Parameters<typeof fakeCli>[0],
-    bin: string,
-    args: string[],
-    opts: Record<string, unknown> = {},
-  ) =>
-    Promise.resolve().then(() =>
-      fakeCli(o).spawn(bin, args, { timeoutMs: 1000, ...opts })
-    );
-  const one = { bin: "tool", args: ["get", "x"] };
-  await assertRejects(
-    () => spawn({}, "tool", ["get"]),
-    Error,
-    "unexpected call",
-  );
-  await assertRejects(() => spawn({ calls: [one] }, "tool", ["get", "y"]));
-  await assertRejects(() => spawn({ calls: [one] }, "tool", ["get"]));
-  await assertRejects(() =>
-    spawn({ calls: [one] }, "tool", ["get", "x", "-v"])
-  );
-  await assertRejects(() => spawn({ calls: [one] }, "other", ["get", "x"]));
-  await assertRejects(
-    () => spawn({ calls: [one] }, "tool", ["get", "x"], { stdin: "{}" }),
-    Error,
-    "standard input",
-  );
-  await assertRejects(
-    () => spawn({ calls: [{ ...one, stdin: { a: 1 } }] }, "tool", ["get", "x"]),
-    Error,
-    "standard input",
-  );
-  await assertRejects(
-    () =>
-      spawn({ calls: [{ ...one, stdin: { a: 1 } }] }, "tool", ["get", "x"], {
-        stdin: '{"a":2}',
-      }),
-  );
-  await assertRejects(
-    () =>
-      spawn({ calls: [{ ...one, env: { A: "1" } }] }, "tool", ["get", "x"], {
-        env: { A: "1", B: "2" },
-      }),
-    Error,
-    "environment",
-  );
-  await assertRejects(
-    () => spawn({ calls: [{ ...one, cwd: "/a" }] }, "tool", ["get", "x"]),
-  );
-  await assertRejects(
-    () => spawn({ calls: [{ ...one, clearEnv: true }] }, "tool", ["get", "x"]),
-  );
-  await assertRejects(
-    () => spawn({ calls: [{ ...one, timeoutMs: 5 }] }, "tool", ["get", "x"]),
-  );
-  await assertRejects(
-    () => spawn({ calls: [one] }, "tool", ["get", "x"], { timeoutMs: 0 }),
-    Error,
-    "no time limit",
-  );
-  assertThrows(
-    () => fakeCli({ calls: [one] }).done(),
-    Error,
-    "scripted calls left unused",
-  );
-  const ok = await spawn({ calls: [one] }, "tool", ["get", "x"]);
-  assertEquals([ok.code, text(ok.stdout)], [0, ""]);
-});
-
-Deno.test("the fake captures, answers through a handler, and refuses flags a grammar does not know", async () => {
-  await withCli({
-    calls: [{ bin: "tool", args: ["patch", "-p", CAPTURE], out: "done" }],
-    grammar: { tool: knownFlags(["-p", "-n", "--type="]) },
-    handler: (call) =>
-      call.bin === "tool" && call.args[0] === "version"
-        ? { out: "v1" }
-        : undefined,
-  }, async (k) => {
-    assertEquals((await runCli("tool", ["version"])).stdout, "v1");
-    assertEquals(
-      (await runCli("tool", ["patch", "-p", '{"a":1}'])).stdout,
-      "done",
-    );
-    assertEquals(k.captured, ['{"a":1}']);
-    await assertRejects(
-      () => runCli("tool", ["get", "--all"]),
-      Error,
-      "unknown flag --all",
-    );
-    await assertRejects(
-      () => runCli("tool", ["get", "--types=x"]),
-      Error,
-      "unknown flag --types=x",
-    );
-    // Known flags, but neither scripted nor handled.
-    await assertRejects(
-      () => runCli("tool", ["get", "-n", "x", "--type=a", "--", "-free"]),
-      Error,
-      "unexpected call",
-    );
-    assertEquals(k.calls.length, 2);
-  });
-  for (const bad of HOSTILE.filter((h) => h.startsWith("-"))) {
-    assertThrows(() =>
-      knownFlags(["-n"])({ bin: "tool", args: ["get", bad], timeoutMs: 1 })
-    );
-  }
-});
-
-Deno.test("the fake captures standard input where the script says so, and refuses a call that gives none", async () => {
-  await withCli({
-    calls: [
-      { bin: "tool", args: ["patch", "-f", "-"], stdin: CAPTURE, out: "ok" },
-      { bin: "tool", args: ["patch", "-f", "-"], stdin: CAPTURE, out: "ok" },
-    ],
-  }, async (k) => {
-    await runCli("tool", ["patch", "-f", "-"], { stdin: '{"at":"now"}' });
-    assertEquals(k.captured, ['{"at":"now"}']);
-    await assertRejects(
-      () => runCli("tool", ["patch", "-f", "-"]),
-      Error,
-      "no standard input to capture",
-    );
-  });
-});
-
-Deno.test("a wait that is cancelled rejects with a CliError of kind cancelled, and its message is unchanged", async () => {
-  const abort = new AbortController();
-  const during = assertRejects(() => sleep(60_000, abort.signal), CliError);
-  abort.abort();
-  const before = await assertRejects(() => sleep(1, abort.signal), CliError);
-  for (const e of [await during, before, cancelledError()]) {
-    assertEquals([e.kind, e.message, e.code, e.stderr], [
-      "cancelled",
-      "cancelled",
-      null,
-      "",
-    ]);
-    assert(isCliError(e, "cancelled"));
-    assert(e instanceof Error);
-  }
-  // A poll: the wait between two reads ends the loop with the same error,
-  // with the real sleep and with the fake's.
-  await assertRejects(
-    () => pollBudget(60_000).wait(5000, abort.signal),
-    CliError,
-    "cancelled",
-  );
-  await withCli({ calls: [] }, async (k) => {
-    const e = await assertRejects(
-      () => pollBudget(60_000).wait(5000, abort.signal),
-      CliError,
-    );
-    assert(isCliError(e, "cancelled"));
-    assertEquals(k.slept, []);
-  });
-});
-
-Deno.test("a time limit longer than a timer can count is refused before a spawn", async () => {
-  await withCli({ calls: [] }, async (k) => {
-    await assertRejects(
-      () => tryCli("tool", ["build"], { timeoutMs: MAX_TIMEOUT_MS + 1 }),
-      Error,
-      "longer than a timer can count",
-    );
-    assertEquals(k.calls.length, 0);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Additions: the output bound, the clock, data names, appliesTo
 // ---------------------------------------------------------------------------
 
@@ -1015,102 +475,6 @@ Deno.test("runCli names an output past the bound as too-large; tryCli returns th
   // A normal answer has no mark at all.
   const ok = await tryCli("sh", ["-c", "echo hi"], { timeoutMs: 5000 });
   assertEquals("tooLarge" in ok, false);
-});
-
-Deno.test("every call has an output bound: 64 MiB unless it sets its own, and never zero", async () => {
-  assertEquals(DEFAULT_MAX_OUTPUT_BYTES, 64 * 1024 * 1024);
-  await withCli({
-    calls: [
-      { bin: "tool", args: ["a"], maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES },
-      { bin: "tool", args: ["b"], maxOutputBytes: 1000 },
-      { bin: "tool", args: ["c"], maxOutputBytes: Infinity },
-    ],
-  }, async (k) => {
-    await runCli("tool", ["a"]);
-    await runCli("tool", ["b"], { maxOutputBytes: 1000 });
-    await runCli("tool", ["c"], { maxOutputBytes: Infinity });
-    assertEquals(k.calls.map((c) => c.maxOutputBytes), [
-      DEFAULT_MAX_OUTPUT_BYTES,
-      1000,
-      Infinity,
-    ]);
-    for (const bad of [0, -1, NaN, "9" as unknown as number]) {
-      await assertRejects(
-        () => tryCli("tool", ["d"], { maxOutputBytes: bad }),
-        Error,
-        "output bound above zero",
-      );
-    }
-    assertEquals(k.calls.length, 3);
-  });
-});
-
-Deno.test("the fake scripts an over-long output: by its real length, or by a mark", async () => {
-  await withCli({
-    calls: [
-      { bin: "tool", args: ["a"], out: "x".repeat(50) },
-      { bin: "tool", args: ["a"], out: "x".repeat(50) },
-      {
-        bin: "tool",
-        args: ["b"],
-        code: 2,
-        stdout: "o".repeat(8),
-        fail: "eeeeee",
-      },
-      { bin: "tool", args: ["c"], out: "short", tooLarge: true },
-      { bin: "tool", args: ["d"], maxOutputBytes: 7, out: "1234567" },
-    ],
-  }, async () => {
-    assertEquals(
-      (await runCli("tool", ["a"], { maxOutputBytes: 50 })).stdout.length,
-      50,
-    );
-    const cut = await tryCli("tool", ["a"], { maxOutputBytes: 20 });
-    assertEquals([cut.tooLarge, cut.success, cut.code, cut.stdout], [
-      true,
-      false,
-      null,
-      "x".repeat(20),
-    ]);
-    const both = await tryCli("tool", ["b"], { maxOutputBytes: 10 });
-    assertEquals([both.tooLarge, both.stdout, both.stderr], [
-      true,
-      "oooooooo",
-      "ee",
-    ]);
-    const marked = await assertRejects(() => runCli("tool", ["c"]), CliError);
-    assertEquals(marked.kind, "too-large");
-    assertStringIncludes(marked.message, `${DEFAULT_MAX_OUTPUT_BYTES} bytes`);
-    assertEquals(
-      (await runCli("tool", ["d"], { maxOutputBytes: 7 })).stdout,
-      "1234567",
-    );
-  });
-  // The bound a scripted call expects is checked.
-  await assertRejects(() =>
-    Promise.resolve().then(() =>
-      fakeCli({ calls: [{ bin: "tool", args: [], maxOutputBytes: 7 }] }).spawn(
-        "tool",
-        [],
-        { timeoutMs: 1000, maxOutputBytes: 8 },
-      )
-    )
-  );
-});
-
-Deno.test("now is the clock a test controls", async () => {
-  const real = now();
-  assert(Math.abs(real - Date.now()) < 1000);
-  await withCli({ calls: [] }, async (k) => {
-    const start = now();
-    k.advance(1500);
-    assertEquals(now() - start, 1500);
-    const budget = pollBudget(10_000);
-    await budget.wait(2000);
-    assertEquals(now() - start, 1500, "a fake wait moves no clock");
-    assertEquals(budget.usedMs(), 2000);
-  });
-  assert(now() >= real);
 });
 
 /** The reverse of `encodedName`; it exists only if the encoding is injective. */
@@ -1277,31 +641,4 @@ Deno.test("assertDataName refuses a name the data store cannot hold, with a boun
   assertEquals(long.length, 258);
   assertThrows(() => assertDataName(long, "path"), Error, "258 bytes");
   assertDataName(encodedName("/".repeat(85)), "path");
-});
-
-Deno.test("cliCheck carries appliesTo when given, and has none otherwise", async () => {
-  const methods = ["lookup", "ensure"];
-  const scoped = cliCheck({
-    bin: "tool",
-    args: ["version"],
-    description: "tool runs",
-    appliesTo: methods,
-  });
-  assertEquals(scoped.appliesTo, ["lookup", "ensure"]);
-  methods.push("later");
-  assertEquals(scoped.appliesTo, ["lookup", "ensure"]);
-  assertEquals(Object.keys(scoped), [
-    "description",
-    "labels",
-    "appliesTo",
-    "execute",
-  ]);
-  const plain = cliCheck({ bin: "tool", args: ["version"], description: "d" });
-  assertEquals("appliesTo" in plain, false);
-  assertEquals(Object.keys(plain), ["description", "labels", "execute"]);
-  await withCli({
-    calls: [{ bin: "tool", args: ["version"], out: "v1" }],
-  }, async () => {
-    assertEquals(await scoped.execute(), { pass: true });
-  });
 });

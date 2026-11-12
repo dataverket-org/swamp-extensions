@@ -418,11 +418,13 @@ log: its warnings and errors always, at most 100 per repository, and with
 
 ## Testing
 
-`deno task test` runs the unit tests on a strict fake of the container engine:
-an unexpected command, flag or time limit fails the test. The negative tests
-cover a run that hangs, a missing binary, an image that cannot be pulled, exits
-and outputs of every wrong shape, a huge report, planted secrets, hostile paths,
-files that are not files, a failing repository among others, and cancelled runs.
+`deno task test` runs the unit tests of the pure parts: data names, paths,
+configuration files, findings and the reading of Renovate's output and log
+lines. It also runs `lookup` through `createModelTestContext` with a stub in
+place of the container engine, which answers only the calls its test lists: a
+run that records a repository and the inventory, a container that exits non-zero
+and is recorded as failed, and an image that is not held while `pull` is
+`never`, which fails before any container starts and writes nothing.
 
 The live suite in `smoke/` ran on rootless Podman 4.9.3 on Linux x86_64 with
 Renovate 44.226.2 against the real registries, through swamp, from a scratch

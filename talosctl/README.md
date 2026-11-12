@@ -150,6 +150,16 @@ swamp model method run lab volumes
 swamp data query 'modelName == "lab" && specName == "volumeLayout" && isLatest' --json
 ```
 
+## Tests
+
+`deno task test` runs every method of `node.ts` through `createModelTestContext`
+from `@swamp-club/swamp-testing`, with a stub runner in place of `talosctl`: a
+success and a failure for each, asserting on the records written and the
+warnings logged. Each stub answers only the calls its test lists. The unit tests
+also cover the pure parts: the arguments built for talosctl, the key file check,
+and the reading of talosctl's tables, logs, JSON and `/var` usage. No test runs
+the real talosctl.
+
 ## License
 
 AGPL-3.0-only, see [LICENSE.md](./LICENSE.md). Copyright 2026 Jan Ivar Beddari;

@@ -1,10 +1,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model, normalizeSnapshot } from "./snapshot.ts";
-import { idRows, SNAPSHOT_SHOW } from "./fixtures.ts";
-import { __setPollInterval } from "./common.ts";
-import { installFake, line, makeContext, notFound } from "./test_support.ts";
-
-const ID = SNAPSHOT_SHOW.id;
+import { fail, NOT_FOUND, withStub } from "./test_support.ts";
+import { SNAPSHOT_SHOW } from "./fixtures.ts";
 
 Deno.test("normalizeSnapshot reads volume, size and status", () => {
   const s = normalizeSnapshot(SNAPSHOT_SHOW);
@@ -13,116 +10,168 @@ Deno.test("normalizeSnapshot reads volume, size and status", () => {
   assertEquals(s.status, "available");
 });
 
-Deno.test("list filters by volume", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "volume snapshot list -c ID --volume web-01-state") {
-      return idRows(ID);
-    }
-    if (l === `volume snapshot show ${ID}`) return SNAPSHOT_SHOW;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({ volume: "web-01-state" }, context);
-    assertEquals(written[0].name, "snapshot-web-01-state-pre-upgrade");
-  } finally {
-    fake.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub runner ─────
 
-Deno.test("create waits for the snapshot to leave creating and rejects error states", async () => {
-  __setPollInterval(1);
-  let polls = 0;
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "volume snapshot show snap") {
-      return notFound("volume snapshot", "snap");
-    }
-    if (l === "volume snapshot create --volume web-01-state --force snap") {
-      return { ...SNAPSHOT_SHOW, name: "snap", status: "creating" };
-    }
-    if (l === `volume snapshot show ${ID}`) {
-      polls++;
-      return {
-        ...SNAPSHOT_SHOW,
-        name: "snap",
-        status: polls < 3 ? "creating" : "available",
-      };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.create.execute({
-      name: "snap",
+const M = model.methods;
+const ID = SNAPSHOT_SHOW.id;
+const NAME = "snapshot-web-01-state-pre-upgrade";
+
+Deno.test("list shows each listed snapshot and writes one record each", () =>
+  withStub([
+    ["volume snapshot list -c ID --volume web-01-state", {
+      json: [{ ID }],
+    }],
+    [`volume snapshot show ${ID}`, { json: SNAPSHOT_SHOW }],
+  ], async (h) => {
+    await M.list.execute({ volume: "web-01-state" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.sizeGb]), [[
+      "snapshot",
+      NAME,
+      20,
+    ]]);
+    assertEquals(h.logs().at(-1)?.message, "stored {count} snapshots");
+  }));
+
+Deno.test("list fails when the CLI does, and writes nothing", () =>
+  withStub(
+    [["volume snapshot list", fail("Unauthorized (HTTP 401)")]],
+    async (h) => {
+      await assertRejects(
+        () => M.list.execute({}, h.context),
+        Error,
+        "volume snapshot list failed (exit 1): Unauthorized (HTTP 401)",
+      );
+      assertEquals(h.written(), []);
+    },
+  ));
+
+Deno.test("get writes the snapshot it reads", () =>
+  withStub(
+    [[`volume snapshot show ${ID}`, { json: SNAPSHOT_SHOW }]],
+    async (h) => {
+      await M.get.execute({ snapshot: ID }, h.context);
+      const [w] = h.written();
+      assertEquals([w.spec, w.name, w.data.volumeId], [
+        "snapshot",
+        NAME,
+        SNAPSHOT_SHOW.volume_id,
+      ]);
+    },
+  ));
+
+Deno.test("get fails on a missing snapshot, and writes nothing", () =>
+  withStub([["volume snapshot show gone", NOT_FOUND]], async (h) => {
+    await assertRejects(
+      () => M.get.execute({ snapshot: "gone" }, h.context),
+      Error,
+      "No Server found for missing",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("create snapshots the volume, waits for available and writes it", () =>
+  withStub([
+    [`volume snapshot show ${SNAPSHOT_SHOW.name}`, NOT_FOUND],
+    ["volume snapshot create --volume web-01-state --force", {
+      json: { ...SNAPSHOT_SHOW, status: "creating" },
+    }],
+    [`volume snapshot show ${ID}`, [
+      { json: { ...SNAPSHOT_SHOW, status: "creating" } },
+      { json: { ...SNAPSHOT_SHOW, status: "creating" } },
+      { json: SNAPSHOT_SHOW },
+    ]],
+  ], async (h) => {
+    await M.create.execute({
+      name: SNAPSHOT_SHOW.name,
       volume: "web-01-state",
       force: true,
       wait: true,
-      timeoutSeconds: 10,
-    }, context);
-    assertEquals(written[0].data.status, "available");
-  } finally {
-    fake.restore();
-    __setPollInterval();
-  }
-  __setPollInterval(1);
-  const failing = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "volume snapshot show bad") {
-      return notFound("volume snapshot", "bad");
-    }
-    if (args[2] === "create") return { ...SNAPSHOT_SHOW, status: "creating" };
-    if (l === `volume snapshot show ${ID}`) {
-      return { ...SNAPSHOT_SHOW, status: "error" };
-    }
-    return undefined;
-  });
-  const second = makeContext();
-  try {
+      timeoutSeconds: 5,
+    }, h.context);
+    const [w] = h.written();
+    assertEquals([w.spec, w.name, w.data.status], [
+      "snapshot",
+      NAME,
+      "available",
+    ]);
+    assertEquals(
+      h.calls.filter((c) => c.startsWith("volume snapshot create")).length,
+      1,
+    );
+    assertEquals(h.logs().at(-1)?.message, "snapshot {name} is {status}");
+  }));
+
+Deno.test("create reuses an existing snapshot of the same name", () =>
+  withStub([
+    [`volume snapshot show ${SNAPSHOT_SHOW.name}`, { json: SNAPSHOT_SHOW }],
+  ], async (h) => {
+    await M.create.execute({
+      name: SNAPSHOT_SHOW.name,
+      volume: "web-01-state",
+      force: false,
+      wait: true,
+      timeoutSeconds: 5,
+    }, h.context);
+    assertEquals(h.written().map((w) => w.name), [NAME]);
+    assertEquals(h.calls.some((c) => c.includes(" create ")), false);
+  }));
+
+Deno.test("create fails when the snapshot enters error, and writes nothing", () =>
+  withStub([
+    [`volume snapshot show ${SNAPSHOT_SHOW.name}`, NOT_FOUND],
+    ["volume snapshot create", {
+      json: { ...SNAPSHOT_SHOW, status: "creating" },
+    }],
+    [`volume snapshot show ${ID}`, [
+      { json: { ...SNAPSHOT_SHOW, status: "creating" } },
+      { json: { ...SNAPSHOT_SHOW, status: "error" } },
+    ]],
+  ], async (h) => {
     await assertRejects(
       () =>
-        model.methods.create.execute({
-          name: "bad",
-          volume: "v",
+        M.create.execute({
+          name: SNAPSHOT_SHOW.name,
+          volume: "web-01-state",
           force: false,
           wait: true,
-          timeoutSeconds: 10,
-        }, second.context),
+          timeoutSeconds: 5,
+        }, h.context),
       Error,
-      "entered status error",
+      `snapshot ${ID} entered status error`,
     );
-    assertEquals(second.written.length, 0);
-  } finally {
-    failing.restore();
-    __setPollInterval();
-  }
-});
+    assertEquals(h.written(), []);
+  }));
 
-Deno.test("delete waits until the snapshot is gone and drops the resource", async () => {
-  __setPollInterval(1);
-  let gone = false;
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === `volume snapshot show ${ID}`) {
-      return gone ? notFound("volume snapshot", ID) : SNAPSHOT_SHOW;
-    }
-    if (l === `volume snapshot delete ${ID}`) {
-      gone = true;
-      return "";
-    }
-    return undefined;
-  });
-  const { context, deleted } = makeContext();
-  try {
-    await model.methods.delete.execute({
-      snapshot: ID,
-      wait: true,
-      timeoutSeconds: 10,
-    }, context);
-    assertEquals(deleted, ["snapshot-web-01-state-pre-upgrade"]);
-  } finally {
-    fake.restore();
-    __setPollInterval();
-  }
-});
+Deno.test("delete deletes, waits until gone and drops the stored resource", () =>
+  withStub([
+    [`volume snapshot show ${SNAPSHOT_SHOW.name}`, { json: SNAPSHOT_SHOW }],
+    [`volume snapshot delete ${ID}`, { stdout: "" }],
+    [`volume snapshot show ${ID}`, [{ json: SNAPSHOT_SHOW }, NOT_FOUND]],
+  ], async (h) => {
+    await M.delete.execute(
+      { snapshot: SNAPSHOT_SHOW.name, wait: true, timeoutSeconds: 5 },
+      h.context,
+    );
+    assertEquals(h.deleted(), [NAME]);
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("delete fails when the CLI refuses, and drops nothing", () =>
+  withStub([
+    [`volume snapshot show ${SNAPSHOT_SHOW.name}`, { json: SNAPSHOT_SHOW }],
+    [
+      `volume snapshot delete ${ID}`,
+      fail("Invalid snapshot: status must be available (HTTP 400)"),
+    ],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.delete.execute(
+          { snapshot: SNAPSHOT_SHOW.name, wait: true, timeoutSeconds: 5 },
+          h.context,
+        ),
+      Error,
+      "volume snapshot delete",
+    );
+    assertEquals(h.deleted(), []);
+  }));

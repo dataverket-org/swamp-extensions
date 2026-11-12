@@ -241,15 +241,23 @@ and every record field are as before. What a user can notice:
 
 ## Testing
 
-`deno task test` runs the unit tests against a strict fake of kind, kubectl and
-the container tools. The live suite in `smoke/` was run with rootless Podman and
+`deno task test` runs the unit tests. Each method, `ensure`, `get` and `delete`,
+runs its `execute` through `createModelTestContext` from
+`@swamp-club/swamp-testing` with a stub of the `kind` and `kubectl` commands,
+and is tested for a success and a failure: the record it writes (created or
+found, the context and API server address, the manifests applied, the manifest
+that failed and why), its last log line, the commands it runs and the ones it
+must not, and the refusal of a kubeconfig whose directory is missing. The
+duration reader, the progress filter and the shell quoting are tested on their
+own. The stub answers only the commands a test names; it is not a model of kind
+or of a cluster. The live suite in `smoke/` was run with rootless Podman and
 kind with the Podman provider: it creates a cluster through `ensure`, runs
 `ensure` again, reads it, loses its kubeconfig, stops and starts its node
 container, deletes it twice, and runs the refusals.
 [smoke/README.md](./smoke/README.md) in the source repository says what it needs
 and how to run it. Docker and nerdctl were not run, and the mode without the
-`kubeconfig` argument is covered by the unit tests only, because a live run of
-it writes to the default kubeconfig.
+`kubeconfig` argument is not covered by any test, because a live run of it
+writes to the default kubeconfig.
 
 ## As a workload issuer for Salmon
 

@@ -175,10 +175,15 @@ decide.
 deno test --allow-env --allow-read --allow-write
 ```
 
-The unit tests replay answers recorded from a throwaway gateway (`fixtures/`),
-and include a negative suite (`negative_test.ts`). `smoke/` runs the model
-through swamp against two throwaway gateways in podman, one of them behind its
-own CA; see `smoke/README.md`.
+The unit tests run every method through swamp's `createModelTestContext` with a
+stub fetch injected at the transport's `__setFetch` seam (`test_support.ts`), a
+success and a failure path each, and assert on the records written and their
+inventory tag; no root key or account secret reaches a record, a log or an
+error. `check` reads its records through a stubbed `queryData`. The parser tests
+read answers recorded from a throwaway gateway (`fixtures/`), and the key file,
+the signing and the arguments are tested too. `smoke/` runs the model through
+swamp against two throwaway gateways in podman, one of them behind its own CA;
+see `smoke/README.md`.
 
 ## License
 

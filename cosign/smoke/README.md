@@ -127,13 +127,13 @@ and the tag form with OpenSSL 4.1 and curl.
 No cluster is needed. macOS has not been run; `tag-form-sign.sh` uses GNU
 `stat`, `base64 -w0` and `sha256sum`, so the parts that need a registry are
 expected to need changes there. No call waits longer than 150 s. Not covered by
-a live run, only by the unit tests: an image signed by several identities; a
-bundle with a certificate that is not genuine; a tag-form signature whose signer
-wrote `githubWorkflow` values or an issuer into its payload under a certificate
-that has none, which needs a certificate authority of one's own; more than five
-identities in the tag form; a tag-form payload spelled in capitals beside a
-forged certificate; a transparency log that cannot be reached; a private
-Sigstore with `trustedRoot`; and a registry that needs `insecureRegistry`. In
-batch D a rate limit and a server error are tried on the signature bundle's
-manifest only, since cosign waits and tries again on each; every other request
-is failed with a refused login.
+any test: an image signed by several identities; a bundle with a certificate
+that is not genuine; a tag-form signature whose signer wrote `githubWorkflow`
+values or an issuer into its payload under a certificate that has none, which
+needs a certificate authority of one's own; more than five identities in the tag
+form; a tag-form payload spelled in capitals beside a forged certificate; a
+transparency log that cannot be reached; a private Sigstore with `trustedRoot`;
+and a registry that needs `insecureRegistry`. In batch D a rate limit and a
+server error are tried on the signature bundle's manifest only, since cosign
+waits and tries again on each; every other request is failed with a refused
+login.

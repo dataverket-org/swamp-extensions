@@ -1,58 +1,77 @@
-import { assertEquals } from "jsr:@std/assert@1.0.13";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./org.ts";
-import { ORG } from "./fixtures.ts";
-import { installFake, line, makeContext, page } from "./test_support.ts";
+import { assertNoPlanted, fail, harness } from "./test_support.ts";
 
-Deno.test("get stores the service user's own organization", async () => {
-  const fake = installFake((call) =>
-    line(call) === "GET /management/v1/orgs/me" ? { org: ORG } : undefined
-  );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.get.execute({}, context);
-    assertEquals(written[0].name, "org-example");
-    assertEquals(written[0].data.primaryDomain, "example.org");
-    assertEquals(written[0].data.state, "active");
-  } finally {
-    fake.restore();
-  }
+const ORG = { id: "100", name: "dataverket", state: "ORG_STATE_ACTIVE" };
+
+Deno.test("get stores the service user's organization", async () => {
+  const h = harness({ "GET /management/v1/orgs/me": { org: ORG } });
+  await model.methods.get.execute({}, h.context);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name, w.data.id], ["org", "org-dataverket", "100"]);
+  assertNoPlanted(h);
 });
 
-Deno.test("list stores one resource per organization", async () => {
-  const fake = installFake((call) =>
-    line(call) === "POST /v2/organizations/_search"
-      ? { result: [ORG, { ...ORG, id: "2", name: "annet" }] }
-      : undefined
+Deno.test("get fails when the instance refuses, and writes nothing", async () => {
+  const h = harness({ "GET /management/v1/orgs/me": fail(401, "no") });
+  await assertRejects(
+    () => model.methods.get.execute({}, h.context),
+    Error,
+    "HTTP 401",
   );
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({}, context);
-    assertEquals(written.map((w) => w.name), ["org-example", "org-annet"]);
-  } finally {
-    fake.restore();
-  }
+  assertEquals(h.written(), []);
+  assertNoPlanted(h);
 });
 
-Deno.test("managerList records who can administer the organization", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === "GET /management/v1/orgs/me") return { org: ORG };
-    if (line(call) === "POST /management/v1/orgs/me/members/_search") {
-      return page([{
-        userId: "500000000000000002",
-        displayName: "Kari Nordmann",
-        preferredLoginName: "kari@example.org",
-        roles: ["ORG_OWNER"],
-      }]);
-    }
-    return undefined;
+Deno.test("list stores every organization the search returns", async () => {
+  const h = harness({
+    "POST /v2/organizations/_search": {
+      result: [ORG, { id: "101", name: "kunde" }],
+    },
   });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.managerList.execute({}, context);
-    assertEquals(written[0].name, "manager-kari-example-org");
-    assertEquals(written[0].data.roles, ["ORG_OWNER"]);
-    assertEquals(written[0].data.orgId, ORG.id);
-  } finally {
-    fake.restore();
-  }
+  await model.methods.list.execute({}, h.context);
+  assertEquals(h.written().map((w) => w.name), ["org-dataverket", "org-kunde"]);
+  assertEquals(h.calls[0].body, {
+    query: { offset: "0", limit: 100, asc: true },
+  });
+});
+
+Deno.test("list fails on an API error and writes nothing", async () => {
+  const h = harness({ "POST /v2/organizations/_search": fail(403) });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("managerList stores each manager under its organization", async () => {
+  const h = harness({
+    "GET /management/v1/orgs/me": { org: ORG },
+    "POST /management/v1/orgs/me/members/_search": {
+      result: [{
+        userId: "200",
+        preferredLoginName: "ola@dataverket",
+        roles: ["ORG_OWNER"],
+      }],
+    },
+  });
+  await model.methods.managerList.execute({}, h.context);
+  const [w] = h.written();
+  assertEquals([w.spec, w.name], ["manager", "manager-ola-dataverket"]);
+  assertEquals([w.data.orgId, w.data.roles], ["100", ["ORG_OWNER"]]);
+});
+
+Deno.test("managerList fails when the member search is refused", async () => {
+  const h = harness({
+    "GET /management/v1/orgs/me": { org: ORG },
+    "POST /management/v1/orgs/me/members/_search": fail(403),
+  });
+  await assertRejects(
+    () => model.methods.managerList.execute({}, h.context),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
 });

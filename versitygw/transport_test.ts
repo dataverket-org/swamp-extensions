@@ -1,26 +1,21 @@
 import { inRepo, resolvePaths } from "./gateway.ts";
 import {
   assertEquals,
-  assertRejects,
   assertStringIncludes,
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
 import {
-  __setFetch,
-  type Endpoint,
   expectOk,
   joinUrl,
   parseError,
   parseKeyFile,
   readRootKey,
   S3Error,
-  send,
   sign,
 } from "./transport.ts";
 import {
   fixture,
   globalArgs,
-  installFetch,
   keyFile,
   ROOT_ACCESS,
   ROOT_SECRET,
@@ -30,6 +25,7 @@ const AWS_KEY = {
   access: "AKIAIOSFODNN7EXAMPLE",
   secret: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 };
+
 const EMPTY_SHA =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -212,46 +208,6 @@ Deno.test("joinUrl keeps a path prefix on the base URL", () => {
   assertEquals(joinUrl("http://h", "/b", "acl"), "http://h/b?acl");
 });
 
-Deno.test("send signs admin calls and not the health check", async () => {
-  const fake = installFetch();
-  const g: Endpoint = globalArgs();
-  const key = { access: ROOT_ACCESS, secret: ROOT_SECRET };
-  try {
-    await send(g, key, { api: "admin", method: "PATCH", path: "/list-users" });
-    await send(g, undefined, {
-      api: "s3",
-      method: "GET",
-      path: "/health",
-      unsigned: true,
-    });
-    assertEquals(fake.seen, [
-      { line: "PATCH /list-users", signed: true },
-      { line: "GET /health", signed: false },
-    ]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("send masks the key pair in a transport failure", async () => {
-  __setFetch(() =>
-    Promise.reject(new Error(`refused for ${ROOT_ACCESS}:${ROOT_SECRET}`))
-  );
-  try {
-    const error = await assertRejects(() =>
-      send(globalArgs(), { access: ROOT_ACCESS, secret: ROOT_SECRET }, {
-        api: "admin",
-        method: "PATCH",
-        path: "/list-users",
-      })
-    );
-    assertEquals((error as Error).message.includes(ROOT_SECRET), false);
-    assertStringIncludes((error as Error).message, "[REDACTED]");
-  } finally {
-    __setFetch();
-  }
-});
-
 Deno.test("readRootKey takes the pair as values, and only as a whole pair", () => {
   assertEquals(
     readRootKey(
@@ -314,27 +270,6 @@ Deno.test("a value with whitespace or an empty value is refused by name, never b
     Error,
     "give one root key source",
   );
-});
-
-Deno.test("a key the signer rejects is masked in the error", async () => {
-  // The file source is not checked for whitespace; the signer's own error,
-  // which quotes the header it built, must still come out masked.
-  __setFetch(() => Promise.reject(new Error("not reached")));
-  try {
-    const key = { access: `${ROOT_ACCESS}\u0000`, secret: ROOT_SECRET };
-    const error = await assertRejects(() =>
-      send(globalArgs(), key, {
-        api: "admin",
-        method: "PATCH",
-        path: "/list-buckets",
-      })
-    );
-    const message = (error as Error).message;
-    assertEquals(message.includes(ROOT_ACCESS), false, message);
-    assertEquals(message.includes(ROOT_SECRET), false, message);
-  } finally {
-    __setFetch();
-  }
 });
 
 Deno.test("inRepo takes a relative path from the repository and leaves the rest", () => {

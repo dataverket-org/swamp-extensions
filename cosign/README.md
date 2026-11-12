@@ -714,14 +714,20 @@ COSIGN_KEYLESS_E2E=1 \
   deno test --allow-env --allow-read --allow-write --allow-run
 ```
 
-The unit tests drive the model with a fake cosign. Every temporary file of a
-test, and of the model under test, is made in one directory that the run removes
-when it ends, also after a failed test. With `COSIGN_E2E=1` one test runs the
-real one against the image `COSIGN_E2E_REF` names, in a registry that needs no
-credentials: it generates a key pair through the model, signs, verifies,
-verifies with another key and sees it fail, attests, verifies the attestation,
-then signs a file, verifies it, and sees a tampered copy fail. A throwaway
-registry does:
+The unit tests cover the pure parts: key kinds, references, the arguments check,
+and the reading of cosign's output, of statements and of certificates. They also
+run each of the nine methods through `createModelTestContext` from
+`@swamp-club/swamp-testing`, with a stub in place of cosign that answers only
+the calls its test names: one test of what the method records when cosign
+succeeds, one of a failure, and in each that neither the private key nor the
+passphrase reaches a record, a log line or an error. No test runs cosign itself.
+Every temporary file of a test, and of the model under test, is made in one
+directory that the run removes when it ends, also after a failed test. With
+`COSIGN_E2E=1` one test runs the real one against the image `COSIGN_E2E_REF`
+names, in a registry that needs no credentials: it generates a key pair through
+the model, signs, verifies, verifies with another key and sees it fail, attests,
+verifies the attestation, then signs a file, verifies it, and sees a tampered
+copy fail. A throwaway registry does:
 
 ```sh
 podman run -d --name registry -p 127.0.0.1:5000:5000 docker.io/library/registry:2

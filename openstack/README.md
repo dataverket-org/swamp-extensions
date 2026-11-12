@@ -210,14 +210,23 @@ model deleted, and `get` would refuse to run until a `create`.
 ## Development
 
 ```sh
-~/.swamp/deno/deno task test      # unit tests against a scripted fake CLI
+~/.swamp/deno/deno task test      # unit tests of the parsers and the methods
 ~/.swamp/deno/deno task check
 ~/.swamp/deno/deno task lint
 swamp extension source add ~/kode/swamp-extensions/*   # load every extension of the monorepo from source
 ```
 
-`smoke/delete-kind.sh` checks the same against a real cloud with three 1 GiB
-volumes and three small images (see `smoke/README.md`).
+`smoke/delete-kind.sh` checks against a real cloud, with three 1 GiB volumes and
+three small images, that deleting one member of a collection model leaves the
+others readable (see `smoke/README.md`). That is the only test against a real
+cloud.
+
+The unit tests read the fixtures with the parsers, and run every method of every
+model through `createModelTestContext` with a stub in place of the `openstack`
+binary (`test_support.ts`), which answers only the calls its test lists and
+fails any other: for each method one test of the records it writes, or the names
+it deletes, and one of a failure, a CLI error or a refused argument, that leaves
+no record.
 
 Test fixtures in `fixtures.ts` mirror python-openstackclient 10.3.0 output with
 anonymised identifiers; keep them in step with the CLI version named above when

@@ -171,6 +171,24 @@ swamp data delete github --prefix 'acme:' --dry-run
 swamp data delete github --prefix 'acme:' --yes
 ```
 
+## Development
+
+```sh
+deno task check
+deno task test
+```
+
+The unit tests run every method of `github.ts` and `repo_settings.ts` through
+swamp's `createModelTestContext`, with a stub standing in for `fetch`, the one
+call both Octokit and the `repo_settings.ts` caller make (`test_support.ts`).
+Each test lists the few answers it needs, and a request it did not list fails
+it. Each method has a success and a failure path, and the tests assert on the
+records written and the requests that change something: a dry run posts nothing,
+a missing branch or an unmatched `expectMirrorOf` is refused before any change.
+A planted token is sent only as the credential and reaches no record, log or
+error, and a token the API echoes back is masked. The pure parts are tested as
+well: the request shapes, the matching and the data names.
+
 ## Changes from upstream
 
 - The type is `@dataverket/github` and the version follows this package. A

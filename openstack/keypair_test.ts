@@ -1,7 +1,9 @@
-import { assert, assertEquals } from "jsr:@std/assert@1.0.13";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model, normalizeKeypair } from "./keypair.ts";
-import { KEYPAIR_CREATE_GENERATED, KEYPAIR_SHOW } from "./fixtures.ts";
-import { installFake, line, makeContext, notFound } from "./test_support.ts";
+import { KEYPAIR_SHOW } from "./fixtures.ts";
+import { fail, withStub } from "./test_support.ts";
+
+const GONE = fail("No keypair with a name or ID of 'ops-key' exists.");
 
 Deno.test("normalizeKeypair keeps the public half only", () => {
   const k = normalizeKeypair(KEYPAIR_SHOW);
@@ -13,109 +15,131 @@ Deno.test("normalizeKeypair keeps the public half only", () => {
   assertEquals(Object.keys(k).includes("privateKey"), false);
 });
 
-Deno.test("list reads names then shows each keypair", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "keypair list -c Name") return [{ Name: "ops-key" }];
-    if (l === "keypair show ops-key") return KEYPAIR_SHOW;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.list.execute({}, context);
-    assertEquals(written.map((w) => w.name), ["keypair-ops-key"]);
-  } finally {
-    fake.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub runner ─────
 
-Deno.test("create generates a keypair and stores the private key sensitively", async () => {
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "keypair show gen-key") {
-      return fake.calls.length > 1
-        ? { ...KEYPAIR_SHOW, name: "gen-key", id: "gen-key" }
-        : notFound("keypair", "gen-key");
-    }
-    if (l === "keypair create gen-key") return KEYPAIR_CREATE_GENERATED;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.create.execute({ name: "gen-key" }, context);
-    assertEquals(written.map((w) => `${w.spec}:${w.name}`), [
-      "keypair:keypair-gen-key",
-      "privateKey:privatekey-gen-key",
-    ]);
-    assert(
-      String(written[1].data.privateKey).includes("BEGIN OPENSSH PRIVATE KEY"),
+const M = model.methods;
+
+Deno.test("list shows each listed keypair and writes one record each", () =>
+  withStub([
+    ["keypair list -c Name", { json: [{ Name: "ops-key" }] }],
+    ["keypair show ops-key", { json: KEYPAIR_SHOW }],
+  ], async (h) => {
+    await M.list.execute({}, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.type]), [[
+      "keypair",
+      "keypair-ops-key",
+      "ssh",
+    ]]);
+    assertEquals(h.logs().at(-1)?.message, "stored {count} keypairs");
+  }));
+
+Deno.test("list fails when the CLI does, and writes nothing", () =>
+  withStub([["keypair list", fail("Unauthorized (HTTP 401)")]], async (h) => {
+    await assertRejects(
+      () => M.list.execute({}, h.context),
+      Error,
+      "keypair list failed (exit 1): Unauthorized (HTTP 401)",
     );
-  } finally {
-    fake.restore();
-  }
-});
+    assertEquals(h.written(), []);
+  }));
 
-Deno.test("create imports a public key through a temp file and writes no private key", async () => {
-  let imported = "";
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "keypair show ops-key") {
-      return imported ? KEYPAIR_SHOW : notFound("keypair", "ops-key");
-    }
-    if (args[0] === "keypair" && args[1] === "create") {
-      imported = Deno.readTextFileSync(args[args.indexOf("--public-key") + 1]);
-      return { ...KEYPAIR_SHOW, private_key: null };
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.create.execute({
-      name: "ops-key",
-      publicKey: "ssh-ed25519 AAAA ops",
-    }, context);
-    assertEquals(imported, "ssh-ed25519 AAAA ops\n");
-    assertEquals(written.length, 1);
-    assertEquals(written[0].spec, "keypair");
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("get writes the keypair, its id defaulting to its name", () =>
+  withStub([
+    ["keypair show ops-key", { json: { ...KEYPAIR_SHOW, id: undefined } }],
+  ], async (h) => {
+    await M.get.execute({ keypair: "ops-key" }, h.context);
+    const [w] = h.written();
+    assertEquals([w.spec, w.name, w.data.id], [
+      "keypair",
+      "keypair-ops-key",
+      "ops-key",
+    ]);
+  }));
 
-Deno.test("create reuses an existing keypair", async () => {
-  const fake = installFake((args) => {
-    if (line({ args, env: {} }) === "keypair show ops-key") return KEYPAIR_SHOW;
-    return undefined;
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.create.execute({ name: "ops-key" }, context);
-    assertEquals(fake.calls.length, 1);
-    assertEquals(written.length, 1);
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("get fails on a missing keypair, and writes nothing", () =>
+  withStub([["keypair show ops-key", GONE]], async (h) => {
+    await assertRejects(
+      () => M.get.execute({ keypair: "ops-key" }, h.context),
+      Error,
+      "No keypair with a name or ID of 'ops-key' exists.",
+    );
+    assertEquals(h.written(), []);
+  }));
 
-Deno.test("delete is idempotent and drops the stored resource", async () => {
-  let present = true;
-  const fake = installFake((args) => {
-    const l = line({ args, env: {} });
-    if (l === "keypair show ops-key") {
-      return present ? KEYPAIR_SHOW : notFound("keypair", "ops-key");
-    }
-    if (l === "keypair delete ops-key") {
-      present = false;
-      return "";
-    }
-    return undefined;
-  });
-  const { context, deleted } = makeContext();
-  try {
-    await model.methods.delete.execute({ keypair: "ops-key" }, context);
-    await model.methods.delete.execute({ keypair: "ops-key" }, context);
-    assertEquals(deleted, ["keypair-ops-key"]);
-  } finally {
-    fake.restore();
-  }
-});
+Deno.test("create lets Nova generate a key and stores the private half once", () =>
+  withStub([
+    ["keypair show ops-key", [GONE, { json: KEYPAIR_SHOW }]],
+    ["keypair create ops-key", {
+      json: {
+        ...KEYPAIR_SHOW,
+        private_key: "-----BEGIN OPENSSH PRIVATE KEY-----",
+      },
+    }],
+  ], async (h) => {
+    await M.create.execute({ name: "ops-key" }, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name]), [
+      ["keypair", "keypair-ops-key"],
+      ["privateKey", "privatekey-ops-key"],
+    ]);
+    assertEquals(
+      h.written()[1].data.privateKey,
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+    );
+    assertEquals(
+      h.written()[0].data.publicKey,
+      KEYPAIR_SHOW.public_key.trim(),
+    );
+    assert(
+      h.logs().some((l) =>
+        l.message === "stored generated private key for {name}"
+      ),
+    );
+  }));
+
+Deno.test("create imports a public key from a file and stores no private key", () =>
+  withStub([
+    ["keypair show ops-key", [GONE, { json: KEYPAIR_SHOW }]],
+    ["keypair create --public-key ", { json: KEYPAIR_SHOW }],
+  ], async (h) => {
+    await M.create.execute(
+      { name: "ops-key", publicKey: KEYPAIR_SHOW.public_key },
+      h.context,
+    );
+    assertEquals(h.written().map((w) => w.spec), ["keypair"]);
+  }));
+
+Deno.test("create fails when Nova refuses, and writes nothing", () =>
+  withStub([
+    ["keypair show ops-key", GONE],
+    ["keypair create", fail("Quota exceeded, too many key pairs. (HTTP 403)")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.create.execute({ name: "ops-key" }, h.context),
+      Error,
+      "Quota exceeded",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("delete deletes the keypair and drops its record", () =>
+  withStub([
+    ["keypair show ops-key", { json: KEYPAIR_SHOW }],
+    ["keypair delete ops-key", { stdout: "" }],
+  ], async (h) => {
+    await M.delete.execute({ keypair: "ops-key" }, h.context);
+    assertEquals(h.calls.at(-1), "keypair delete ops-key");
+    assertEquals(h.deleted(), ["keypair-ops-key"]);
+  }));
+
+Deno.test("delete fails when the CLI does, and drops nothing", () =>
+  withStub([
+    ["keypair show ops-key", { json: KEYPAIR_SHOW }],
+    ["keypair delete ops-key", fail("Internal Server Error (HTTP 500)")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.delete.execute({ keypair: "ops-key" }, h.context),
+      Error,
+      "keypair delete ops-key failed (exit 1): Internal Server Error",
+    );
+    assertEquals(h.deleted(), []);
+  }));

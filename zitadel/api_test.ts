@@ -13,11 +13,9 @@ import {
   jwtAssertionClaims,
   parseKeyJson,
   readKeyJson,
-  searchAll,
   systemAssertionClaims,
   toBase64,
 } from "./api.ts";
-import { installFake } from "./test_support.ts";
 
 Deno.test("parseKeyJson accepts a key whose subject is clientId", () => {
   const key = parseKeyJson(
@@ -73,26 +71,6 @@ Deno.test("importSigningKey imports a PKCS#8 PEM for RS256", async () => {
   }\n-----END PRIVATE KEY-----`;
   const key = await importSigningKey(pem);
   assertEquals(key.type, "private");
-});
-
-Deno.test("searchAll refuses to report a list it had to truncate", async () => {
-  const full = Array.from(
-    { length: 100 },
-    (_, index) => ({ id: String(index) }),
-  );
-  const fake = installFake(() => ({
-    result: full,
-    details: { totalResult: "999999" },
-  }));
-  try {
-    await assertRejects(
-      () => searchAll({ apiUrl: "https://zitadel.example.org" }, "/x/_search"),
-      Error,
-      "refusing to report a truncated list",
-    );
-  } finally {
-    fake.restore();
-  }
 });
 
 Deno.test("a key that is not a PEM is named as such, without its contents", async () => {

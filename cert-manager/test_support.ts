@@ -1,71 +1,12 @@
 /**
- * Fixtures and shared assertions of the cert-manager tests. The strict fake
- * kubectl itself is the shared one in `../lib/kubectl_fake.ts`; this module
- * only says which resources are cluster-scoped and holds the objects the
- * tests read.
+ * Fixtures and shared assertions of the cert-manager tests: the objects the
+ * parsers read, and the planted values that must reach no record.
  *
  * @module
  */
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
-import type { FakeTime } from "../lib/cli_fake.ts";
-import {
-  type Answer,
-  type ExpectedKubectl,
-  type FakeKubectl,
-  type FakeKubectlOptions,
-  forbiddenList,
-  HOSTILE,
-  list,
-  SAID,
-  withKubectl,
-} from "../lib/kubectl_fake.ts";
-import type { MethodContext } from "./_helpers.ts";
+import { HOSTILE } from "../lib/test_inputs.ts";
 
-export { forbiddenList, HOSTILE, list, SAID };
-
-/** One scripted kubectl call: the command, and what it answers. */
-export type Call = ExpectedKubectl;
-
-/** The one cluster-scoped resource of cert-manager. */
-export const CLUSTER_SCOPED = ["clusterissuers.cert-manager.io"];
-
-/**
- * Run `fn` against scripted kubectl calls, in order and nothing else. `more`
- * names the cluster flags every call must carry, or a handler.
- */
-export function withCalls<T>(
-  calls: Call[],
-  fn: (k: FakeKubectl & FakeTime) => Promise<T>,
-  more: Omit<FakeKubectlOptions, "calls" | "clusterScoped"> = {},
-): Promise<T> {
-  return withKubectl({ calls, clusterScoped: CLUSTER_SCOPED, ...more }, fn);
-}
-
-/** A method context that records writes and log lines. */
-export function ctx(
-  globalArgs: { namespace?: string; context?: string; kubeconfig?: string },
-  signal?: AbortSignal,
-) {
-  const written: Array<{ spec: string; name: string; data: unknown }> = [];
-  const logs: string[] = [];
-  const context: MethodContext = {
-    globalArgs: { namespace: "", ...globalArgs },
-    signal,
-    logger: {
-      info: (m: string, props?: Record<string, string>) =>
-        logs.push(`${m} ${JSON.stringify(props ?? {})}`),
-    },
-    writeResource: (spec, name, data) => {
-      written.push({ spec, name, data });
-      return Promise.resolve({ name });
-    },
-  };
-  return { written, logs, context };
-}
+export { HOSTILE };
 
 /** Every value in the fixtures that must never reach a record, log or error. */
 export const SECRETS = [
@@ -85,7 +26,9 @@ export const SECRETS = [
  * Let's Encrypt make them: 43 base64url characters each.
  */
 export const ACME_TOKEN = "kZrw0Tq3-fX_9aLmC1dE2bGhJ4nP5sUvW6xY7zA8B0c";
+
 export const ACME_THUMBPRINT = "Lr3_tN8qXw-1ZcVbM5kJ2hGfD4sA6pO9iU7yT0eRxQw";
+
 export const KEY_AUTHORIZATION = `${ACME_TOKEN}.${ACME_THUMBPRINT}`;
 
 /**
@@ -428,173 +371,4 @@ export function clusterIssuer(
       }],
     },
   };
-}
-
-/** A method as the tests call it. */
-type Execute = (
-  // deno-lint-ignore no-explicit-any
-  args: any,
-  context: MethodContext,
-) => Promise<unknown>;
-
-/**
- * A `get` must refuse every injection-shaped name before kubectl is run,
- * and name an object that does not exist.
- */
-export async function assertGetRefusals(
-  get: Execute,
-  resource: string,
-  label: string,
-): Promise<void> {
-  for (const bad of HOSTILE) {
-    const c = ctx({ namespace: "pki" });
-    await withCalls([], async () => {
-      await assertRejects(
-        () => get({ name: bad }, c.context),
-        Error,
-        "is not a Kubernetes object name",
-      );
-    });
-    assertEquals(c.written, []);
-  }
-  for (const bad of HOSTILE.filter((b) => b !== "")) {
-    const c = ctx({});
-    await withCalls([], async () => {
-      await assertRejects(
-        () => get({ name: "x", namespace: bad }, c.context),
-        Error,
-        "is not a Kubernetes namespace name",
-      );
-    });
-    assertEquals(c.written, []);
-  }
-  const c = ctx({ namespace: "pki" });
-  await withCalls([{
-    args: ["get", resource, "nope", "-n", "pki"],
-    fail: SAID.notFound(resource, "nope"),
-  }], async () => {
-    const e = await assertRejects(
-      () => get({ name: "nope" }, c.context),
-      Error,
-    );
-    assertEquals(e.message, `${label} pki/nope does not exist`);
-  });
-  assertEquals(c.written, []);
-  // An answer that is another object, another kind, or no object at all.
-  for (
-    const out of [
-      {},
-      [],
-      null,
-      list([]),
-      { kind: label, metadata: { name: "other", namespace: "pki" } },
-      { kind: label, metadata: { name: "x", namespace: "other" } },
-      { kind: "Secret", metadata: { name: "x", namespace: "pki" } },
-      { kind: "Status", status: "Failure", message: "SECRET-TOKEN" },
-    ]
-  ) {
-    const d = ctx({ namespace: "pki" });
-    await withCalls(
-      [{ args: ["get", resource, "x", "-n", "pki"], out }],
-      async () => {
-        const e = await assertRejects(
-          () => get({ name: "x" }, d.context),
-          Error,
-        );
-        assertStringIncludes(e.message, `did not return ${label} pki/x`);
-        assertNoSecrets(e.message);
-      },
-    );
-    assertEquals(d.written, []);
-  }
-}
-
-/**
- * A `list` must fail whole, and write nothing, on an RBAC refusal, a missing
- * CRD, an expired login, a timeout, a kubectl that hangs or is not there,
- * output that is not JSON, and an answer that is not a list of this kind.
- */
-export async function assertListFailures(
-  listMethod: Execute,
-  resource: string,
-  kind: string,
-  args: Record<string, unknown> = {},
-): Promise<void> {
-  const named = (namespace: string, name: string) => ({
-    kind,
-    metadata: { name, namespace },
-  });
-  const cases: Array<[Answer, string]> = [
-    [forbiddenList(resource), "is forbidden"],
-    [
-      { fail: SAID.missingCrd(resource.split(".")[0]) },
-      "cert-manager is not installed in this cluster",
-    ],
-    [
-      { fail: SAID.unauthorized },
-      "did not accept the credentials of this context",
-    ],
-    [
-      { fail: SAID.badToken },
-      "did not accept the credentials of this context",
-    ],
-    [{ fail: SAID.refused }, "the cluster could not be reached"],
-    [
-      { fail: "Unable to connect to the server: context deadline exceeded" },
-      "context deadline exceeded",
-    ],
-    [{ hang: true }, "no answer within 35 seconds"],
-    [{ notInstalled: true }, "kubectl is not on PATH"],
-    [{ out: "garbage SECRET-TOKEN" }, "did not print JSON"],
-    [{ out: "" }, "did not print JSON (no output)"],
-    // Not a list: a Status, one object, a list without items.
-    [
-      { out: { kind: "Status", status: "Failure", message: "SECRET-TOKEN" } },
-      "did not return a list",
-    ],
-    [{ out: named("pki", "leaf") }, "did not return a list"],
-    [{ out: { kind: "List" } }, "did not return a list"],
-    [{ out: {} }, "did not return a list"],
-    [{ out: [] }, "did not return a list"],
-    // A list that holds what is not an object of this kind.
-    [{ out: list(["SECRET-TOKEN"]) }, "item 0 is not an object"],
-    [
-      { out: list([{ kind: "Secret", metadata: { name: "a" } }]) },
-      `is of kind "Secret", not ${kind}`,
-    ],
-    [{ out: list([{ kind, metadata: {} }]) }, "without a name"],
-    [{ out: list([{ kind, metadata: { name: "a" } }]) }, "without a name"],
-    // Two objects that would be stored under one data name.
-    [
-      { out: list([named("a", "b--c"), named("a--b", "c")]) },
-      "would both be stored as a--b--c",
-    ],
-  ];
-  for (const [answer, text] of cases) {
-    const c = ctx({});
-    await withCalls(
-      [{ args: ["get", resource, "-A"], ...answer }],
-      async () => {
-        const e = await assertRejects(
-          () => listMethod({ ...args }, c.context),
-          Error,
-        );
-        assertStringIncludes(e.message, text);
-        assertNoSecrets(e.message);
-        assertEquals(e.message.includes("memcache.go"), false);
-      },
-    );
-    assertEquals(c.written, []);
-  }
-  for (const bad of HOSTILE.filter((b) => b !== "")) {
-    const c = ctx({});
-    await withCalls([], async () => {
-      await assertRejects(
-        () => listMethod({ ...args, namespace: bad }, c.context),
-        Error,
-        "is not a Kubernetes namespace name",
-      );
-    });
-    assertEquals(c.written, []);
-  }
 }

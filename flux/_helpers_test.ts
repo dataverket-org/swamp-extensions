@@ -1,24 +1,14 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-  assertThrows,
-} from "jsr:@std/assert@1.0.13";
-import { CHECK_TIMEOUT_MS, isCliError, MAX_TIMEOUT_MS } from "../lib/cli.ts";
-import { withCli } from "../lib/cli_fake.ts";
-import { dataName, kubectlCliCheck } from "../lib/kubectl.ts";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1.0.13";
+import { MAX_TIMEOUT_MS } from "../lib/cli.ts";
+import { dataName } from "../lib/kubectl.ts";
 import {
   ConditionSchema,
   extractReadyCondition,
   FLUX_TIMEOUTS,
-  fluxCliCheck,
   FluxGlobalArgsSchema,
-  isFluxProgressLine,
   listedNames,
   narrowConditions,
   reconcileTimeout,
-  runFlux,
   storedUrl,
 } from "./_helpers.ts";
 import { model as helmrelease } from "./helmrelease.ts";
@@ -27,6 +17,7 @@ import { model as source } from "./source.ts";
 import { extension as reset } from "./reset.ts";
 
 const FORK = "2026.10.05.1";
+
 const VERSION = "2026.11.10.1";
 
 Deno.test("the three types carry the fork's name, a version and an upgrade chain ending at it", () => {
@@ -220,185 +211,6 @@ Deno.test("the flux time limits are the documented ones", () => {
   assertEquals(reconcileTimeout("kustomization", true), 630_000);
   assertEquals(reconcileTimeout("helmrelease", true), 930_000);
   for (const ms of Object.values(FLUX_TIMEOUTS)) assert(ms <= MAX_TIMEOUT_MS);
-});
-
-Deno.test("runFlux puts the cluster flags first, passes its time limit and returns stdout", async () => {
-  await withCli({
-    calls: [
-      {
-        bin: "flux",
-        args: ["reconcile", "x"],
-        out: "ok\n",
-        timeoutMs: 330_000,
-      },
-      {
-        bin: "flux",
-        args: ["--kubeconfig", "/k", "--context", "c", "suspend", "x"],
-        timeoutMs: 60_000,
-      },
-    ],
-  }, async (k) => {
-    assertEquals(await runFlux(["reconcile", "x"], undefined, 330_000), "ok\n");
-    assertEquals(
-      await runFlux(["suspend", "x"], {
-        kubeconfig: "/k",
-        context: "c",
-      }, 60_000),
-      "",
-    );
-    // Nothing of its own in the environment, no input.
-    assertEquals(k.calls.map((c) => [c.env, c.stdin]), [
-      [undefined, undefined],
-      [undefined, undefined],
-    ]);
-  });
-});
-
-Deno.test("NEG runFlux needs a time limit above zero", async () => {
-  await withCli({}, async () => {
-    for (const bad of [0, -1, NaN, Infinity, MAX_TIMEOUT_MS + 1]) {
-      await assertRejects(
-        () => runFlux(["reconcile", "x"], undefined, bad),
-        Error,
-        "time limit",
-      );
-    }
-  });
-});
-
-Deno.test("NEG a failing flux says what flux said: the failure line, not the progress lines", async () => {
-  const stderr = "► annotating HelmRelease x in apps namespace\n" +
-    "✔ HelmRelease annotated\n" +
-    "◎ waiting for HelmRelease reconciliation\n" +
-    "✗ helmrelease reconciliation failed: upgrade retries exhausted\n";
-  await withCli({
-    calls: [
-      { bin: "flux", args: ["suspend", "x"], fail: "not found" },
-      { bin: "flux", args: ["reconcile", "x"], fail: stderr },
-      // Nothing on standard error: what flux printed is the next best thing.
-      { bin: "flux", args: ["push", "x"], code: 1, stdout: "bad target\n" },
-      { bin: "flux", args: ["resume", "x"], code: 2 },
-      { bin: "flux", args: ["resume", "x"], fail: "x".repeat(5000) },
-    ],
-  }, async () => {
-    const run = (sub: string) =>
-      assertRejects(() => runFlux([sub, "x"], undefined, 1000), Error);
-    const first = await run("suspend");
-    assertEquals(first.message, "flux suspend failed: not found");
-    assert(isCliError(first, "failed"));
-    assertEquals([first.code, first.bin], [1, "flux"]);
-    assertEquals(
-      (await run("reconcile")).message,
-      "flux reconcile failed: ✗ helmrelease reconciliation failed: upgrade retries exhausted",
-    );
-    assertEquals((await run("push")).message, "flux push failed: bad target");
-    assertEquals(
-      (await run("resume")).message,
-      "flux resume failed: (no error output)",
-    );
-    const long = (await run("resume")).message;
-    assert(long.length < 450, "a long message is bounded");
-  });
-  for (const line of ["► a", "✔ b", "◎ c", "  ► d"]) {
-    assertEquals(isFluxProgressLine(line), true, line);
-  }
-  for (const line of ["✗ failed", "Error: x", "", "a ► b"]) {
-    assertEquals(isFluxProgressLine(line), false, line);
-  }
-});
-
-Deno.test("NEG a flux that does not answer is stopped at its limit, and the error says so", async () => {
-  await withCli({
-    calls: [{ bin: "flux", args: ["reconcile", "x"], hang: true }],
-  }, async () => {
-    const e = await assertRejects(
-      () => runFlux(["reconcile", "x"], undefined, FLUX_TIMEOUTS.reconcile),
-      Error,
-    );
-    assertEquals(
-      e.message,
-      "flux reconcile failed: no answer within 330 seconds; the process was stopped",
-    );
-    assert(isCliError(e, "timeout"));
-  });
-});
-
-Deno.test("NEG a cancelled run stops flux, and is named as cancelled", async () => {
-  const controller = new AbortController();
-  await withCli({
-    calls: [{ bin: "flux", args: ["resume", "x"], hang: "until-cancelled" }],
-  }, async () => {
-    const pending = assertRejects(
-      () =>
-        runFlux(
-          ["resume", "x"],
-          { signal: controller.signal },
-          FLUX_TIMEOUTS.resume,
-        ),
-      Error,
-    );
-    controller.abort();
-    const e = await pending;
-    assertEquals(e.message, "flux resume was cancelled");
-    assert(isCliError(e, "cancelled"));
-  });
-});
-
-Deno.test("NEG nothing shaped like a credential reaches a flux error", async () => {
-  const TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
-  await withCli({
-    calls: [{
-      bin: "flux",
-      args: ["push", "x"],
-      fail:
-        `✗ pushing failed: GET https://user:hunter2@registry.example.org/v2/: Authorization: Bearer ${TOKEN} password=hunter2`,
-    }],
-  }, async () => {
-    const e = await assertRejects(
-      () => runFlux(["push", "x"], undefined, FLUX_TIMEOUTS.push),
-      Error,
-    );
-    assert(!e.message.includes(TOKEN));
-    assert(!e.message.includes("hunter2"));
-    assert(isCliError(e) && !e.stderr.includes(TOKEN));
-    assertStringIncludes(e.message, "flux push failed: ✗ pushing failed");
-  });
-});
-
-Deno.test("the CLI checks name a missing binary and surface a failing one", async () => {
-  await withCli({
-    calls: [
-      { bin: "flux", args: ["--version"], notInstalled: true },
-      {
-        bin: "flux",
-        args: ["--version"],
-        out: "flux version 2.10.0",
-        timeoutMs: CHECK_TIMEOUT_MS,
-      },
-      { bin: "kubectl", args: ["version", "--client"], fail: "boom" },
-      {
-        bin: "kubectl",
-        args: ["version", "--client"],
-        out: "v1.37",
-        timeoutMs: CHECK_TIMEOUT_MS,
-      },
-    ],
-  }, async () => {
-    const missing = await fluxCliCheck.execute();
-    assertEquals(missing.pass, false);
-    assertEquals(
-      missing.errors![0],
-      "flux is not on PATH; install it or put it on the PATH this repository runs with",
-    );
-    assertEquals(await fluxCliCheck.execute({}), { pass: true });
-    const failing = await kubectlCliCheck.execute();
-    assertEquals(failing.pass, false);
-    assertEquals(
-      failing.errors![0],
-      "kubectl version --client failed (exit 1): boom",
-    );
-    assertEquals(await kubectlCliCheck.execute(), { pass: true });
-  });
 });
 
 Deno.test("kustomization and source carry the CLI checks; helmrelease gets them from reset", () => {

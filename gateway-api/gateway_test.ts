@@ -1,21 +1,16 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
-import { KubectlError } from "../lib/kubectl.ts";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import {
   gatewayReasons,
   GatewaySchema,
-  model as gateway,
+  model,
   parseGateway,
+  RESOURCE,
   selectorSummary,
 } from "./gateway.ts";
-import { ListInventorySchema } from "./_helpers.ts";
-import { cond, ctx, healthyGateway, withCluster } from "./test_support.ts";
+import { cond, healthyGateway, healthyRoute } from "./test_support.ts";
+import { forbidden, harness, list } from "./stub_test.ts";
 
 const AT = "2026-11-10T09:00:00.000Z";
-const RES = "gateways.gateway.networking.k8s.io";
 
 function withListener(
   status: Record<string, unknown> | undefined,
@@ -291,182 +286,6 @@ Deno.test("nothing outside the read fields reaches the record", () => {
   assertEquals(JSON.stringify(r).includes("annotations"), false);
 });
 
-Deno.test("list records every Gateway and an inventory, in one namespace or all", async () => {
-  const broken = healthyGateway();
-  (broken.metadata as Record<string, unknown>).name = "broken";
-  (broken.metadata as Record<string, unknown>).namespace = "other";
-  delete broken.status;
-  const cluster = { context: "c1", kubeconfig: "/k" };
-  await withCluster(
-    { ...cluster, objects: { gateways: [healthyGateway(), broken] } },
-    async (k) => {
-      const all = ctx(cluster);
-      const out = await gateway.methods.list.execute({}, all.context);
-      assertEquals(k.calls[0].args, [
-        "--kubeconfig",
-        "/k",
-        "--context",
-        "c1",
-        "--request-timeout=30s",
-        "get",
-        RES,
-        "-A",
-        "-o",
-        "json",
-      ]);
-      assertEquals(all.written.map((w) => [w.spec, w.name]), [
-        ["gateway", "infra--edge"],
-        ["gateway", "other--broken"],
-        ["inventory", "inventory_all"],
-      ]);
-      assertEquals(out.dataHandles.length, 3);
-      for (const w of all.written.slice(0, 2)) GatewaySchema.parse(w.data);
-      const inv = ListInventorySchema.parse(all.written[2].data);
-      assertEquals(inv.namespace, null);
-      assertEquals(inv.count, 2);
-      assertEquals(inv.healthyCount, 1);
-      assertEquals(inv.unhealthyCount, 1);
-      assertEquals(inv.allHealthy, false);
-      assertEquals(inv.unhealthy.map((u) => u.name), ["broken"]);
-      assertEquals(inv.apiVersions, ["gateway.networking.k8s.io/v1"]);
-      // The shared core: one line per object, with one reason when unhealthy.
-      assertEquals(inv.items, [
-        {
-          namespace: "infra",
-          name: "edge",
-          dataName: "infra--edge",
-          healthy: true,
-          reason: null,
-        },
-        {
-          namespace: "other",
-          name: "broken",
-          dataName: "other--broken",
-          healthy: false,
-          reason: "gateway: Accepted=missing (NotReported) (and 2 more)",
-        },
-      ]);
-      assertEquals(all.warnings, []);
-
-      const one = ctx({ ...cluster, namespace: "other" });
-      await gateway.methods.list.execute({ namespace: "infra" }, one.context);
-      assertEquals(k.kubectl[1].command, ["get", RES, "-n", "infra"]);
-      assertEquals(one.written.map((w) => w.name), [
-        "infra--edge",
-        "inventory_ns_infra",
-      ]);
-      assertEquals(one.written[1].data.allHealthy, true);
-
-      const empty = ctx({ ...cluster, namespace: "nothing-here" });
-      await gateway.methods.list.execute({}, empty.context);
-      assertEquals(empty.written.map((w) => w.name), [
-        "inventory_ns_nothing-here",
-      ]);
-      assertEquals(empty.written[0].data.count, 0);
-
-      // An empty argument counts as not given: the definition's is read.
-      const blank = ctx({ ...cluster, namespace: "other" });
-      await gateway.methods.list.execute({ namespace: "" }, blank.context);
-      assertEquals(k.kubectl[3].command, ["get", RES, "-n", "other"]);
-      assertEquals(blank.written.map((w) => w.name), [
-        "other--broken",
-        "inventory_ns_other",
-      ]);
-    },
-  );
-});
-
-Deno.test("get records one Gateway; an unhealthy one is a record, not an error", async () => {
-  const g = healthyGateway();
-  (g.status as Record<string, unknown>).conditions = [
-    cond("Accepted", "True", "Accepted"),
-    cond("Programmed", "False", "AddressNotAssigned"),
-  ];
-  await withCluster({ objects: { gateways: [g] } }, async (k) => {
-    const c = ctx({ namespace: "infra" });
-    await gateway.methods.get.execute({ name: "edge" }, c.context);
-    assertEquals(k.kubectl[0].command, ["get", RES, "edge", "-n", "infra"]);
-    assertEquals(c.written.map((w) => [w.spec, w.name]), [
-      ["gateway", "infra--edge"],
-    ]);
-    const r = GatewaySchema.parse(c.written[0].data);
-    assertEquals(r.summary.programmed, false);
-    assertEquals(r.summary.healthy, false);
-
-    // An empty namespace argument falls back to the definition's.
-    const blank = ctx({ namespace: "infra" });
-    await gateway.methods.get.execute(
-      { name: "edge", namespace: "" },
-      blank.context,
-    );
-    assertEquals(k.kubectl[1].command, ["get", RES, "edge", "-n", "infra"]);
-  });
-});
-
-Deno.test("a version other than v1 is read, recorded and warned about", async () => {
-  const g = healthyGateway();
-  g.apiVersion = "gateway.networking.k8s.io/v1beta1";
-  await withCluster({ objects: { gateways: [g] } }, async () => {
-    const c = ctx();
-    await gateway.methods.list.execute({}, c.context);
-    assertEquals(
-      c.written[0].data.apiVersion,
-      "gateway.networking.k8s.io/v1beta1",
-    );
-    assertEquals(c.written[1].data.apiVersions, [
-      "gateway.networking.k8s.io/v1beta1",
-    ]);
-    assertEquals(c.warnings.length, 1);
-    assertStringIncludes(c.warnings[0], "v1beta1");
-    const one = ctx({ namespace: "infra" });
-    await gateway.methods.get.execute({ name: "edge" }, one.context);
-    assertEquals(one.warnings.length, 1);
-  });
-});
-
-Deno.test("an answer that is not the Gateway asked for is refused, not recorded", async () => {
-  const other = healthyGateway();
-  (other.metadata as Record<string, unknown>).name = "another";
-  const route = { ...healthyGateway(), kind: "HTTPRoute" };
-  for (const answer of [other, route]) {
-    await withCluster(
-      { stdoutOverride: JSON.stringify(answer) },
-      async () => {
-        const c = ctx();
-        const e = await assertRejects(
-          () =>
-            gateway.methods.get.execute(
-              { name: "edge", namespace: "infra" },
-              c.context,
-            ),
-          KubectlError,
-        );
-        assertEquals(e.kind, "other");
-        assertStringIncludes(e.message, "did not return Gateway infra/edge");
-        assertEquals(c.written, []);
-      },
-    );
-  }
-  // A list that holds another kind is refused whole.
-  await withCluster(
-    {
-      stdoutOverride: JSON.stringify({
-        kind: "List",
-        items: [healthyGateway(), route],
-      }),
-    },
-    async () => {
-      const c = ctx();
-      const e = await assertRejects(
-        () => gateway.methods.list.execute({}, c.context),
-        KubectlError,
-      );
-      assertStringIncludes(e.message, "item 1 is of kind");
-      assertEquals(c.written, []);
-    },
-  );
-});
-
 Deno.test("an accepted, programmed Gateway without an address is healthy, and says it has none", () => {
   // The controller's verdict on a missing address is Programmed; this
   // extension does not second-guess it.
@@ -515,4 +334,103 @@ Deno.test("a status entry for a listener no longer in the spec is counted, not j
   const st = twice.status as { listeners: unknown[] };
   st.listeners.push(st.listeners[0]);
   assertEquals(parseGateway(twice, AT).summary.leftoverListenerReports, 1);
+});
+
+// ───── the methods, through createModelTestContext with a stub kubectl ─────
+
+Deno.test("list records each Gateway of the namespace and one inventory, and logs the count", async () => {
+  const bad = healthyGateway();
+  (bad.metadata as Record<string, unknown>).name = "broken";
+  (bad.status as Record<string, unknown>).conditions = [
+    cond("Accepted", "True", "Accepted"),
+    cond("Programmed", "False", "AddressNotAssigned", "no address"),
+  ];
+  using h = harness({
+    [`kubectl get ${RESOURCE} -n infra`]: {
+      stdout: list([healthyGateway(), bad]),
+    },
+  }, { globalArgs: { namespace: "infra" } });
+  await model.methods.list.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [
+    ["gateway", "infra--edge"],
+    ["gateway", "infra--broken"],
+    ["inventory", "inventory_ns_infra"],
+  ]);
+  assertEquals(
+    (w[0].data.summary as Record<string, unknown>).healthy,
+    true,
+  );
+  assertEquals([w[2].data.count, w[2].data.unhealthyCount], [2, 1]);
+  assertEquals(
+    h.logs().includes("Recorded {count} Gateways, {unhealthy} not healthy"),
+    true,
+  );
+  assertEquals(JSON.stringify(w).includes("ANNOTATION-SECRET-VALUE"), false);
+});
+
+Deno.test("list says the Gateway API is not installed when the cluster does not serve it, and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} -A`]: {
+      code: 1,
+      stderr: 'error: the server doesn\'t have a resource type "gateways"',
+    },
+  });
+  await assertRejects(
+    () => model.methods.list.execute({}, h.context),
+    Error,
+    "The Gateway API CRDs are not installed",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get records one Gateway under its namespace and name", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} edge -n infra`]: { stdout: healthyGateway() },
+  });
+  await model.methods.get.execute(
+    { name: "edge", namespace: "infra" },
+    h.context,
+  );
+  const w = h.written();
+  assertEquals(w.map((x) => [x.spec, x.name]), [["gateway", "infra--edge"]]);
+  assertEquals(w[0].data.name, "edge");
+  assertEquals(
+    h.logs().includes(
+      "Gateway {name}: healthy={healthy}, programmed={programmed}, {findings} findings",
+    ),
+    true,
+  );
+});
+
+Deno.test("get passes on an RBAC refusal with the verbs it needs, and records nothing", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} edge -n infra`]: forbidden("get", RESOURCE),
+  });
+  await assertRejects(
+    () =>
+      model.methods.get.execute(
+        { name: "edge", namespace: "infra" },
+        h.context,
+      ),
+    Error,
+    "the identity needs get and list on",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("get refuses an answer that is not the Gateway asked for", async () => {
+  using h = harness({
+    [`kubectl get ${RESOURCE} edge -n infra`]: { stdout: healthyRoute() },
+  });
+  await assertRejects(
+    () =>
+      model.methods.get.execute(
+        { name: "edge", namespace: "infra" },
+        h.context,
+      ),
+    Error,
+    "kubectl did not return Gateway infra/edge",
+  );
+  assertEquals(h.written(), []);
 });

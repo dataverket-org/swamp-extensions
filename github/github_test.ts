@@ -1,4 +1,9 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert@1.0.13";
+import {
+  assertEquals,
+  assertInstanceOf,
+  assertStrictEquals,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.13";
 import { model } from "./github.ts";
 import { extension } from "./repo_settings.ts";
 import {
@@ -8,6 +13,7 @@ import {
   qualifiedHead,
   slug,
 } from "./_lib/github_plan.ts";
+import { assertNoPlanted, PLANTED, withStub } from "./test_support.ts";
 
 Deno.test("the forked base owns the @dataverket/github type at this package's version", () => {
   assertEquals(model.type, "@dataverket/github");
@@ -123,4 +129,226 @@ Deno.test("qualifiedHead and slug", () => {
   assertEquals(slug("v1.0_rc-2"), "v1.0_rc-2");
   // nothing safe left: an empty name, which a caller must not accept blindly
   assertEquals(slug("///"), "");
+});
+
+// ---------------------------------------------------------------------------
+// Methods, run through createModelTestContext with a stub answering fetch.
+// ---------------------------------------------------------------------------
+
+const REPO = {
+  name: "tool",
+  full_name: "acme/tool",
+  private: true,
+  default_branch: "main",
+  description: null,
+  html_url: "https://github.test/acme/tool",
+};
+
+Deno.test("sync stores the owner's repositories and sends the token only as the credential", async () => {
+  const r = await withStub(
+    { "GET /user/repos?per_page=100": { status: 200, body: [REPO] } },
+    (c) => model.methods.sync.execute({}, c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen[0].authorization, `token ${PLANTED}`);
+  const [w] = r.written;
+  assertEquals([w.spec, w.name, w.data.count], ["repos", "repos", 1]);
+  assertEquals((w.data.repos as Record<string, unknown>[])[0], {
+    name: "tool",
+    fullName: "acme/tool",
+    visibility: "private",
+    defaultBranch: "main",
+    description: "",
+    htmlUrl: "https://github.test/acme/tool",
+  });
+  assertNoPlanted(r);
+});
+
+Deno.test("sync of an organization lists the org's repositories", async () => {
+  const r = await withStub(
+    { "GET /orgs/acme/repos?per_page=100": { status: 200, body: [] } },
+    (c) => model.methods.sync.execute({}, c),
+    { isOrg: true },
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.written[0].data.count, 0);
+});
+
+Deno.test("sync fails on a refused token and writes nothing", async () => {
+  const r = await withStub(
+    {
+      "GET /user/repos?per_page=100": {
+        status: 401,
+        body: { message: "Bad credentials" },
+      },
+    },
+    (c) => model.methods.sync.execute({}, c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertStringIncludes(r.error.message, "Bad credentials");
+  assertEquals(r.written, []);
+  assertNoPlanted(r);
+});
+
+const ensureArgs = (o: Record<string, unknown> = {}) =>
+  model.methods.ensureRepo.arguments.parse({ name: "tool", ...o });
+
+Deno.test("ensureRepo reports an existing repository and creates nothing", async () => {
+  const r = await withStub(
+    { "GET /repos/acme/tool": { status: 200, body: REPO } },
+    (c) => model.methods.ensureRepo.execute(ensureArgs({ dryRun: false }), c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen.map((s) => s.method), ["GET"]);
+  assertEquals(r.written[0].name, "repo-tool");
+  assertEquals(r.written[0].data.status, "exists");
+  assertEquals(r.written[0].data.visibility, "private");
+});
+
+Deno.test("ensureRepo in a dry run plans the create and posts nothing", async () => {
+  const r = await withStub(
+    { "GET /repos/acme/tool": { status: 404, body: { message: "Not Found" } } },
+    (c) => model.methods.ensureRepo.execute(ensureArgs(), c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen.map((s) => s.method), ["GET"]);
+  assertEquals(r.written[0].data.status, "would-create");
+});
+
+Deno.test("ensureRepo creates a missing repository and sets its topics", async () => {
+  const r = await withStub(
+    {
+      "GET /repos/acme/tool": { status: 404, body: { message: "Not Found" } },
+      "POST /user/repos": { status: 201, body: { ...REPO, private: false } },
+      "PUT /repos/acme/tool/topics": { status: 200, body: { names: ["s3"] } },
+    },
+    (c) =>
+      model.methods.ensureRepo.execute(
+        ensureArgs({ dryRun: false, topics: ["s3"] }),
+        c,
+      ),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.seen[1].body, {
+    name: "tool",
+    private: false,
+    auto_init: true,
+  });
+  assertEquals(r.seen[2].body, { names: ["s3"] });
+  assertEquals(r.written[0].data.status, "created");
+  assertEquals(r.written[0].data.visibility, "public");
+});
+
+Deno.test("ensureRepo fails on a lookup error other than 404 and writes nothing", async () => {
+  const r = await withStub(
+    { "GET /repos/acme/tool": { status: 403, body: { message: "Forbidden" } } },
+    (c) => model.methods.ensureRepo.execute(ensureArgs({ dryRun: false }), c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertEquals(r.seen.length, 1);
+  assertEquals(r.written, []);
+});
+
+const releaseArgs = (o: Record<string, unknown> = {}) =>
+  model.methods.ensureRelease.arguments.parse({
+    repo: "tool",
+    tagName: "v1.0.0",
+    ...o,
+  });
+const RELEASES = "GET /repos/acme/tool/releases?per_page=100";
+
+Deno.test("ensureRelease creates a release whose tag is missing", async () => {
+  const r = await withStub(
+    {
+      [RELEASES]: { status: 200, body: [{ id: 1, tag_name: "v0.9.0" }] },
+      "POST /repos/acme/tool/releases": {
+        status: 201,
+        body: { id: 2, html_url: "https://github.test/r/2" },
+      },
+    },
+    (c) =>
+      model.methods.ensureRelease.execute(releaseArgs({ dryRun: false }), c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals((r.seen[1].body as Record<string, unknown>).tag_name, "v1.0.0");
+  assertEquals(r.written[0].name, "release-tool-v1.0.0");
+  assertEquals([r.written[0].data.status, r.written[0].data.releaseId], [
+    "created",
+    2,
+  ]);
+});
+
+Deno.test("ensureRelease leaves an existing release alone", async () => {
+  const r = await withStub(
+    { [RELEASES]: { status: 200, body: [{ id: 7, tag_name: "v1.0.0" }] } },
+    (c) =>
+      model.methods.ensureRelease.execute(releaseArgs({ dryRun: false }), c),
+  );
+  assertEquals(r.seen.length, 1);
+  assertEquals(r.written[0].data.status, "exists");
+  assertEquals(r.written[0].data.releaseId, 7);
+});
+
+Deno.test("ensureRelease fails when the repository is not there", async () => {
+  const r = await withStub(
+    { [RELEASES]: { status: 404, body: { message: "Not Found" } } },
+    (c) => model.methods.ensureRelease.execute(releaseArgs(), c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertEquals(r.written, []);
+});
+
+const prArgs = (o: Record<string, unknown> = {}) =>
+  model.methods.openPr.arguments.parse({
+    repo: "tool",
+    head: "feat",
+    title: "A change",
+    ...o,
+  });
+const PULLS =
+  "GET /repos/acme/tool/pulls?state=open&head=acme%3Afeat&base=main&per_page=100";
+
+Deno.test("openPr opens a pull request when none is open for head and base", async () => {
+  const r = await withStub(
+    {
+      [PULLS]: { status: 200, body: [] },
+      "POST /repos/acme/tool/pulls": {
+        status: 201,
+        body: { number: 12, html_url: "https://github.test/p/12" },
+      },
+    },
+    (c) => model.methods.openPr.execute(prArgs({ dryRun: false }), c),
+  );
+  assertEquals(r.error, undefined);
+  assertEquals(r.written[0].name, "pull-tool-feat-main");
+  assertEquals([r.written[0].data.status, r.written[0].data.number], [
+    "created",
+    12,
+  ]);
+});
+
+Deno.test("openPr in a dry run plans and posts nothing", async () => {
+  const r = await withStub(
+    { [PULLS]: { status: 200, body: [] } },
+    (c) => model.methods.openPr.execute(prArgs(), c),
+  );
+  assertEquals(r.seen.length, 1);
+  assertEquals(r.written[0].data.status, "would-create");
+});
+
+Deno.test("openPr fails when the pull request create is refused", async () => {
+  const r = await withStub(
+    {
+      [PULLS]: { status: 200, body: [] },
+      "POST /repos/acme/tool/pulls": {
+        status: 422,
+        body: { message: "Validation Failed" },
+      },
+    },
+    (c) => model.methods.openPr.execute(prArgs({ dryRun: false }), c),
+  );
+  assertInstanceOf(r.error, Error);
+  assertStringIncludes(r.error.message, "Validation Failed");
+  assertEquals(r.written, []);
+  assertNoPlanted(r);
 });

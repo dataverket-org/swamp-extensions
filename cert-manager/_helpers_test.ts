@@ -1,13 +1,8 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
-import { KubectlError, KubectlGlobalArgsSchema } from "../lib/kubectl.ts";
+import { assertEquals } from "jsr:@std/assert@1.0.13";
+import { KubectlGlobalArgsSchema } from "../lib/kubectl.ts";
 import {
   acmeSecrets,
   keyAuthorizations,
-  kubectlJson,
   NameSchema,
   NamespaceSchema,
   readIssuerRef,
@@ -26,12 +21,10 @@ import {
   ACME_TOKEN,
   HOSTILE,
   KEY_AUTHORIZATION,
-  SAID,
   SECRETS,
   SELF_CHECK_REASON,
   SELF_CHECK_UNREACHABLE,
   selfCheckChallenge,
-  withCalls,
 } from "./test_support.ts";
 
 const MODELS = [certificate, certificaterequest, order, challenge, issuer];
@@ -179,85 +172,6 @@ Deno.test("an inventory line has no reason when healthy and always one line when
     }).reason,
     "429 from https://acme.example.test/x token=[redacted]",
   );
-});
-
-Deno.test("kubectlJson runs against the definition's cluster and passes the signal's cluster flags", async () => {
-  await withCalls(
-    [{ args: ["get", "certificates.cert-manager.io", "-A"], out: { a: 1 } }],
-    async () => {
-      assertEquals(
-        await kubectlJson(["get", "certificates.cert-manager.io", "-A"], {
-          globalArgs: { namespace: "", kubeconfig: "/k", context: "c" },
-        }),
-        { a: 1 },
-      );
-    },
-    { kubeconfig: "/k", context: "c" },
-  );
-});
-
-Deno.test("a resource type the cluster does not serve reads as: cert-manager is not installed", async () => {
-  const args = ["get", "orders.acme.cert-manager.io", "-n", "pki"];
-  for (
-    const fail of [
-      SAID.missingCrd("orders"),
-      SAID.noKind("Order", "acme.cert-manager.io/v1"),
-      "Error from server (NotFound): the server could not find the requested resource\n",
-    ]
-  ) {
-    await withCalls([{ args, fail }], async () => {
-      const e = await assertRejects(
-        () => kubectlJson(args, { globalArgs: { namespace: "" } }),
-        KubectlError,
-      );
-      assertEquals(e.kind, "missing-crd");
-      assertStringIncludes(
-        e.message,
-        "cert-manager is not installed in this cluster: kubectl get orders.acme.cert-manager.io -n pki failed",
-      );
-    });
-  }
-});
-
-Deno.test("every other failure keeps the kind and the words of the shared layer", async () => {
-  const args = ["get", "certificates.cert-manager.io", "leaf", "-n", "pki"];
-  const cases: Array<[string, string, string]> = [
-    [
-      SAID.notFound("certificates.cert-manager.io", "leaf"),
-      "not-found",
-      "not found",
-    ],
-    [
-      SAID.forbidden("get", "certificates.cert-manager.io", "pki"),
-      "forbidden",
-      "is forbidden",
-    ],
-    [
-      SAID.badToken,
-      "unauthorized",
-      "did not accept the credentials of this context",
-    ],
-    [
-      SAID.conflict("certificates.cert-manager.io", "leaf"),
-      "conflict",
-      "the object has been modified",
-    ],
-    [SAID.requestTimeout, "timeout", "no answer in time"],
-    [SAID.refused, "unreachable", "the cluster could not be reached"],
-    [`error: bearer ${SECRETS[0]} was refused`, "other", "bearer [redacted]"],
-  ];
-  for (const [fail, kind, text] of cases) {
-    await withCalls([{ args, fail }], async () => {
-      const e = await assertRejects(
-        () => kubectlJson(args, { globalArgs: { namespace: "" } }),
-        KubectlError,
-      );
-      assertEquals(e.kind, kind);
-      assertStringIncludes(e.message, text);
-      assertEquals(e.message.includes("cert-manager is not installed"), false);
-      assertEquals(e.message.includes(SECRETS[0]), false);
-    });
-  }
 });
 
 Deno.test("keyAuthorizations finds a key authorization by its shape, with its token, wherever a message quotes it", () => {

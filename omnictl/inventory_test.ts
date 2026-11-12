@@ -1,11 +1,16 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.13";
 import {
   clusterMembers,
   decodeJoinTokenState,
   fingerprint,
   model,
 } from "./inventory.ts";
-import { __setRunner, parseOmnictlJson } from "./omnictl.ts";
+import { cosi, KEY, withStub } from "./test_support.ts";
+import { parseOmnictlJson } from "./omnictl.ts";
 import { mergeInventory } from "./transform.ts";
 
 const g = {
@@ -14,25 +19,6 @@ const g = {
   insecureSkipTlsVerify: false,
   omnictlPath: "omnictl",
 };
-
-function makeContext() {
-  const written: {
-    spec: string;
-    name: string;
-    data: Record<string, unknown>;
-  }[] = [];
-  return {
-    written,
-    context: {
-      globalArgs: g,
-      logger: { info() {}, warning() {} },
-      writeResource(spec: string, name: string, data: Record<string, unknown>) {
-        written.push({ spec, name, data });
-        return Promise.resolve({ name });
-      },
-    },
-  };
-}
 
 const identity = (id: string, cluster: string, name: string, ip: string) =>
   JSON.stringify({
@@ -84,149 +70,146 @@ Deno.test("mergeInventory still folds machines into nodes and clusters", () => {
   assertEquals(merged.clusters[0].controlPlaneCount, 1);
 });
 
-Deno.test("a failing omnictl redacts the key from the error", async () => {
-  __setRunner(() =>
-    Promise.resolve({
-      code: 1,
-      stdout: "",
-      stderr: `auth failed for key ${g.serviceAccountKey}`,
-    })
-  );
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () => model.methods.discover.execute({}, context),
-      Error,
-      "[REDACTED]",
-    );
-  } finally {
-    __setRunner();
-  }
-});
-
-Deno.test("talosconfig mints into a private temp file, stores the content, removes the file", async () => {
-  let cfgPath = "";
-  __setRunner(async (argv, env) => {
-    if (argv[1] === "get") {
-      return {
-        code: 0,
-        stderr: "",
-        stdout: identity("m1", "prod", "ctrl-1", "10.0.0.2") +
-          identity("m2", "prod", "wrkr-1", "10.0.0.3"),
-      };
-    }
-    if (argv[1] !== "talosconfig") {
-      return { code: 1, stdout: "", stderr: "unexpected" };
-    }
-    cfgPath = argv[6];
-    assertEquals(env.OMNI_SERVICE_ACCOUNT_KEY, g.serviceAccountKey);
-    await Deno.writeTextFile(cfgPath, "context: prod\ncontexts: {}\n");
-    return { code: 0, stdout: "", stderr: "" };
-  });
-  const { context, written } = makeContext();
-  try {
-    await model.methods.talosconfig.execute({ cluster: "prod" }, context);
-    assertEquals(written.map((w) => [w.spec, w.name]), [[
-      "talosconfig",
-      "talosconfig-prod",
-    ]]);
-    assertEquals(written[0].data.content, "context: prod\ncontexts: {}\n");
-    assertEquals(written[0].data.endpoint, g.endpoint);
-    assertEquals(written[0].data.nodes, ["10.0.0.2", "10.0.0.3"]);
-    assertEquals(written[0].data.hostnames, ["ctrl-1", "wrkr-1"]);
-    let exists = true;
-    try {
-      await Deno.stat(cfgPath);
-    } catch {
-      exists = false;
-    }
-    assertEquals(exists, false, "temp file removed");
-    exists = true;
-    try {
-      await Deno.stat(cfgPath.replace(/\/talosconfig$/, ""));
-    } catch {
-      exists = false;
-    }
-    assertEquals(exists, false, "temp dir removed");
-  } finally {
-    __setRunner();
-  }
-});
-
-Deno.test("talosconfig removes the temp file when omnictl fails", async () => {
-  let cfgPath = "";
-  __setRunner((argv) => {
-    if (argv[1] === "get") {
-      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-    }
-    cfgPath = argv[6];
-    return Promise.resolve({ code: 1, stdout: "", stderr: "no such cluster" });
-  });
-  const { context } = makeContext();
-  try {
-    await assertRejects(
-      () => model.methods.talosconfig.execute({ cluster: "nope" }, context),
-      Error,
-      "no such cluster",
-    );
-    let exists = true;
-    try {
-      await Deno.stat(cfgPath);
-    } catch {
-      exists = false;
-    }
-    assertEquals(exists, false);
-  } finally {
-    __setRunner();
-  }
-});
-
-Deno.test("joinTokens stores name, state and default flag and never the token", async () => {
-  const token = "v2:Zm9vYmFy-the-secret-token";
-  __setRunner((argv) => {
-    if (argv[1] === "get" && argv[2] === "jointokenstatus") {
-      return Promise.resolve({
-        code: 0,
-        stderr: "",
-        stdout: JSON.stringify({
-          metadata: { id: token, namespace: "default" },
-          spec: {
-            name: "initial",
-            state: 1,
-            isdefault: true,
-            usecount: 6,
-            expirationtime: "",
-          },
-        }) + JSON.stringify({
-          metadata: { id: "old-token", namespace: "default" },
-          spec: { name: "old", state: "REVOKED", usecount: 0 },
-        }),
-      });
-    }
-    return Promise.resolve({ code: 1, stdout: "", stderr: "unexpected" });
-  });
-  const { context, written } = makeContext();
-  try {
-    const r = await model.methods.joinTokens.execute({}, context);
-    assertEquals(r.dataHandles.length, 2);
-    assertEquals(written.map((w) => w.name), [
-      "jointoken-initial",
-      "jointoken-old",
-    ]);
-    assertEquals(written[0].data.state, "active");
-    assertEquals(written[0].data.isDefault, true);
-    assertEquals(written[0].data.useCount, 6);
-    assertEquals(written[0].data.expirationTime, null);
-    assertEquals(written[0].data.fingerprint, await fingerprint(token));
-    assertEquals(written[1].data.state, "revoked");
-    assertEquals(JSON.stringify(written).includes(token), false);
-  } finally {
-    __setRunner();
-  }
-});
-
 Deno.test("decodeJoinTokenState maps integers and names", () => {
   assertEquals(decodeJoinTokenState(2), "revoked");
   assertEquals(decodeJoinTokenState("EXPIRED"), "expired");
   assertEquals(decodeJoinTokenState(undefined), "unknown");
 });
+
+// ───── the methods, through createModelTestContext with a stub runner ─────
+
+const TOKEN = "TEST-JOIN-TOKEN-abcdef";
+const DENIED = {
+  code: 1,
+  stderr: `rpc error: code = PermissionDenied desc = key ${KEY} is not valid`,
+};
+
+Deno.test("joinTokens writes each token by name with a fingerprint, never the token", () =>
+  withStub([
+    ["get jointokenstatus -o json", {
+      stdout: cosi(TOKEN, {
+        name: "default",
+        state: 1,
+        isdefault: true,
+        usecount: 3,
+      }),
+    }],
+  ], async (h) => {
+    await model.methods.joinTokens.execute({}, h.context);
+    const [w] = h.written();
+    assertEquals([w.spec, w.name, w.data.state, w.data.isDefault], [
+      "joinToken",
+      "jointoken-default",
+      "active",
+      true,
+    ]);
+    assertEquals(w.data.fingerprint, await fingerprint(TOKEN));
+    assertEquals(JSON.stringify(h.written()).includes(TOKEN), false);
+    assertEquals(h.logs().some((l) => l.text.includes(TOKEN)), false);
+    assertEquals(h.logs().at(-1)?.message, "omni: {count} join tokens");
+  }));
+
+Deno.test("joinTokens fails when omnictl does, with the key redacted, and writes nothing", () =>
+  withStub([["get jointokenstatus", DENIED]], async (h) => {
+    const err = await assertRejects(
+      () => model.methods.joinTokens.execute({}, h.context),
+      Error,
+      "omnictl get failed (exit 1): rpc error: code = PermissionDenied",
+    );
+    assertStringIncludes(err.message, "[REDACTED]");
+    assertEquals(err.message.includes(KEY), false);
+    assertEquals(h.written(), []);
+  }));
+
+const machine = cosi("m1", {
+  cluster: "prod",
+  connected: true,
+  network: { hostname: "ctrl-1" },
+});
+
+Deno.test("discover writes a node, a cluster and a summary", () =>
+  withStub([
+    ["get machinestatus ", { stdout: machine }],
+    ["get clustermachinestatus ", {
+      stdout: cosi("m1", { stage: 4, ready: true }, {
+        "omni.sidero.dev/role-controlplane": null,
+      }),
+    }],
+    ["get clustermachineidentity ", { stdout: "" }],
+    ["get cluster ", { stdout: cosi("prod") }],
+  ], async (h) => {
+    await model.methods.discover.execute({}, h.context);
+    assertEquals(h.written().map((w) => [w.spec, w.name]), [
+      ["node", "node-m1"],
+      ["cluster", "cluster-prod"],
+      ["summary", "summary"],
+    ]);
+    assertEquals(h.written()[2].data.totalNodes, 1);
+    assertEquals(
+      h.logs().some((l) => l.message.startsWith("omni: discovered")),
+      true,
+    );
+  }));
+
+Deno.test("discover writes nothing when one of its reads fails", () =>
+  withStub([
+    ["get machinestatus ", { stdout: machine }],
+    ["get clustermachinestatus ", { stdout: "" }],
+    ["get clustermachineidentity ", DENIED],
+    ["get cluster ", { stdout: cosi("prod") }],
+  ], async (h) => {
+    await assertRejects(
+      () => model.methods.discover.execute({}, h.context),
+      Error,
+      "omnictl get failed (exit 1)",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const CONFIG = "context: prod\ncontexts:\n  prod:\n    endpoints: [x]\n";
+const identityOf = (id: string, name: string, ip: string) =>
+  cosi(id, { nodename: name, nodeips: [ip] }, {
+    "omni.sidero.dev/cluster": "prod",
+  });
+
+Deno.test("talosconfig stores the minted config with the cluster's nodes, and logs no config", () =>
+  withStub([
+    ["talosconfig -c prod --merge=false --force ", async (argv) => {
+      await Deno.writeTextFile(argv[argv.indexOf("--force") + 1], CONFIG);
+      return {};
+    }],
+    ["get clustermachineidentity ", {
+      stdout: identityOf("m2", "wrkr-1", "10.0.0.3") +
+        identityOf("m1", "ctrl-1", "10.0.0.2"),
+    }],
+  ], async (h) => {
+    await model.methods.talosconfig.execute({ cluster: "prod" }, h.context);
+    const [w] = h.written();
+    assertEquals([w.spec, w.name, w.data.nodes, w.data.hostnames], [
+      "talosconfig",
+      "talosconfig-prod",
+      ["10.0.0.2", "10.0.0.3"],
+      ["ctrl-1", "wrkr-1"],
+    ]);
+    assertEquals(w.data.content, CONFIG);
+    assertEquals(JSON.stringify(w.data).includes(KEY), false);
+    assertEquals(h.logs().some((l) => l.text.includes("contexts")), false);
+  }));
+
+Deno.test("talosconfig refuses a cluster with no machines, and writes nothing", () =>
+  withStub([
+    ["talosconfig -c lab ", async (argv) => {
+      await Deno.writeTextFile(argv[argv.indexOf("--force") + 1], CONFIG);
+      return {};
+    }],
+    ["get clustermachineidentity ", {
+      stdout: identityOf("m1", "c", "10.0.0.2"),
+    }],
+  ], async (h) => {
+    await assertRejects(
+      () => model.methods.talosconfig.execute({ cluster: "lab" }, h.context),
+      Error,
+      "cluster lab has no machines with node IPs in Omni",
+    );
+    assertEquals(h.written(), []);
+  }));

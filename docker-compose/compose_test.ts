@@ -1,18 +1,14 @@
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "jsr:@std/assert@1.0.13";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 import {
   __setExec,
+  type CommandResult,
   composeArgs,
   type Context,
   extension,
   parsePs,
   ready,
 } from "./compose.ts";
-
-const { ensure, teardown } = extension.methods[0];
 
 const psLine = (service: string, state: string, health = "") =>
   JSON.stringify({
@@ -22,38 +18,6 @@ const psLine = (service: string, state: string, health = "") =>
     State: state,
     Health: health,
   });
-
-function context() {
-  const written: {
-    spec: string;
-    name: string;
-    data: Record<string, unknown>;
-  }[] = [];
-  const ctx: Context = {
-    globalArgs: { composeFile: "compose.yaml", profiles: ["e2e"] },
-    repoDir: "/repo",
-    logger: { info: () => {} },
-    writeResource: (spec, name, data) => {
-      written.push({ spec, name, data });
-      return Promise.resolve({ name });
-    },
-  };
-  return { ctx, written };
-}
-
-/** A fake docker: `ps` answers in turn, everything else succeeds. */
-function fake(psAnswers: string[][]) {
-  const calls: string[][] = [];
-  const restore = __setExec((args) => {
-    calls.push(args);
-    const stdout = args.includes("ps")
-      ? (psAnswers.shift() ?? []).join("\n")
-      : "";
-    return Promise.resolve({ code: 0, stdout, stderr: "" });
-  });
-  return { calls, restore };
-}
-
 Deno.test("argv carries the file, project directory and profiles", () => {
   assertEquals(
     composeArgs({ composeFile: "c.yaml", profiles: ["a", "b"] }, "/d", ["ps"]),
@@ -97,82 +61,111 @@ Deno.test("ps is parsed as one object per line or as one array", () => {
   assertEquals(parsePs("[]\n"), []);
 });
 
-Deno.test("ensure starts nothing when every service is ready", async () => {
-  const f = fake([[psLine("postgres", "running", "healthy")]]);
-  try {
-    const { ctx, written } = context();
-    await ensure.execute({ services: ["postgres"] }, ctx);
-    assertEquals(f.calls.some((a) => a.includes("up")), false);
-    assertEquals(written[0].spec, "state");
-    assertEquals(written[0].name, "current");
-  } finally {
-    f.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub exec ─────
 
-Deno.test("ensure starts only the services that are not ready", async () => {
-  const f = fake([
-    [
-      psLine("postgres", "running", "healthy"),
-      psLine("ldap", "running", "starting"),
-    ],
-    [
-      psLine("postgres", "running", "healthy"),
-      psLine("ldap", "running", "healthy"),
-    ],
+const { ensure, teardown } = extension.methods[0];
+
+/** A stub docker: each call takes the next answer; a call past them fails. */
+function stubExec(answers: CommandResult[]) {
+  const calls: string[][] = [];
+  const restore = __setExec((args) => {
+    calls.push(args);
+    const a = answers.shift();
+    if (!a) return Promise.reject(new Error(`no answer for ${args.join(" ")}`));
+    return Promise.resolve(a);
+  });
+  return { calls, restore };
+}
+
+const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "" });
+
+function harness() {
+  const t = createModelTestContext({
+    globalArgs: { composeFile: "compose.yaml", profiles: [] as string[] },
+    repoDir: "/repo",
+  });
+  return { ...t, ctx: t.context as unknown as Context };
+}
+
+Deno.test("ensure starts only the services not ready and writes their state", async () => {
+  const s = stubExec([
+    ok(
+      [psLine("db", "running", "healthy"), psLine("web", "exited")].join("\n"),
+    ),
+    ok(),
+    ok(
+      [psLine("db", "running", "healthy"), psLine("web", "running")].join("\n"),
+    ),
   ]);
   try {
-    const { ctx, written } = context();
-    await ensure.execute({ services: ["postgres", "ldap", "absent"] }, ctx);
-    const up = f.calls.find((a) => a.includes("up"))!;
-    assertEquals(up.slice(up.indexOf("up")), [
-      "up",
-      "-d",
-      "--wait",
-      "ldap",
-      "absent",
-    ]);
+    const h = harness();
+    await ensure.execute({ services: ["db", "web"] }, h.ctx);
+    assertEquals(s.calls[1].slice(-4), ["up", "-d", "--wait", "web"]);
+    const [w] = h.getWrittenResources();
+    assertEquals([w.specName, w.name], ["state", "current"]);
     assertEquals(
-      (written[0].data.services as { health?: string }[]).map((s) => s.health),
-      ["healthy", "healthy"],
+      (w.data.services as { status: string }[]).map((x) => x.status),
+      ["Up 3 seconds", "Up 3 seconds"],
+    );
+    assertEquals(
+      h.getLogs().some((l) => l.message.startsWith("Starting")),
+      true,
     );
   } finally {
-    f.restore();
+    s.restore();
   }
 });
 
-Deno.test("teardown removes orphans and volumes by default", async () => {
-  const f = fake([]);
+Deno.test("ensure fails when docker compose up fails, and writes nothing", async () => {
+  const s = stubExec([
+    ok(psLine("web", "exited")),
+    { code: 1, stdout: "", stderr: "port is already allocated\n" },
+  ]);
   try {
-    const { ctx, written } = context();
-    await teardown.execute({ volumes: true }, ctx);
-    await teardown.execute({ volumes: false }, ctx);
-    const downs = f.calls.map((a) => a.slice(a.indexOf("down")));
-    assertEquals(downs, [["down", "--remove-orphans", "--volumes"], [
+    const h = harness();
+    await assertRejects(
+      () => ensure.execute({ services: ["web"] }, h.ctx),
+      Error,
+      "docker compose up -d --wait web failed (exit 1): port is already allocated",
+    );
+    assertEquals(h.getWrittenResources(), []);
+  } finally {
+    s.restore();
+  }
+});
+
+Deno.test("teardown runs down with orphans and volumes and writes an empty state", async () => {
+  const s = stubExec([ok()]);
+  try {
+    const h = harness();
+    await teardown.execute({ volumes: true }, h.ctx);
+    assertEquals(s.calls[0].slice(-3), [
       "down",
       "--remove-orphans",
-    ]]);
-    assertEquals(written[0].data.services, []);
+      "--volumes",
+    ]);
+    const [w] = h.getWrittenResources();
+    assertEquals([w.specName, w.name, w.data.services], [
+      "state",
+      "current",
+      [],
+    ]);
   } finally {
-    f.restore();
+    s.restore();
   }
 });
 
-Deno.test("a failing compose throws with its stderr and writes nothing", async () => {
-  const restore = __setExec(() =>
-    Promise.resolve({ code: 1, stdout: "", stderr: "no such service: x" })
-  );
+Deno.test("teardown fails when docker compose down fails, and writes nothing", async () => {
+  const s = stubExec([{ code: 1, stdout: "", stderr: "no such file" }]);
   try {
-    const { ctx, written } = context();
-    const err = await assertRejects(() =>
-      teardown.execute({ volumes: true }, ctx)
+    const h = harness();
+    await assertRejects(
+      () => teardown.execute({ volumes: false }, h.ctx),
+      Error,
+      "docker compose down --remove-orphans failed (exit 1): no such file",
     );
-    assertStringIncludes(
-      String(err),
-      "docker compose down --remove-orphans --volumes failed (exit 1): no such service: x",
-    );
-    assertEquals(written.length, 0);
+    assertEquals(h.getWrittenResources(), []);
   } finally {
-    restore();
+    s.restore();
   }
 });

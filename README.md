@@ -36,11 +36,11 @@ notice of the upstream work's license, MIT or Apache-2.0, in their `LICENSE.md`:
 
 `lib/` holds the code every extension that runs a command shares, once:
 `lib/cli.ts` runs a process safely (a time limit that ends in a kill, secrets
-kept out of error text, arguments that cannot be read as flags, one strict fake
-for tests) and `lib/kubectl.ts` builds on it (cluster arguments, failure kinds,
-name checks, conditions, data names, the inventory record). An extension imports
-them relatively, `import { runCli } from "../lib/cli.ts"`, and never spawns a
-process itself. `swamp extension push` packages the imported modules into that
+kept out of error text, arguments that cannot be read as flags) and
+`lib/kubectl.ts` builds on it (cluster arguments, failure kinds, name checks,
+conditions, data names, the inventory record). An extension imports them
+relatively, `import { runCli } from "../lib/cli.ts"`, and never spawns a process
+itself. `swamp extension push` packages the imported modules into that
 extension's own archive, so each extension is still published and pulled alone.
 Push, quality and fmt need the repository root for that:
 `--extensions-dir <repository root>`. A change in `lib/` moves the content hash

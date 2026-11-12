@@ -116,8 +116,8 @@ A refusal must also write no record and carry no token.
 Not in the suite: `push_artifact`, which needs a registry and no cluster. Its
 opt-in test is in `../push_artifact_test.ts` (`FLUX_E2E=1`, see the README one
 level up). The limits of 60, 330, 630 and 930 seconds on `flux` are not waited
-for here; a `flux` that hangs is covered by the unit tests, and the stopping of
-a real process by the tests of `../../lib/`.
+for here; a `flux` that hangs is not tested, and the stopping of a real process
+is tested in `../../lib/`.
 
 ## Recording the fixtures
 
@@ -129,8 +129,6 @@ k() { kubectl --kubeconfig "$SMOKE_KUBECONFIG" --context "kind-${CLUSTER:-flux-s
 for n in podinfo hooked noversion; do
   k get helmreleases.helm.toolkit.fluxcd.io $n -o json |
     jq 'del(.metadata.managedFields)' > ../fixtures/hr-$n.json
-  k get jobs.batch -l helm.toolkit.fluxcd.io/name=$n,helm.toolkit.fluxcd.io/namespace=apps -o json |
-    jq 'del(.items[].metadata.managedFields)' > ../fixtures/jobs-$n.json
 done
 ```
 

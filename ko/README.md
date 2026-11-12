@@ -203,13 +203,17 @@ deno test --allow-env --allow-read --allow-write
 KO_E2E=1 deno test --allow-env --allow-read --allow-write --allow-run
 ```
 
-The unit tests drive the model with a fake `go` and `ko`. With `KO_E2E=1` one
-test runs the real ones against `fixtures/hello`, a module of two commands and
-one library, pushing nowhere: a build to a layout and a tarball, a resolve of
-its deployment, which keeps one third-party image unpinned on purpose, and a
-resolve of the rendered result, which builds nothing. It needs ko on `PATH` (or
-`KO_BINARY`) and, with no `KOCACHE` holding the base image already, the network
-once.
+The unit tests cover the pure parts: references, image lists and the arguments
+check. They also run `describe`, `build` and `resolve` through
+`createModelTestContext` with a stub in place of go and ko that answers only the
+calls its test lists, and writes ko's image-refs file where the test needs one:
+one test per method for the records and files it writes, one for a failure that
+leaves none. With `KO_E2E=1` one test runs the real ones against
+`fixtures/hello`, a module of two commands and one library, pushing nowhere: a
+build to a layout and a tarball, a resolve of its deployment, which keeps one
+third-party image unpinned on purpose, and a resolve of the rendered result,
+which builds nothing. It needs ko on `PATH` (or `KO_BINARY`) and, with no
+`KOCACHE` holding the base image already, the network once.
 
 ## License
 

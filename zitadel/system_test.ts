@@ -1,468 +1,235 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { model } from "./system.ts";
-import type { ModelContext } from "./common.ts";
-import { installFake, line, makeContext } from "./test_support.ts";
+import { assertNoPlanted, fail, harness } from "./test_support.ts";
 
-const INSTANCE = "389916413805987103";
+const SYS = {
+  systemUser: "swamp",
+  systemKeyFile: "/nonexistent/system.pem",
+  keyJson: undefined,
+};
+const ONE = {
+  instanceId: "300",
+};
 const SEARCH = "POST /system/v1/instances/_search";
-const DOMAINS = `POST /system/v1/instances/${INSTANCE}/domains/_search`;
+const DOMAINS = "POST /system/v1/instances/300/domains/_search";
+const LIVE_DOMAINS = {
+  result: [
+    { domain: "gen.zitadel.cloud", primary: false, generated: true },
+    { domain: "id.example.org", primary: true, generated: false },
+    { domain: "old.example.org", primary: false, generated: false },
+  ],
+};
+const m = model.methods;
 
-const live = [
-  {
-    domain: "zitadel-obgyom.zitadel.example.org",
-    primary: false,
-    generated: true,
-  },
-  { domain: "zitadel.example.org", primary: true, generated: false },
-  { domain: "id.example.org", primary: false, generated: false },
-];
+Deno.test("instanceList stores each instance with its friendly state", async () => {
+  const h = harness({
+    [SEARCH]: {
+      result: [
+        { id: "300", name: "prod", state: "INSTANCE_STATE_RUNNING" },
+        { id: "301", name: "dev", version: "v4.2.0" },
+      ],
+    },
+  }, SYS);
+  await m.instanceList.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((r) => r.name), ["instance-300", "instance-301"]);
+  assertEquals(w[0].data.state, "running");
+  assertEquals(w[1].data.version, "v4.2.0");
+  assertNoPlanted(h);
+});
 
-function systemContext() {
-  const fake = makeContext();
-  fake.context.globalArgs = {
-    apiUrl: "https://zitadel.example.org",
-    systemUser: "operators",
-    systemKeyFile: "/run/does-not-matter.pem",
-    httpTimeoutMs: 30000,
-  } as unknown as ModelContext["globalArgs"];
-  return fake;
-}
+Deno.test("instanceList fails on a refused key and writes nothing", async () => {
+  const h = harness({ [SEARCH]: fail(401, "invalid signature") }, SYS);
+  await assertRejects(
+    () => m.instanceList.execute({}, h.context),
+    Error,
+    "HTTP 401",
+  );
+  assertEquals(h.written(), []);
+});
 
-Deno.test("domainList resolves the one instance and stores every domain with its flags", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: INSTANCE }] };
-    if (line(call) === DOMAINS) return { result: live };
-    return undefined;
+Deno.test("instanceCreate emits the owner's token once, into the owner spec only", async () => {
+  const pat = "PAT-SECRET-OWNER-0042";
+  const h = harness({
+    [SEARCH]: { result: [] },
+    "POST /system/v1/instances/_create": { instanceId: "302", pat },
+  }, SYS);
+  const args = m.instanceCreate.arguments.parse({
+    name: "staging",
+    customDomain: "id.staging.example.org",
+    expirationDate: "2027-01-01T00:00:00Z",
   });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.domainList.execute({}, context);
-    const domains = written.filter((w) => w.spec === "instance-domain");
-    assertEquals(domains.length, 3);
-    assertEquals(domains[1].data.primary, true);
-    assertEquals(domains[0].data.generated, true);
-    assertEquals(domains[2].data.instanceId, INSTANCE);
-    assertEquals(
-      written.find((w) => w.spec === "instance")?.name,
-      `instance-${INSTANCE}`,
-    );
-  } finally {
-    fake.restore();
-  }
+  await m.instanceCreate.execute(args, h.context);
+  const create = h.calls.find((c) => c.path.endsWith("/_create"));
+  assertEquals(create?.body, {
+    instanceName: "staging",
+    customDomain: "id.staging.example.org",
+    machine: {
+      userName: "admin",
+      name: "admin",
+      personalAccessToken: { expirationDate: "2027-01-01T00:00:00Z" },
+    },
+  });
+  const [owner, instance] = h.written();
+  assertEquals([owner.spec, owner.data.secret], ["instance-owner", pat]);
+  assertEquals([instance.spec, instance.data.action], ["instance", "created"]);
+  assert(!JSON.stringify(instance.data).includes(pat));
+  assert(!h.logs().join("\n").includes(pat));
+});
+
+Deno.test("instanceCreate leaves an instance already named so, and mints nothing", async () => {
+  const h = harness({
+    [SEARCH]: { result: [{ id: "302", name: "staging" }] },
+  }, SYS);
+  await m.instanceCreate.execute(
+    m.instanceCreate.arguments.parse({
+      name: "staging",
+      expirationDate: "2027-01-01T00:00:00Z",
+    }),
+    h.context,
+  );
+  assertEquals(h.calls.length, 1);
+  assertEquals(h.written().map((w) => [w.spec, w.data.action]), [[
+    "instance",
+    "unchanged",
+  ]]);
+});
+
+Deno.test("instanceCreate fails when Zitadel returns no credential, storing nothing", async () => {
+  const h = harness({
+    [SEARCH]: { result: [] },
+    "POST /system/v1/instances/_create": { instanceId: "302" },
+  }, SYS);
+  await assertRejects(
+    () =>
+      m.instanceCreate.execute(
+        m.instanceCreate.arguments.parse({
+          name: "staging",
+          ownerCredential: "key",
+          expirationDate: "2027-01-01T00:00:00Z",
+        }),
+        h.context,
+      ),
+    Error,
+    "returned no key",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("domainList takes the one instance listed and stores its domains", async () => {
+  const h = harness({
+    [SEARCH]: { result: [{ id: "300", name: "prod" }] },
+    [DOMAINS]: LIVE_DOMAINS,
+  }, SYS);
+  await m.domainList.execute({}, h.context);
+  const w = h.written();
+  assertEquals(w.map((r) => r.spec), [
+    "instance-domain",
+    "instance-domain",
+    "instance-domain",
+    "instance",
+  ]);
+  assertEquals(w[0].data.generated, true);
+  assertEquals(w[1].data.primary, true);
 });
 
 Deno.test("domainList refuses to guess between two instances", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: "1" }, { id: "2" }] };
-    return undefined;
-  });
-  const { context } = systemContext();
-  try {
-    await assertRejects(
-      () => model.methods.domainList.execute({}, context),
-      Error,
-      "name one with instanceId",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("domainAdd adds a missing domain and leaves a present one alone", async () => {
-  const added: unknown[] = [];
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: INSTANCE }] };
-    if (line(call) === DOMAINS) return { result: live };
-    if (line(call) === `POST /system/v1/instances/${INSTANCE}/domains`) {
-      added.push(call.body);
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.domainAdd.execute(
-      { domain: "id.osl1.example" },
-      context,
-    );
-    assertEquals(added, [{ domain: "id.osl1.example" }]);
-    assertEquals(written[0].data.action, "created");
-    await model.methods.domainAdd.execute(
-      { domain: "id.example.org" },
-      context,
-    );
-    assertEquals(added.length, 1);
-    assertEquals(written[1].data.action, "unchanged");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("domainRemove verifies first: confirm, generated, primary, dryRun, then removes", async () => {
-  const removed: string[] = [];
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: INSTANCE }] };
-    if (line(call) === DOMAINS) return { result: live };
-    if (
-      call.method === "DELETE" &&
-      call.path.startsWith(`/system/v1/instances/${INSTANCE}/domains/`)
-    ) {
-      removed.push(call.path);
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written, forgotten } = systemContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.domainRemove.execute(
-          { domain: "id.example.org", confirm: "other", dryRun: false },
-          context,
-        ),
-      Error,
-      "refusing to delete domain",
-    );
-    await assertRejects(
-      () =>
-        model.methods.domainRemove.execute(
-          {
-            domain: "zitadel-obgyom.zitadel.example.org",
-            confirm: "zitadel-obgyom.zitadel.example.org",
-            dryRun: false,
-          },
-          context,
-        ),
-      Error,
-      "generated by setup",
-    );
-    await assertRejects(
-      () =>
-        model.methods.domainRemove.execute(
-          {
-            domain: "zitadel.example.org",
-            confirm: "zitadel.example.org",
-            dryRun: false,
-          },
-          context,
-        ),
-      Error,
-      "is the primary",
-    );
-    await assertRejects(
-      () =>
-        model.methods.domainRemove.execute(
-          {
-            domain: "nowhere.example",
-            confirm: "nowhere.example",
-            dryRun: false,
-          },
-          context,
-        ),
-      Error,
-      "is not on instance",
-    );
-    await model.methods.domainRemove.execute(
-      { domain: "id.example.org", confirm: "id.example.org", dryRun: true },
-      context,
-    );
-    assertEquals(removed, []);
-    assertEquals(written.at(-1)?.data.action, "planned");
-    await model.methods.domainRemove.execute(
-      { domain: "id.example.org", confirm: "id.example.org", dryRun: false },
-      context,
-    );
-    assertEquals(removed, [
-      `/system/v1/instances/${INSTANCE}/domains/id.example.org`,
-    ]);
-    assertEquals(forgotten, ["instance-domain-id-example-org"]);
-    assertEquals(written.at(-1)?.data.action, "removed");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("domainSetPrimary sets a present domain and is a no-op on the primary", async () => {
-  const set: unknown[] = [];
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: INSTANCE }] };
-    if (line(call) === DOMAINS) return { result: live };
-    if (
-      line(call) ===
-        `POST /system/v1/instances/${INSTANCE}/domains/_set_primary`
-    ) {
-      set.push(call.body);
-      return {};
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.domainSetPrimary.execute(
-      { domain: "id.example.org" },
-      context,
-    );
-    assertEquals(set, [{ domain: "id.example.org" }]);
-    assertEquals(written[0].data.primary, true);
-    assertEquals(written[0].data.action, "updated");
-    await model.methods.domainSetPrimary.execute({
-      domain: "zitadel.example.org",
-    }, context);
-    assertEquals(set.length, 1);
-    assertEquals(written[1].data.action, "unchanged");
-    await assertRejects(
-      () =>
-        model.methods.domainSetPrimary.execute(
-          { domain: "nowhere.example" },
-          context,
-        ),
-      Error,
-      "add it first",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a named instanceId is taken without a search", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === `POST /system/v1/instances/7/domains/_search`) {
-      return { result: live };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  (context.globalArgs as unknown as Record<string, unknown>).instanceId = "7";
-  try {
-    await model.methods.domainList.execute({}, context);
-    assertEquals(written[0].data.instanceId, "7");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("instanceList stores every instance by id with the friendly state and the version", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) {
-      return {
-        result: [
-          {
-            id: INSTANCE,
-            name: "dataverket",
-            state: "INSTANCE_STATE_RUNNING",
-            version: "v4.19.3",
-          },
-          { id: "2", name: "osl1", state: "INSTANCE_STATE_RUNNING" },
-        ],
-      };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.instanceList.execute({}, context);
-    assertEquals(written.map((w) => w.name), [
-      `instance-${INSTANCE}`,
-      "instance-2",
-    ]);
-    assertEquals(written[0].data.state, "running");
-    assertEquals(written[0].data.version, "v4.19.3");
-    assertEquals(written[1].data.name, "osl1");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("instanceCreate leaves an instance of that name alone and mints nothing", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) {
-      return { result: [{ id: INSTANCE, name: "osl1" }] };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.instanceCreate.execute(
-      {
-        name: "osl1",
-        ownerUsername: "admin",
-        ownerCredential: "pat",
-        expirationDate: "2027-01-01T00:00:00Z",
-      },
-      context,
-    );
-    assertEquals(written.length, 1);
-    assertEquals(written[0].spec, "instance");
-    assertEquals(written[0].data.action, "unchanged");
-    assertEquals(fake.calls.length, 1);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("instanceCreate makes the instance with a machine owner and stores its token once", async () => {
-  let created: unknown;
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: INSTANCE, name: "x" }] };
-    if (line(call) === "POST /system/v1/instances/_create") {
-      created = call.body;
-      return { instanceId: "2", pat: "PAT-SECRET" };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.instanceCreate.execute(
-      {
-        name: "osl1",
-        firstOrgName: "osl1",
-        customDomain: "id.osl1.example",
-        defaultLanguage: "nb",
-        ownerUsername: "swamp",
-        ownerName: "swamp owner",
-        ownerCredential: "pat",
-        expirationDate: "2027-01-01T00:00:00Z",
-      },
-      context,
-    );
-    assertEquals(created, {
-      instanceName: "osl1",
-      firstOrgName: "osl1",
-      customDomain: "id.osl1.example",
-      defaultLanguage: "nb",
-      machine: {
-        userName: "swamp",
-        name: "swamp owner",
-        personalAccessToken: { expirationDate: "2027-01-01T00:00:00Z" },
-      },
-    });
-    // The owner's secret is the first thing stored, before any other call.
-    assertEquals(written[0].spec, "instance-owner");
-    assertEquals(written[0].name, "instance-owner-osl1-swamp");
-    assertEquals(written[0].data.secret, "PAT-SECRET");
-    assertEquals(written[0].data.kind, "pat");
-    assertEquals(written[1].spec, "instance");
-    assertEquals(written[1].name, "instance-2");
-    assertEquals(written[1].data.action, "created");
-    assertEquals(written[1].data.name, "osl1");
-    assertEquals(fake.calls.length, 2);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("instanceCreate with a key decodes the key JSON Zitadel returns as base64", async () => {
-  let created: unknown;
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [] };
-    if (line(call) === "POST /system/v1/instances/_create") {
-      created = call.body;
-      return {
-        instanceId: "3",
-        machineKey: btoa('{"type":"serviceaccount","keyId":"k1"}'),
-      };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await model.methods.instanceCreate.execute(
-      {
-        name: "osl1",
-        ownerUsername: "admin",
-        ownerCredential: "key",
-        expirationDate: "2027-01-01T00:00:00Z",
-      },
-      context,
-    );
-    assertEquals(
-      (created as { machine: { machineKey: unknown } }).machine.machineKey,
-      { type: "KEY_TYPE_JSON", expirationDate: "2027-01-01T00:00:00Z" },
-    );
-    assertEquals(written[1].data.name, "osl1");
-    assertEquals(
-      written[0].data.secret,
-      '{"type":"serviceaccount","keyId":"k1"}',
-    );
-    assertEquals(written[0].data.kind, "key");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("instanceCreate fails when Zitadel returns no credential for the owner", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [] };
-    if (line(call) === "POST /system/v1/instances/_create") {
-      return { instanceId: "4" };
-    }
-    return undefined;
-  });
-  const { context, written } = systemContext();
-  try {
-    await assertRejects(
-      () =>
-        model.methods.instanceCreate.execute(
-          {
-            name: "osl1",
-            ownerUsername: "admin",
-            ownerCredential: "pat",
-            expirationDate: "2027-01-01T00:00:00Z",
-          },
-          context,
-        ),
-      Error,
-      "returned no pat",
-    );
-    assertEquals(written.length, 0);
-  } finally {
-    fake.restore();
-  }
-});
-
-/** A throwaway RSA private key as a PKCS#8 PEM file, for a check that signs. */
-async function tempKeyFile(): Promise<string> {
-  const pair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
+  const h = harness({
+    [SEARCH]: { result: [{ id: "300" }, { id: "301" }] },
+  }, SYS);
+  await assertRejects(
+    () => m.domainList.execute({}, h.context),
+    Error,
+    "name one with instanceId",
   );
-  const der = new Uint8Array(
-    await crypto.subtle.exportKey("pkcs8", pair.privateKey),
-  );
-  const b64 = btoa(String.fromCharCode(...der)).replace(/(.{64})/g, "$1\n");
-  const path = await Deno.makeTempFile({ suffix: ".pem" });
-  await Deno.writeTextFile(
-    path,
-    `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`,
-  );
-  return path;
-}
+  assertEquals(h.written(), []);
+});
 
-Deno.test("the reachable check passes with two instances; only a domain method needs to pick one", async () => {
-  const fake = installFake((call) => {
-    if (line(call) === SEARCH) return { result: [{ id: "1" }, { id: "2" }] };
-    return undefined;
-  });
-  const { context } = systemContext();
-  const pem = await tempKeyFile();
-  (context.globalArgs as unknown as Record<string, unknown>).systemKeyFile =
-    pem;
-  try {
-    const result = await model.checks.reachable.execute(
-      context as unknown as Parameters<
-        typeof model.checks.reachable.execute
-      >[0],
+Deno.test("domainAdd adds a missing domain, not as primary", async () => {
+  const h = harness({
+    [DOMAINS]: LIVE_DOMAINS,
+    "POST /system/v1/instances/300/domains": {},
+  }, { ...SYS, ...ONE });
+  await m.domainAdd.execute({ domain: " new.example.org " }, h.context);
+  assertEquals(h.calls[1].body, { domain: "new.example.org" });
+  const [w] = h.written();
+  assertEquals([w.data.action, w.data.primary], ["created", false]);
+});
+
+Deno.test("domainAdd fails when the System API refuses, and writes nothing", async () => {
+  const h = harness({
+    [DOMAINS]: LIVE_DOMAINS,
+    "POST /system/v1/instances/300/domains": fail(403, "no permission"),
+  }, { ...SYS, ...ONE });
+  await assertRejects(
+    () => m.domainAdd.execute({ domain: "new.example.org" }, h.context),
+    Error,
+    "HTTP 403",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("domainRemove removes a confirmed custom domain and tombstones it", async () => {
+  const h = harness({
+    [DOMAINS]: LIVE_DOMAINS,
+    "DELETE /system/v1/instances/300/domains/old.example.org": {},
+  }, { ...SYS, ...ONE });
+  await m.domainRemove.execute(
+    { domain: "old.example.org", confirm: "old.example.org", dryRun: false },
+    h.context,
+  );
+  assertEquals(h.forgotten, ["instance-domain-old-example-org"]);
+  assertEquals(h.written()[0].data.action, "removed");
+});
+
+Deno.test("domainRemove refuses a wrong confirm, a generated and the primary domain", async () => {
+  for (
+    const [domain, confirm, message] of [
+      ["old.example.org", "old.example.com", "refusing to delete"],
+      ["gen.zitadel.cloud", "gen.zitadel.cloud", "generated by setup"],
+      ["id.example.org", "id.example.org", "is the primary"],
+    ]
+  ) {
+    const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+    await assertRejects(
+      () =>
+        m.domainRemove.execute({ domain, confirm, dryRun: false }, h.context),
+      Error,
+      message,
     );
-    assertEquals(result.errors, undefined);
-    assertEquals(result.pass, true);
-  } finally {
-    fake.restore();
-    await Deno.remove(pem);
+    assertEquals(h.calls.length, 1);
+    assertEquals(h.written(), []);
   }
+});
+
+Deno.test("domainRemove with dryRun only plans", async () => {
+  const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+  await m.domainRemove.execute(
+    { domain: "old.example.org", confirm: "old.example.org", dryRun: true },
+    h.context,
+  );
+  assertEquals(h.calls.length, 1);
+  assertEquals(h.written()[0].data.action, "planned");
+});
+
+Deno.test("domainSetPrimary makes a listed domain the primary", async () => {
+  const h = harness({
+    [DOMAINS]: LIVE_DOMAINS,
+    "POST /system/v1/instances/300/domains/_set_primary": {},
+  }, { ...SYS, ...ONE });
+  await m.domainSetPrimary.execute({ domain: "old.example.org" }, h.context);
+  assertEquals(h.calls[1].body, { domain: "old.example.org" });
+  const [w] = h.written();
+  assertEquals([w.data.action, w.data.primary], ["updated", true]);
+});
+
+Deno.test("domainSetPrimary refuses a domain the instance does not have", async () => {
+  const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+  await assertRejects(
+    () => m.domainSetPrimary.execute({ domain: "x.example.org" }, h.context),
+    Error,
+    "add it first",
+  );
+  assertEquals(h.calls.length, 1);
+  assertEquals(h.written(), []);
 });

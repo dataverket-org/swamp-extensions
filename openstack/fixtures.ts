@@ -9,14 +9,13 @@
  *
  * @module
  */
+const PROJECT = "0123456789abcdef0123456789abcdef";
 
-/** `openstack --version` */
-export const CLI_VERSION = "openstack 10.3.0";
+const USER = "fedcba9876543210fedcba9876543210";
 
-export const PROJECT = "0123456789abcdef0123456789abcdef";
-export const USER = "fedcba9876543210fedcba9876543210";
 export const EXT_NET = "2f6ae1d2-039e-4104-ae48-176f9ce4d735";
-export const PRIV_NET = "3c6d31a5-9c4a-4bf6-9ad1-38e3a07149e5";
+
+const PRIV_NET = "3c6d31a5-9c4a-4bf6-9ad1-38e3a07149e5";
 
 /** `openstack server show <id>` for an active image-booted server. */
 export const SERVER_SHOW = {
@@ -142,15 +141,6 @@ export const KEYPAIR_SHOW = {
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExample ops\n",
   type: "ssh",
   user_id: USER,
-};
-
-/** `openstack keypair create <name>` when Nova generates the key. */
-export const KEYPAIR_CREATE_GENERATED = {
-  ...KEYPAIR_SHOW,
-  name: "gen-key",
-  id: "gen-key",
-  private_key:
-    "-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n",
 };
 
 /** `openstack server group show <id>` (microversion >= 2.64). */
@@ -310,11 +300,6 @@ export const SECURITY_GROUP_SHOW = {
   tags: [],
   updated_at: "2026-09-08T16:23:04Z",
 };
-
-/** `openstack <noun> list -c ID` rows. */
-export function idRows(...ids: string[]): { ID: string }[] {
-  return ids.map((ID) => ({ ID }));
-}
 
 /** `openstack network show <id>` for a tenant network. */
 export const NETWORK_SHOW = {
@@ -524,14 +509,6 @@ export const APPCRED_SHOW = {
   "Expires At": null,
 };
 
-/** `openstack application credential create <name>` adds the one-time Secret. */
-export const APPCRED_CREATE = {
-  ...APPCRED_SHOW,
-  ID: "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
-  Name: "rotated",
-  Secret: "example-secret-shown-once",
-};
-
 /** `openstack volume snapshot show <id>` */
 export const SNAPSHOT_SHOW = {
   created_at: "2026-09-18T09:00:00.000000",
@@ -543,14 +520,4 @@ export const SNAPSHOT_SHOW = {
   status: "available",
   updated_at: "2026-09-18T09:00:10.000000",
   volume_id: "7f84cddf-5cfd-45a9-9048-6026b41c5a45",
-};
-
-/** `openstack volume type show <id>` */
-export const VOLUME_TYPE_SHOW = {
-  access_project_ids: null,
-  description: "Fast SSD",
-  id: "e877f845-7fef-4bbd-9a43-87e46291772a",
-  is_public: true,
-  name: "SSD",
-  properties: { volume_backend_name: "ssd" },
 };

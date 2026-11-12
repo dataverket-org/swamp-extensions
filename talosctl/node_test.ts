@@ -4,19 +4,18 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "jsr:@std/assert@1.0.13";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260917.35";
 import {
   type GlobalArgs,
   model,
+  type ModelContext,
   options,
   parseContexts,
   parseEtcdMembers,
   parseServices,
   serviceAccountKey,
-  talosctlPathOf,
 } from "./node.ts";
-import { talosctlArgs } from "./talosctl.ts";
-import { fail, installFake, makeContext, ok } from "./test_support.ts";
-import { talosctl as runTalosctl } from "./talosctl.ts";
+import { __setRunner, type RunResult, talosctlArgs } from "./talosctl.ts";
 
 Deno.test("options targets nodes, falls back to endpoint, refuses neither", () => {
   assertEquals(
@@ -88,23 +87,6 @@ Deno.test("talosContext names the context instead of inheriting the current one"
   );
 });
 
-Deno.test("the live check spawns talosctl even without the schema default", async () => {
-  // A check sees the definition's global arguments as written, with no schema
-  // defaults applied: a definition that never names talosctlPath leaves it
-  // undefined, and spawning with that is what "missing field `cmd`" was.
-  const fake = installFake(() => ok("v1.14.0"));
-  try {
-    const result = await model.checks["talosctl-available"].execute(
-      { globalArgs: {} as GlobalArgs },
-    );
-    assertEquals(result.pass, true);
-    assertEquals(fake.calls[0].args[0], "version");
-    assertEquals(talosctlPathOf({}), "talosctl");
-  } finally {
-    fake.restore();
-  }
-});
-
 Deno.test("parseContexts reads the names either side of the current marker", () => {
   assertEquals(
     parseContexts(
@@ -115,77 +97,6 @@ Deno.test("parseContexts reads the names either side of the current marker", () 
     ["fabrikk", "lab"],
   );
   assertEquals(parseContexts("CURRENT   NAME        ENDPOINTS\n"), []);
-});
-
-Deno.test("talos-context-exists accepts a named context the config has", async () => {
-  const fake = installFake(() =>
-    ok(
-      "CURRENT   NAME        ENDPOINTS\n" +
-        "*         fabrikk     https://omni.example.com\n" +
-        "          lab         192.0.2.10\n",
-    )
-  );
-  try {
-    const result = await model.checks["talos-context-exists"].execute(
-      { globalArgs: { talosContext: "lab" } as GlobalArgs },
-    );
-    assertEquals(result.pass, true);
-    // listed without --context: the missing one would only report itself
-    assertEquals(fake.calls[0].args, ["config", "contexts"]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("talos-context-exists names the contexts there are instead", async () => {
-  const fake = installFake(() =>
-    ok(
-      "CURRENT   NAME        ENDPOINTS\n" +
-        "*         fabrikk     https://omni.example.com\n" +
-        "          lab         192.0.2.10\n",
-    )
-  );
-  try {
-    const result = await model.checks["talos-context-exists"].execute(
-      { globalArgs: { talosContext: "gone" } as GlobalArgs },
-    );
-    assertEquals(result.pass, false);
-    assertStringIncludes(result.errors![0], '"gone" is not in the talosconfig');
-    assertStringIncludes(result.errors![0], "fabrikk, lab");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("talos-context-exists redacts the talosconfig out of a failure", async () => {
-  const secret = "SECRET-TALOSCONFIG-BODY";
-  const fake = installFake(() => fail(`bad config: ${secret}`));
-  try {
-    const result = await model.checks["talos-context-exists"].execute({
-      globalArgs: {
-        talosContext: "lab",
-        talosconfigContent: secret,
-      } as GlobalArgs,
-    });
-    assertEquals(result.pass, false);
-    assertEquals(result.errors![0].includes(secret), false);
-    assertStringIncludes(result.errors![0], "[REDACTED]");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("talos-context-exists passes when no context is named at all", async () => {
-  const fake = installFake(() => undefined);
-  try {
-    const result = await model.checks["talos-context-exists"].execute(
-      { globalArgs: {} as GlobalArgs },
-    );
-    assertEquals(result.pass, true);
-    assertEquals(fake.calls.length, 0);
-  } finally {
-    fake.restore();
-  }
 });
 
 Deno.test("omni-key-readable reads the key file and never reports its value", async () => {
@@ -246,166 +157,6 @@ Deno.test("parseServices and parseEtcdMembers read the tables", () => {
   );
 });
 
-Deno.test("volumes writes one layout per node from four reads", async () => {
-  const rec = (node: string, spec: Record<string, unknown>) =>
-    JSON.stringify({ metadata: { id: "x" }, node, spec });
-  const fake = installFake((args) => {
-    const l = args.join(" ");
-    if (l.startsWith("get disks")) {
-      return rec("n1", { dev_path: "/dev/vda", size: 100 }) +
-        rec("n2", { dev_path: "/dev/vda", size: 200 });
-    }
-    if (l.startsWith("get discoveredvolumes")) {
-      return rec("n1", {
-        dev_path: "/dev/vda1",
-        parent_dev_path: "/dev/vda",
-        partition_index: 1,
-        partition_label: "STATE",
-        size: 10,
-      }) + rec("n1", {
-        dev_path: "/dev/vda2",
-        parent_dev_path: "/dev/vda",
-        partition_index: 2,
-        partition_label: "EPHEMERAL",
-        size: 80,
-      }) + rec("n2", {
-        dev_path: "/dev/vda1",
-        parent_dev_path: "/dev/vda",
-        partition_index: 1,
-        partition_label: "STATE",
-        size: 200,
-      });
-    }
-    if (l.startsWith("get hostname")) {
-      return rec("n1", { hostname: "one" }) + rec("n2", { hostname: "two" });
-    }
-    if (l.startsWith("usage")) {
-      return "NODE SIZE NAME\nn1 30 lib\nn1 10 log\nn1 40 .\n";
-    }
-    return undefined;
-  });
-  const { context, written } = makeContext({ nodes: ["n1", "n2"] });
-  try {
-    await model.methods.volumes.execute({}, context);
-    assertEquals(written.map((w) => [w.spec, w.name]), [
-      ["volumeLayout", "volume-one"],
-    ], "n2 has no usage row and is skipped");
-    assertEquals(written[0].data.systemDiskUnallocatedBytes, 10);
-    assertEquals(written[0].data.ephemeralUsedPercent, 50);
-    assertEquals(fake.calls.every((c) => c.args.includes("n1,n2")), true);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("reset passes graceful, reboot and the labels to wipe", async () => {
-  const fake = installFake(() => "");
-  const { context } = makeContext({ endpoint: "192.0.2.5" });
-  try {
-    await model.methods.reset.execute(
-      { graceful: true, reboot: true, systemLabelsToWipe: ["EPHEMERAL"] },
-      context,
-    );
-    assertEquals(fake.calls[0].args, [
-      "reset",
-      "--reboot",
-      "--system-labels-to-wipe",
-      "EPHEMERAL",
-      "--endpoints",
-      "192.0.2.5",
-      "--nodes",
-      "192.0.2.5",
-    ]);
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a failing talosctl surfaces its stderr", async () => {
-  const fake = installFake(() => fail("rpc error: permission denied"));
-  const { context } = makeContext({ endpoint: "192.0.2.5" });
-  try {
-    await assertRejects(
-      () => model.methods.version.execute({}, context),
-      Error,
-      "permission denied",
-    );
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("transient errors are retried the requested number of times", async () => {
-  let n = 0;
-  const fake = installFake(() => {
-    n++;
-    return n < 3 ? fail("rpc error: connection refused") : "ok";
-  });
-  try {
-    const r = await runTalosctl(
-      { talosctlPath: "t", nodes: ["a"], retryDelayMs: 0 },
-      ["version"],
-      { retries: 5 },
-    );
-    assertEquals(r.stdout, "ok");
-    assertEquals(n, 3);
-    n = 0;
-    await assertRejects(
-      () =>
-        runTalosctl({ talosctlPath: "t", nodes: ["a"], retryDelayMs: 0 }, [
-          "version",
-        ], { retries: 1 }),
-      Error,
-      "connection refused",
-    );
-    assertEquals(n, 2, "gives up after retries");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("the service-account key reaches the environment and never the error", async () => {
-  const fake = installFake(() => fail("denied for KEY123"));
-  const { context } = makeContext({
-    nodes: ["a"],
-    serviceAccountKey: "KEY123",
-    retryDelayMs: 0,
-  });
-  try {
-    await assertRejects(
-      () => model.methods.version.execute({}, context),
-      Error,
-      "[REDACTED]",
-    );
-    assertEquals(fake.calls[0].env.OMNI_SERVICE_ACCOUNT_KEY, "KEY123");
-  } finally {
-    fake.restore();
-  }
-});
-
-Deno.test("a key file reaches the environment and never the error", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "talosctl-key-" });
-  const path = `${dir}/reader.key`;
-  await Deno.writeTextFile(path, "KEY123\n");
-  const fake = installFake(() => fail("denied for KEY123"));
-  const { context } = makeContext({
-    nodes: ["a"],
-    serviceAccountKeyFile: path,
-    retryDelayMs: 0,
-  });
-  try {
-    await assertRejects(
-      () => model.methods.version.execute({}, context),
-      Error,
-      "[REDACTED]",
-    );
-    assertEquals(fake.calls[0].env.OMNI_SERVICE_ACCOUNT_KEY, "KEY123");
-  } finally {
-    fake.restore();
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
 Deno.test("the key file and the key value are mutually exclusive", () => {
   assertThrows(
     () =>
@@ -433,77 +184,608 @@ Deno.test("neither is no Omni key at all, which is the plain talosctl case", () 
   );
 });
 
-Deno.test("talosconfigContent is materialized per call and removed afterwards", async () => {
-  let seen = "";
-  let path = "";
-  const fake = installFake((args) => {
-    path = args[args.indexOf("--talosconfig") + 1];
-    seen = Deno.readTextFileSync(path);
-    return "ok";
-  });
-  try {
-    const r = await runTalosctl(
-      {
-        talosctlPath: "t",
-        nodes: ["a"],
-        talosconfigContent: "context: x\n",
-        retryDelayMs: 0,
-      },
-      ["version"],
-    );
-    assertEquals(r.stdout, "ok");
-    assertEquals(seen, "context: x\n");
-    let exists = true;
-    try {
-      await Deno.stat(path);
-    } catch {
-      exists = false;
-    }
-    assertEquals(exists, false);
-  } finally {
-    fake.restore();
-  }
-});
+// ───── the methods, through createModelTestContext with a stub runner ─────
+//
+// Each test lists the few answers it needs, keyed by the start of talosctl's
+// arguments (the command, then `--nodes <node>` where it matters); a call it
+// did not list fails. It is not a model of Talos: the live use is the proof.
 
-Deno.test("talosconfigContent wins over a talosconfig path, once, and skips the path check", async () => {
-  let argv: string[] = [];
-  const fake = installFake((args) => {
-    argv = args;
-    return "ok";
+const N1 = "192.0.2.1", N2 = "192.0.2.2";
+const G: GlobalArgs = {
+  nodes: [N1, N2],
+  insecure: false,
+  talosctlPath: "talosctl",
+  retryDelayMs: 0,
+};
+const M = model.methods;
+
+type Reply = Partial<RunResult>;
+const out = (stdout: string): Reply => ({ stdout });
+const fail = (stderr: string): Reply => ({ code: 1, stderr });
+
+interface Harness {
+  context: ModelContext;
+  calls: string[];
+  written: () => {
+    spec: string;
+    name: string;
+    data: Record<string, unknown>;
+  }[];
+  logs: (level: string) => string[];
+}
+
+async function withStub(
+  routes: [string, Reply][],
+  body: (h: Harness) => Promise<void>,
+  globalArgs: GlobalArgs = G,
+): Promise<void> {
+  const calls: string[] = [];
+  __setRunner((argv) => {
+    const line = argv.slice(1).join(" ");
+    calls.push(line);
+    const r = routes.find(([prefix]) => line.startsWith(prefix))?.[1];
+    if (!r) {
+      return Promise.reject(new Error(`the stub has no answer for ${line}`));
+    }
+    return Promise.resolve({
+      code: r.code ?? 0,
+      stdout: r.stdout ?? "",
+      stderr: r.stderr ?? "",
+    });
   });
+  const t = createModelTestContext({ globalArgs });
   try {
-    await runTalosctl(
-      {
-        talosctlPath: "t",
-        nodes: ["a"],
-        talosconfig: "/nonexistent/talosconfig",
-        talosconfigContent: "context: x\n",
-        retryDelayMs: 0,
-      },
-      ["version"],
-    );
-    const idx = argv.indexOf("--talosconfig");
-    assertEquals(argv.lastIndexOf("--talosconfig"), idx, "flag appears once");
-    assertEquals(argv[idx + 1] !== "/nonexistent/talosconfig", true);
+    await body({
+      context: t.context as unknown as ModelContext,
+      calls,
+      written: () =>
+        t.getWrittenResources().map((w) => ({
+          spec: w.specName,
+          name: w.name,
+          data: w.data as Record<string, unknown>,
+        })),
+      logs: (level) => t.getLogsByLevel(level as "info").map((l) => l.message),
+    });
   } finally {
-    fake.restore();
+    __setRunner();
   }
-  const g = {
-    insecure: false,
-    talosctlPath: "t",
-    retryDelayMs: 0,
-    talosconfig: "/nonexistent/talosconfig",
-    talosconfigContent: "context: x\n",
-  };
-  assertEquals(
-    (await model.checks["talosconfig-exists"].execute({ globalArgs: g })).pass,
-    true,
-  );
-  assertEquals(
-    (await model.checks["talosconfig-exists"].execute({
-      globalArgs: { ...g, talosconfigContent: "" },
-    })).pass,
-    false,
-    "empty content is unset, so the bogus path fails the check",
-  );
-});
+}
+
+const machineType = (node: string, type: string): [string, Reply] => [
+  `get machinetype -o json --nodes ${node}`,
+  out(JSON.stringify({ node, metadata: { id: "machine-type" }, spec: type })),
+];
+
+Deno.test("version writes one record per node", () =>
+  withStub([
+    [
+      "version --json",
+      out(JSON.stringify({
+        version: { tag: "v1.14.1", sha: "abc", arch: "amd64" },
+        platform: { name: "metal" },
+      })),
+    ],
+  ], async (h) => {
+    await M.version.execute({}, h.context);
+    assertEquals(h.calls, [
+      `version --json --nodes ${N1}`,
+      `version --json --nodes ${N2}`,
+    ]);
+    assertEquals(
+      h.written().map((w) => [w.spec, w.name, w.data.tag, w.data.platform]),
+      [
+        ["version", "version-192-0-2-1", "v1.14.1", "metal"],
+        ["version", "version-192-0-2-2", "v1.14.1", "metal"],
+      ],
+    );
+  }));
+
+Deno.test("version fails with talosctl's error and writes nothing", () =>
+  withStub(
+    [["version", fail("rpc error: code = PermissionDenied")]],
+    async (h) => {
+      await assertRejects(
+        () => M.version.execute({ nodes: [N1] }, h.context),
+        Error,
+        "talosctl version failed (exit 1): rpc error: code = PermissionDenied",
+      );
+      assertEquals(h.written(), []);
+    },
+  ));
+
+Deno.test("a node outside the definition's targets is refused before any call", () =>
+  withStub([], async (h) => {
+    await assertRejects(
+      () => M.version.execute({ nodes: ["192.0.2.9"] }, h.context),
+      Error,
+      "not among the definition's nodes: 192.0.2.9",
+    );
+    assertEquals(h.calls, []);
+  }));
+
+Deno.test("services writes one record per node and service", () =>
+  withStub([
+    [
+      "services",
+      out(
+        "NODE SERVICE STATE HEALTH LAST CHANGE\n" +
+          `${N1} apid Running OK 1m\n${N2} etcd Running OK 2m\n`,
+      ),
+    ],
+  ], async (h) => {
+    await M.services.execute({}, h.context);
+    assertEquals(h.calls, [`services --nodes ${N1},${N2}`]);
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.state]), [
+      ["service", "service-192-0-2-1-apid", "Running"],
+      ["service", "service-192-0-2-2-etcd", "Running"],
+    ]);
+  }));
+
+Deno.test("services fails when talosctl does, and writes nothing", () =>
+  withStub([["services", fail("connection refused")]], async (h) => {
+    await assertRejects(
+      () => M.services.execute({}, h.context),
+      Error,
+      "talosctl services failed (exit 1): connection refused",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("etcdMembers asks a control plane and writes each member", () =>
+  withStub([
+    machineType(N1, "worker"),
+    machineType(N2, "controlplane"),
+    [
+      `etcd members --nodes ${N2}`,
+      out(
+        "NODE ID HOSTNAME PEER CLIENT LEARNER\n" +
+          `${N2} abc ctrl-1 https://p:2380 https://c:2379 false\n`,
+      ),
+    ],
+  ], async (h) => {
+    await M.etcdMembers.execute({}, h.context);
+    assertEquals(
+      h.calls.some((c) => c.startsWith(`etcd members --nodes ${N1}`)),
+      false,
+    );
+    assertEquals(h.written().map((w) => [w.spec, w.name, w.data.id]), [
+      ["etcdMember", "etcd-ctrl-1", "abc"],
+    ]);
+  }));
+
+Deno.test("etcdMembers fails when no control plane answers, and writes nothing", () =>
+  withStub([
+    machineType(N1, "controlplane"),
+    machineType(N2, "init"),
+    ["etcd members", fail("etcd is not running")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.etcdMembers.execute({}, h.context),
+      Error,
+      "no control plane answered etcd members",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const ETCD_STATUS =
+  "NODE         MEMBER             DB SIZE   IN USE           LEADER             RAFT INDEX   RAFT TERM   RAFT APPLIED INDEX   LEARNER   PROTOCOL   STORAGE   ERRORS\n" +
+  "192.0.2.1    0123456789abcdef   30 MB     10 MB (35.30%)   0123456789abcdef   15427147     18          15427147             false     3.7.1      3.7.0     \n";
+
+Deno.test("etcdStatus writes each control plane, and a target of unknown type as unreachable", () =>
+  withStub([
+    machineType(N1, "controlplane"),
+    [`get machinetype -o json --nodes ${N2}`, fail("connection refused")],
+    [`etcd status --nodes ${N1}`, out(ETCD_STATUS)],
+  ], async (h) => {
+    await M.etcdStatus.execute({}, h.context);
+    const w = h.written();
+    assertEquals(w.map((x) => [x.spec, x.name, x.data.reachable]), [
+      ["etcdStatus", "etcd-status-192-0-2-1", true],
+      ["etcdStatus", "etcd-status-192-0-2-2", false],
+    ]);
+    assertEquals(w[0].data.isLeader, true);
+    assertEquals(w[0].data.dbSizeBytes, 30e6);
+    assertStringIncludes(String(w[1].data.error), "machine type unknown");
+    assertEquals(h.logs("warning"), ["{node}: etcd status failed: {error}"]);
+    assertEquals(h.logs("info"), [
+      "etcd status of {count} control planes, {down} unreachable",
+    ]);
+  }));
+
+Deno.test("etcdStatus fails when no target is a control plane, and writes nothing", () =>
+  withStub(
+    [machineType(N1, "worker"), machineType(N2, "worker")],
+    async (h) => {
+      await assertRejects(
+        () => M.etcdStatus.execute({}, h.context),
+        Error,
+        `no control plane among the targets (${N1}, ${N2})`,
+      );
+      assertEquals(h.written(), []);
+    },
+  ));
+
+Deno.test("serviceLogs counts and keeps matching lines, and skips a node without the service", () =>
+  withStub([
+    [
+      `logs etcd --tail 100 --nodes ${N1}`,
+      out(
+        `${N1}: {"level":"warn","ts":"2026-09-30T11:16:14Z","msg":"ID mismatch"}\n` +
+          `${N1}: {"level":"info","ts":"2026-09-30T11:16:15Z","msg":"fine"}\n`,
+      ),
+    ],
+    [
+      `logs etcd --tail 100 --nodes ${N2}`,
+      fail('rpc error: service "etcd" was not registered'),
+    ],
+  ], async (h) => {
+    await M.serviceLogs.execute(
+      { service: "etcd", tail: 100, match: "mismatch", keep: 5 },
+      h.context,
+    );
+    const [w] = h.written();
+    assertEquals(h.written().length, 1);
+    assertEquals([w.spec, w.name], ["serviceLog", "log-192-0-2-1-etcd"]);
+    assertEquals([w.data.read, w.data.counted, w.data.matched], [2, 2, 1]);
+    assertEquals((w.data.lines as string[]).length, 1);
+    assertEquals(h.logs("warning"), ["{node}: no {service} log, skipped"]);
+    assertEquals(h.logs("info"), ["{service} log read on {count} nodes"]);
+  }));
+
+Deno.test("serviceLogs fails on a node's error, and writes nothing", () =>
+  withStub([
+    [`logs etcd --tail 500 --nodes ${N1}`, out(`${N1}: line\n`)],
+    [`logs etcd --tail 500 --nodes ${N2}`, fail("permission denied")],
+  ], async (h) => {
+    await assertRejects(
+      () =>
+        M.serviceLogs.execute(
+          { service: "etcd", tail: 500, keep: 20 },
+          h.context,
+        ),
+      Error,
+      `${N2}: talosctl logs failed (exit 1): permission denied`,
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const PROCESSES =
+  "NODE         PID      STATE   THREADS   CPU-TIME     VIRTMEM   RESMEM   LABEL                                   COMMAND\n" +
+  "192.0.2.1    814      S       14        1748564.50   12 GB     128 MB   system_u:system_r:etcd_t:s0             /usr/local/bin/etcd --secret=x\n" +
+  "192.0.2.1    1        S       1         10.00        1 MB      1 MB     system_u:system_r:init_t:s0             /sbin/init\n";
+
+Deno.test("processes writes the top processes of each node, executables only", () =>
+  withStub([["processes --sort rss", out(PROCESSES)]], async (h) => {
+    await M.processes.execute({ nodes: [N1], sort: "rss", top: 1 }, h.context);
+    const [w] = h.written();
+    assertEquals([w.spec, w.name], ["processes", "processes-192-0-2-1"]);
+    assertEquals([w.data.total, w.data.truncated], [2, true]);
+    assertEquals(
+      (w.data.processes as { executable: string }[]).map((p) => p.executable),
+      ["/usr/local/bin/etcd"],
+    );
+    assertEquals(h.logs("info"), [
+      "top {top} processes by {sort} on {count} nodes",
+    ]);
+  }));
+
+Deno.test("processes fails on a node's error, and writes nothing", () =>
+  withStub([
+    [`processes --sort cpu --nodes ${N1}`, out(PROCESSES)],
+    [`processes --sort cpu --nodes ${N2}`, fail("deadline exceeded")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.processes.execute({ sort: "cpu", top: 10 }, h.context),
+      Error,
+      `${N2}: talosctl processes failed`,
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("kubeconfig writes what talosctl prints", () =>
+  withStub(
+    [["kubeconfig -", out("apiVersion: v1\nkind: Config\n")]],
+    async (h) => {
+      await M.kubeconfig.execute({}, h.context);
+      const [w] = h.written();
+      assertEquals([w.spec, w.name, w.data.kubeconfig], [
+        "kubeconfig",
+        "main",
+        "apiVersion: v1\nkind: Config\n",
+      ]);
+    },
+  ));
+
+Deno.test("kubeconfig fails when talosctl does, and writes nothing", () =>
+  withStub([["kubeconfig", fail("not authorized")]], async (h) => {
+    await assertRejects(
+      () => M.kubeconfig.execute({}, h.context),
+      Error,
+      "talosctl kubeconfig failed (exit 1): not authorized",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const GiB = 2 ** 30;
+const recs = (...r: unknown[]) =>
+  out(r.map((x) => JSON.stringify(x)).join("\n"));
+
+Deno.test("volumes writes a layout per usable node and skips one without disks", () =>
+  withStub([
+    [
+      "get disks -o json",
+      recs({
+        node: N1,
+        metadata: { id: "vda" },
+        spec: { dev_path: "/dev/vda", size: 30 * GiB },
+      }),
+    ],
+    [
+      "get discoveredvolumes -o json",
+      recs({
+        node: N1,
+        metadata: { id: "vda1" },
+        spec: {
+          dev_path: "/dev/vda1",
+          parent_dev_path: "/dev/vda",
+          partition_index: 1,
+          partition_label: "STATE",
+          size: 100 * 2 ** 20,
+        },
+      }, {
+        node: N1,
+        metadata: { id: "vda5" },
+        spec: {
+          dev_path: "/dev/vda5",
+          parent_dev_path: "/dev/vda",
+          partition_index: 5,
+          partition_label: "EPHEMERAL",
+          size: 10 * GiB,
+        },
+      }),
+    ],
+    [
+      "get hostname -o json",
+      recs({
+        node: N1,
+        metadata: { id: "hostname" },
+        spec: { hostname: "wrkr-1" },
+      }),
+    ],
+    [
+      "usage -d 1 /var",
+      out(`NODE SIZE NAME\n${N1} ${GiB} lib\n${N1} ${GiB} .\n`),
+    ],
+  ], async (h) => {
+    await M.volumes.execute({}, h.context);
+    const w = h.written();
+    assertEquals(w.map((x) => [x.spec, x.name]), [[
+      "volumeLayout",
+      "volume-wrkr-1",
+    ]]);
+    assertEquals(w[0].data.ephemeralUsedPercent, 10);
+    assertEquals(h.logs("warning"), ["{node}: skipped, {problem}"]);
+    assertEquals(h.logs("info"), [
+      "{host}: EPHEMERAL {used}% of {size} GiB, {free} MiB unallocated",
+    ]);
+  }));
+
+Deno.test("volumes fails when no node has a usable layout", () =>
+  withStub([
+    ["get disks", out("")],
+    ["get discoveredvolumes", out("")],
+    ["get hostname", out("")],
+    ["usage", out("")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.volumes.execute({}, h.context),
+      Error,
+      "no targeted node returned a usable disk layout",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+/** The `result` record a lifecycle method writes. */
+function result(h: Harness) {
+  const w = h.written();
+  assertEquals(w.length, 1);
+  assertEquals(w[0].spec, "result");
+  return w[0];
+}
+
+Deno.test("applyConfig applies the file and keeps talosctl's warnings", () =>
+  withStub([
+    [
+      "apply-config --file /c.yaml --mode no-reboot --insecure",
+      { stderr: "warning: one\n\nwarning: two\n" },
+    ],
+  ], async (h) => {
+    await M.applyConfig.execute(
+      { nodes: [N1], configFile: "/c.yaml", mode: "no-reboot", insecure: true },
+      h.context,
+    );
+    const r = result(h);
+    assertEquals(r.name, "applyConfig");
+    assertEquals(r.data.message, `Config applied to ${N1} (mode=no-reboot)`);
+    assertEquals(r.data.warnings, ["warning: one", "warning: two"]);
+  }));
+
+Deno.test("applyConfig retries a transient error and fails on a lasting one", () =>
+  withStub([["apply-config", fail("connection refused")]], async (h) => {
+    await assertRejects(
+      () =>
+        M.applyConfig.execute(
+          { configFile: "/c.yaml", mode: "auto", insecure: false },
+          h.context,
+        ),
+      Error,
+      "talosctl apply-config failed (exit 1): connection refused",
+    );
+    assertEquals(h.calls.length, 13);
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("bootstrap writes its result", () =>
+  withStub([[`bootstrap --nodes ${N1}`, out("")]], async (h) => {
+    await M.bootstrap.execute({ nodes: [N1] }, h.context);
+    assertEquals(result(h).data.message, `Bootstrap initiated on ${N1}`);
+  }));
+
+Deno.test("bootstrap fails at once on an error that is not transient", () =>
+  withStub(
+    [["bootstrap", fail("etcd data directory is not empty")]],
+    async (h) => {
+      await assertRejects(
+        () => M.bootstrap.execute({ nodes: [N1] }, h.context),
+        Error,
+        "etcd data directory is not empty",
+      );
+      assertEquals(h.calls.length, 1);
+      assertEquals(h.written(), []);
+    },
+  ));
+
+Deno.test("reboot in powercycle mode targets the given node", () =>
+  withStub([[`reboot --mode powercycle --nodes ${N2}`, out("")]], async (h) => {
+    await M.reboot.execute({ nodes: [N2], mode: "powercycle" }, h.context);
+    const r = result(h);
+    assertEquals([r.name, r.data.message], [
+      "reboot",
+      `Reboot (powercycle) initiated on ${N2}`,
+    ]);
+  }));
+
+Deno.test("reboot fails when talosctl does, and writes nothing", () =>
+  withStub([["reboot", fail("permission denied")]], async (h) => {
+    await assertRejects(
+      () => M.reboot.execute({ mode: "default" }, h.context),
+      Error,
+      "talosctl reboot failed (exit 1): permission denied",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("shutdown --force writes its result", () =>
+  withStub([[`shutdown --force --nodes ${N1},${N2}`, out("")]], async (h) => {
+    await M.shutdown.execute({ force: true }, h.context);
+    assertEquals(result(h).data.message, `Shutdown initiated on ${N1},${N2}`);
+  }));
+
+Deno.test("shutdown fails when talosctl does, and writes nothing", () =>
+  withStub([["shutdown", fail("permission denied")]], async (h) => {
+    await assertRejects(
+      () => M.shutdown.execute({ force: false }, h.context),
+      Error,
+      "talosctl shutdown failed",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("reset wipes only the named partitions", () =>
+  withStub([
+    [
+      `reset --graceful=false --reboot --system-labels-to-wipe EPHEMERAL --nodes ${N1}`,
+      out(""),
+    ],
+  ], async (h) => {
+    await M.reset.execute({
+      nodes: [N1],
+      graceful: false,
+      reboot: true,
+      systemLabelsToWipe: ["EPHEMERAL"],
+    }, h.context);
+    assertEquals(
+      result(h).data.message,
+      `Reset initiated on ${N1} (graceful=false, wipe=EPHEMERAL)`,
+    );
+  }));
+
+Deno.test("reset fails when talosctl does, and writes nothing", () =>
+  withStub([["reset", fail("permission denied")]], async (h) => {
+    await assertRejects(
+      () => M.reset.execute({ graceful: true, reboot: false }, h.context),
+      Error,
+      "talosctl reset failed",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+const IMAGE = "ghcr.io/siderolabs/installer:v1.14.1";
+
+Deno.test("upgrade passes the image and --preserve", () =>
+  withStub(
+    [[`upgrade --image ${IMAGE} --preserve --nodes ${N1}`, out("")]],
+    async (h) => {
+      await M.upgrade.execute(
+        { nodes: [N1], image: IMAGE, preserve: true },
+        h.context,
+      );
+      assertEquals(
+        result(h).data.message,
+        `Upgrade to ${IMAGE} initiated on ${N1}`,
+      );
+    },
+  ));
+
+Deno.test("upgrade fails when talosctl does, and writes nothing", () =>
+  withStub([["upgrade", fail("image not found")]], async (h) => {
+    await assertRejects(
+      () => M.upgrade.execute({ image: IMAGE, preserve: false }, h.context),
+      Error,
+      "talosctl upgrade failed (exit 1): image not found",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("patchConfig patches with the file and writes its result", () =>
+  withStub([
+    ["patch machineconfig --patch-file /p.yaml --mode auto", out("")],
+  ], async (h) => {
+    await M.patchConfig.execute(
+      { patchFile: "/p.yaml", mode: "auto" },
+      h.context,
+    );
+    const r = result(h);
+    assertEquals([r.name, r.data.warnings], ["patchConfig", undefined]);
+    assertEquals(r.data.message, `Config patched on ${N1},${N2} (mode=auto)`);
+  }));
+
+Deno.test("patchConfig fails when talosctl does, and writes nothing", () =>
+  withStub([["patch", fail("invalid patch")]], async (h) => {
+    await assertRejects(
+      () =>
+        M.patchConfig.execute(
+          { patchFile: "/p.yaml", mode: "auto" },
+          h.context,
+        ),
+      Error,
+      "talosctl patch failed (exit 1): invalid patch",
+    );
+    assertEquals(h.written(), []);
+  }));
+
+Deno.test("health runs from the first control plane and writes its result", () =>
+  withStub([
+    machineType(N1, "worker"),
+    machineType(N2, "controlplane"),
+    [`health --wait-timeout 30s --nodes ${N2}`, out("all checks passed\n")],
+  ], async (h) => {
+    await M.health.execute({ waitTimeout: "30s" }, h.context);
+    const r = result(h);
+    assertEquals([r.name, r.data.message], [
+      "health",
+      `${N2}: all checks passed`,
+    ]);
+  }));
+
+Deno.test("health fails when the check does, and writes nothing", () =>
+  withStub([
+    [`health --wait-timeout 10s --nodes ${N1}`, fail("etcd is unhealthy")],
+  ], async (h) => {
+    await assertRejects(
+      () => M.health.execute({ node: N1, waitTimeout: "10s" }, h.context),
+      Error,
+      "talosctl health failed (exit 1): etcd is unhealthy",
+    );
+    assertEquals(h.written(), []);
+  }));
