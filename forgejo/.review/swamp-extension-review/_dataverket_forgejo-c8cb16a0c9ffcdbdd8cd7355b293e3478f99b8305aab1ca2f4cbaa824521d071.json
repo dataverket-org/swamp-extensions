@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.11.12.2",
+  "reviewedAt": "2026-11-12T17:32:53Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Both transports (api.ts fetchCaller and forgejo.ts realCaller) mask the token in every response body, in a redirect's Location and in the message of a request that got no answer (unreachable names method and URL, never a header). The tracker's token is a sensitive global argument; a settings parse failure carries zod's message, which holds no input values. runner_registration_token no longer names a vault 'infra': the sensitive token goes to the repository's default vault and the record holds a reference. The test seam cannot carry a credential or be set from outside: forgejoClient is read only from the method context, which swamp builds and never sets it on, and forgejo.ts's argsOf adds the client under a module-private Symbol that YAML or JSON global arguments cannot express; with no client every method gets exactly the transport it had before. Delta: the tracker's labels method calls no forge and records only names, colours, descriptions and exclusivity; the shipped workflow uses the @dataverket/forgejo instance's token for label_ensure, and the live suite checks a wrong forgejo token fails with the token masked."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "New methods (issue_state_ensure, issue_body_ensure, tag_protection_ensure, labels_ensure, describe) log with placeholders; issue_body_ensure never logs or records the text. The tracker's operate logs a failure and an answer already made, not a successful operation, as stagecraft's own operate does; a success line naming the operation would help tracing. Delta: labels logs one info line with the repository and the count."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Any 3xx is now a refusal (isFailure) in both transports and in every module that used status >= 400, so a renamed repository's old name is refused with the new name and never read, patched or deleted; failures now carry the forge's message (failure()) where several modules dropped it. A refused connection names the address and the cause. A failed pull-mirror migration shell is refused with how to fix it. operate never throws for a forge or request failure; the one throw (no readResource) is deliberate. Kinds that remain imprecise are noted under api-contracts. Delta: relate blocked_by now answers invalid ('issue dependencies switched off') on a 404 from POST /dependencies, since both tickets were read just before (stagecraft_tracker.ts:845-859), with a unit test."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "fmt, lint, check clean; 160 unit tests pass. Every model file has a sibling _test.ts that runs execute through createModelTestContext with a strict stub (a call not listed is an error), success and failure per method, as AGENTS.md now asks. Behaviour is proven by the live suite (345 checks and 14 fault tests on Forgejo 15.0.11, per smoke/README; not re-run in this review). Mutations in a scratch copy: removing the redirect-as-failure rule, the runner level filter, the collaborator membership probe, the failed-migration refusal, the .git canonicalisation, the tag-protection lost-login check or the state comment each fails a unit test. These survive the unit suite and rest on the live suite alone: dropping the half-written relate repair (covered by faults_live), dropping the 404-is-no-dependencies rule (neg-g nodeps), dropping redirect: manual in either transport (faults_live, neg-g renamed), dropping the one-parent rule (neg-g), dropping the comment de-duplication (not covered anywhere, defensive). issue_state_ensure's partial failure (comment posted, state PATCH refused) is not tested. Delta: 162 unit tests pass, fmt, lint and check clean; new tests for labels (no forge call, label_ensure's form, refused settings), for the repair's rule check and for blocked_by with dependencies off. The live suite (346 checks, test:live 14, per smoke/README) runs the new two-step workflow, including a second run changing nothing, a colour corrected and a wrong forgejo token. This version adds two unit tests for a repair where the other ticket gained the inverse relation meanwhile (parent_of and duplicate_of); 164 unit tests pass, fmt, lint and check clean; test:live 14 passed on the fixed code, per the maintainer. 2026.11.12.2: fmt, lint and check clean, 164 unit tests pass on the final sources; no code changed, so the live suite's result on 2026.11.12.1 code still applies. Delta: the new workflow has six live checks in neg-g (352 checks in all, test:live 14, per the maintainer; not re-run here); a further live check now covers a stale branch-protection record for a rule since deleted (353 checks, test:live 14, per the maintainer; not re-run here). 164 unit tests pass, fmt, lint and check clean."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "The half-written repair now runs checkRules before writing the missing side, with only this relation's own lines set aside: the outgoing line on from and the incoming line on to (stagecraft_tracker.ts:824-846). An inverse relation between the two tickets stays visible. Probe against the shipped class: A says 'Parent of: #C' (half write) and C parent_of A was then written in full; the retry is refused invalid ('the parent chain would loop') and nothing is written. The same with duplicate_of is refused ('#C is itself a duplicate'). A plain half write, with no change meanwhile, is still completed for both parent_of and duplicate_of. Two unit tests pin the refusals, and reverting the filter fails both. README's 'completed by the retry, once the relation rules still hold for it' now holds. Still open (narrow, fine to note): issue_state_ensure posts its comment before the state PATCH, so a retry after a refused PATCH posts the comment again, and issues changed earlier in a list get no record when a later one fails. Delta: the merge-settings workflow is safe to run again in the normal case: the first step only reads, the second sends only what differs, the rule step is guarded off once the rule no longer blocks outdated branches (live: a second run skips it). The stale-record case is fixed (see data-access)."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "Fixed since the last review: blocked_by with issue dependencies off is invalid, not not_found; README's conformance claim now names Forgejo 15.0.11 and the live suite. The workflow wiring is right: label_ensure takes owner, name (optional), labels (1 to 100 of name up to 50, colour, description up to 200, exclusive) and prune; the tracker's scheme meets those limits (names regex-bounded, at most 100 labels, descriptions up to 200), and the CEL reads owner, repo and labels from data.latest(inputs.tracker, \"tracker-labels\"), the fixed record name labels writes; the second step depends on the first succeeding. Remaining: (1) the workflow cannot check that the forgejo instance points at the same forge as the tracker (the tracker-labels record has no apiUrl); README now tells the reader to name a forgejo instance for the same forge, which is enough for a documented choice. (2) A block line naming an issue since deleted makes relate parent_of answer not_found from the parent walk. (3) Page loops assume the forge's page size is 50; runnerList asks 100 and stops on a shorter page (pre-existing). 2026.11.12.2 adds README guidance and no code. Its example uses repo_merge_settings_ensure's real argument names (allowMergeCommits, defaultMergeStyle=merge, which is in MERGE_STYLES, allowFastForwardOnlyMerge, allowRebase, allowRebaseExplicit, allowSquashMerge, allowRebaseUpdate) in the --arg form the README uses elsewhere; it leaves defaultUpdateStyle and the three defaults unset, which the method then does not send, and the passage does not claim to list every setting. The Forgejo claims match the forge as known: squash and rebase-merge make new commits, fast-forward-only fails for every parallel branch after the first, the merge-update button has no setting that removes it and adds a merge commit to the head, and a branch rule blocking an outdated branch forces an update before each later merge. One nuance, fine to note: a rebase merge of a branch already on top of its base can leave the commits as they are, so 'each make a new commit' holds in general rather than always; the advice is unaffected. Delta: the new workflow's inputs match the methods' arguments: repo_merge_settings_ensure (owner, name, allowMergeCommits, defaultMergeStyle 'merge', allowFastForwardOnlyMerge, allowRebase, allowRebaseExplicit, allowSquashMerge, allowRebaseUpdate) and branch_protection_ensure (owner, name, rule, blockOnOutdatedBranch), branch_protection_list (owner, name). The first assert checks all seven settings on the record the second step wrote. README now says the styles 'can each make new commits'."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "A redirect's body is cancelled; every call has a time limit and api.ts honours the run's signal. Loops are bounded (dependency pages 40, parent walk 10, label and runner pages). forgejo.ts's realCaller (pre-existing) clears its timer once headers arrive, so reading a slow body is not time-limited, and it does not take the run's signal; neither is new."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README, manifest, workflow and test fixtures use example.com, forge.example.com, acme and a generic vault name. smoke/ is not in the manifest. The comments naming fabrikk in issues.ts and tag_protection.ts are reworded generically. 2026.11.12.2: the new README passage and the workflow description use example-org and tool and name no site of ours. Delta: the new workflow and README passage use example-org, tool and forge, nothing of ours."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "No passthrough or loose objects. New argument schemas are bounded (issue_state_ensure 1 to 20 issues, positive integers, enum states; tracker names regex-limited to fit the forge's 50-character label, total labels at most 100). numberOf accepts 18 digits, beyond a safe integer, which only yields a 404. npm:zod@4 is a range, as in every extension here; swamp provides zod and does not bundle it."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "New specs have lifetime and garbage collection: issueState and issueBody 20, tagProtection 20, the tracker's answer infinite with 30d as stagecraft's own, description 5, trackerLabels 10. Delta: trackerLabels keeps 10 versions; its schema is now the label scheme."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "The tracker offers exactly the six operations every tracker must and describes no optional capability. Label management moved to the base type's label_ensure through the shipped workflow, with prune false, so the tracker type itself never writes labels. tag_protection_ensure, issue_state_ensure and issue_body_ensure are converge methods."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "No binary is run. Each mutating method reads first; the tracker reads both tickets and checks the rules before writing, now also before a repair (by direction since this version). labels makes no forge call; the workflow's label_ensure reads the labels before writing. Delta: the merge-settings workflow reads (step before) and lists rules before it writes, and asserts after each write; a repository with pull requests off is refused by repo_merge_settings_ensure with nothing sent."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "tag_protection_ensure names its record repoName('tag-protection', repo, namePattern), and slug collapses the pattern: 'release/*', 'release-*' and 'release*' all become tag-protection-<owner>-<repo>-release, and '*' becomes a name ending in '-'. Two rules on one repository can overwrite each other's record. issue_state_ensure given the same number twice writes one name twice in one execution. Tracker names are fixed or caller-given and checked against stagecraft's pattern. Delta: labels writes the fixed name tracker-labels, which the workflow's CEL reads."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "The tracker's rule 1 reads the prior answer with context.readResource and refuses to run when readResource is absent, as stagecraft's own operate does. writeRecord reads through readResource for the legacy-name warning. The merge-settings workflow's guard and last assert now act on the branch-protection record only when it is fresh: its timestamp must be no older than this run's repo-merge-settings record, which the merge-commits-only step writes before protection-rules lists the rules, so a record from this run's list or this run's ensure qualifies and an older record of a rule deleted since does not. Both timestamps come from new Date().toISOString() on the same host, so they compare as strings. The maintainer's live check deletes a recorded rule and finds no rule created afterwards, and the old guard, put back for one run, did create one. The data names built in CEL match the methods' names for names of [A-Za-z0-9._-]; slug dropping a leading '-' or a trailing '.' remains a minor mismatch the description's character rule does not exclude."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Both types move to 2026.11.12.2, each with a no-op upgrades entry ('README: the merge settings a stagecraft repository needs; no code change'); the version test and the chain test pass (164 tests). The manifest version matches. 2026.11.12.1 is published; this version changes no schema, method or argument. The new workflow is listed in the manifest; no schema, method or argument changed."
+    }
+  ]
+}

@@ -517,6 +517,31 @@ status of this tracker, name the tracker in the factory definition,
 `tracker: { kind: forgejo }`, and bind the factory to the publisher, as
 `TRACKERS.md` says.
 
+A factory's work items usually end in pull requests, several in progress at
+once, and what the factory records about a work item (a review, a signature, an
+attestation tag) names the commit it was made on. Let the repository merge with
+merge commits only, so that commit reaches the branch as it is: a rebase, a
+rebase with a merge commit and a squash can each make new commits, an update by
+rebase rewrites the pull request's head, and fast-forward works only for the
+first of several parallel branches, the others needing a rebase or an update
+first. The workflow `@dataverket/forgejo-stagecraft-merge-settings`, shipped in
+this package, sets that with the base type's `repo_merge_settings_ensure` and
+reads it back, and makes the branch's protection rule stop requiring an
+up-to-date branch; it runs with a `@dataverket/forgejo` instance whose token may
+change the repository's settings:
+
+```sh
+swamp workflow run @dataverket/forgejo-stagecraft-merge-settings \
+  --input forgejo=forge --input owner=example-org --input name=tool
+```
+
+"Update branch by merge" stays on the pull request page whatever the settings
+say, since the forge has no setting that removes it; it keeps the commits but
+moves the head, so a factory that checks the merged head against the commit it
+recorded catches it. A branch protection rule that requires an up-to-date branch
+forces such an update before every merge that follows another, which is why the
+workflow turns that off; it never creates a rule where there is none.
+
 - **Tickets.** A ticket is an issue. Its stable id is the issue's number, `34`;
   its display id is `#34`; `fetch_issue` takes either. A pull request is not a
   ticket, and an id that is not a number is `invalid`.

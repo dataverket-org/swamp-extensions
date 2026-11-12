@@ -1211,7 +1211,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.11.12.1",
+  version: "2026.11.12.2",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1255,6 +1255,12 @@ export const model = {
       description:
         "Redirects are refused, never followed; fixes found against Forgejo 15.0.11; " +
         "issue_state_ensure, issue_body_ensure and tag_protection_ensure join the type; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.2",
+      description:
+        "README: the merge settings a stagecraft repository needs; no code change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

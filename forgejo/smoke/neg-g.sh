@@ -186,4 +186,35 @@ st=$(wf @swamp/stagecraft/conformance tracker=tickets-pub statusNames=in-progres
 [ "$st" = succeeded ] && ok "stagecraft's conformance workflow passes through a publisher" \
   || bad "stagecraft's conformance workflow passes through a publisher" "status $st: $(tail -c 400 "$ERR")"
 
+# The merge-settings workflow: a fresh repository with every merge style on and a
+# main rule that requires an up-to-date branch.
+forge POST /orgs/fxorg/repos '{"name":"merges","auto_init":true,"default_branch":"main","private":false}' >/dev/null
+forge POST /repos/fxorg/merges/branch_protections '{"rule_name":"main","block_on_outdated_branch":true,"required_approvals":1}' >/dev/null
+MS='.allow_merge_commits and .default_merge_style == "merge" and (.allow_fast_forward_only_merge | not) and (.allow_rebase | not) and (.allow_rebase_explicit | not) and (.allow_squash_merge | not) and (.allow_rebase_update | not)'
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge owner=fxorg name=merges)
+[ "$st" = succeeded ] && [ "$(forge GET /repos/fxorg/merges | jq "$MS")" = true ] \
+  && ok "the merge-settings workflow leaves merge commits only" || bad "the merge-settings workflow leaves merge commits only" "status $st: $(forge GET /repos/fxorg/merges | jq -c '{allow_merge_commits, allow_fast_forward_only_merge, allow_rebase, allow_rebase_explicit, allow_squash_merge, allow_rebase_update, default_merge_style}')"
+[ "$(forge GET /repos/fxorg/merges/branch_protections/main | jq -c '[.block_on_outdated_branch, .required_approvals]')" = '[false,1]' ] \
+  && ok "... and main's rule stops requiring an up-to-date branch, the rest kept" || bad "... and main's rule stops requiring an up-to-date branch, the rest kept" "$(forge GET /repos/fxorg/merges/branch_protections/main | jq -c .)"
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge owner=fxorg name=merges)
+[ "$st" = succeeded ] && jq -e '[.. | objects | select(.stepName? == "no-outdated-branch-block" and .status? == "skipped")] | length > 0' -s "$OUT" >/dev/null \
+  && ok "... a second run sends nothing to the rule (the step is guarded off)" || bad "... a second run sends nothing to the rule (the step is guarded off)" "status $st"
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge owner=fxorg name=tickets)
+[ "$st" = succeeded ] && [ "$(forge GET /repos/fxorg/tickets/branch_protections | jq length)" = 0 ] \
+  && ok "... a repository without a branch rule is left without one" || bad "... a repository without a branch rule is left without one" "status $st: $(forge GET /repos/fxorg/tickets/branch_protections | jq -c '[.[].rule_name]')"
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge owner=fxorg name=nopr)
+[ "$st" = failed ] && [ "$(forge GET /repos/fxorg/nopr | jq .has_pull_requests)" = false ] \
+  && ok "... a repository with pull requests off is refused, and left off" || bad "... a repository with pull requests off is refused, and left off" "status $st"
+# A rule recorded earlier, then deleted on the forge: the old record must not make the step create one.
+forge POST /orgs/fxorg/repos '{"name":"merges2","auto_init":true,"default_branch":"main","private":false}' >/dev/null
+forge POST /repos/fxorg/merges2/branch_protections '{"rule_name":"main","block_on_outdated_branch":true}' >/dev/null
+run forge branch_protection_list owner=fxorg name=merges2 >/dev/null
+forge DELETE /repos/fxorg/merges2/branch_protections/main >/dev/null
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge owner=fxorg name=merges2)
+[ "$st" = succeeded ] && [ "$(forge GET /repos/fxorg/merges2/branch_protections | jq length)" = 0 ] \
+  && ok "... an older record of a rule deleted since creates no rule" || bad "... an older record of a rule deleted since creates no rule" "status $st: $(forge GET /repos/fxorg/merges2/branch_protections | jq -c '[.[].rule_name]')"
+st=$(wf @dataverket/forgejo-stagecraft-merge-settings forgejo=forge-wrong owner=fxorg name=merges)
+[ "$st" = failed ] && ! grep -qE "$SECRETS" "$OUT" "$ERR" \
+  && ok "... a wrong token fails the run, the token masked" || bad "... a wrong token fails the run, the token masked" "status $st"
+
 summary

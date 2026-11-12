@@ -7,7 +7,9 @@ description: >-
   are written by the @dataverket/forgejo instance named, with its label_ensure, which reads first, creates what is
   missing, corrects a colour or a description that differs, keeps every other label and deletes nothing, so it is
   safe to run again. Its label records say what it did to each label. The forgejo instance's token needs write on
-  the repository's labels; the tracker's token is not used.
+  the repository's labels; the tracker's token is not used. A repository a stagecraft factory works in should also
+  merge pull requests with merge commits only (README, "A stagecraft tracker"): that is the workflow
+  @dataverket/forgejo-stagecraft-merge-settings.
 version: 1
 inputs:
   properties:

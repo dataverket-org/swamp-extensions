@@ -1,0 +1,160 @@
+id: 2b798979-97bc-4421-8c04-d538d5b5917d
+name: "@dataverket/forgejo-stagecraft-merge-settings"
+description: >-
+  Make a repository that a stagecraft factory works in merge pull requests with merge commits only, so the commit a
+  factory recorded (a review, a signature, an attestation tag) reaches the branch as it is. Merge commits are on and
+  the default; fast-forward, rebase, rebase with a merge commit, squash and update by rebase are off: a rebase or a
+  squash can make new commits, an update by rebase rewrites the pull request's head, and fast-forward works only for
+  the first of several parallel branches, the others needing a rebase or an update first. The branch's protection
+  rule then stops requiring an up-to-date branch, which would force an update before every merge that follows
+  another. The first step only reads and records what the repository had. Only the settings that differ are sent
+  and the forge's answer is read back; a repository with pull requests off is refused with nothing sent. A branch
+  without a protection rule is left without one: that step runs only when this run's list recorded the rule (its
+  record is no older than this run's merge settings) and it requires an up-to-date branch, so an older record of a
+  rule deleted since is not acted on. "Update branch by merge" stays on the pull request page, since no setting removes it. Settings not named
+  here are left as they are. Runs with the @dataverket/forgejo instance named, whose token may change the
+  repository's settings and branch rules; afterwards its record repo-merge-settings-<owner>-<name> shows the
+  settings in force. Owner, repository and branch names are used in data names as given, so they must be made of
+  letters, digits, '.', '_' and '-'.
+version: 1
+inputs:
+  properties:
+    forgejo:
+      type: string
+      description: The @dataverket/forgejo instance whose token may change the repository's settings and branch rules
+    owner:
+      type: string
+      description: The organization or user that owns the repository
+    name:
+      type: string
+      description: The repository
+    branch:
+      type: string
+      default: main
+      description: The branch whose protection rule stops requiring an up-to-date branch
+  required:
+    - forgejo
+    - owner
+    - name
+jobs:
+  - name: merge-settings
+    description: The merge settings read, converged and read back, then the branch rule.
+    steps:
+      - name: before
+        description: The repository's merge settings as they are, read and recorded before anything changes.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: repo_merge_settings_ensure
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: merge-commits-only
+        description: >-
+          Merge commits on and the default; fast-forward, rebase, rebase with a merge commit, squash and update by
+          rebase off. Only the settings that differ are sent, and the forge's answer is checked.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: repo_merge_settings_ensure
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+            allowMergeCommits: true
+            defaultMergeStyle: merge
+            allowFastForwardOnlyMerge: false
+            allowRebase: false
+            allowRebaseExplicit: false
+            allowSquashMerge: false
+            allowRebaseUpdate: false
+        dependsOn:
+          - step: before
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: merge-commits-only-in-force
+        description: The forge reports the seven settings, read back after the write.
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowMergeCommits == true &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.defaultMergeStyle == "merge" &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowFastForwardOnlyMerge == false &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowRebase == false &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowRebaseExplicit == false &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowSquashMerge == false &&
+            data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.allowRebaseUpdate == false
+          message: >-
+            ${{ inputs.owner }}/${{ inputs.name }} does not report merge commits only:
+            ${{ data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes }}
+          severity: high
+        dependsOn:
+          - step: merge-commits-only
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: protection-rules
+        description: The repository's branch protection rules, read, so the next step sees the rule as it is now.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: branch_protection_list
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+        dependsOn:
+          - step: merge-commits-only-in-force
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: no-outdated-branch-block
+        description: >-
+          The branch's rule stops requiring an up-to-date branch, that field alone sent. Skipped when the rule does not
+          require it, and when this run's list did not record it (no rule, or only an older record), so no rule is
+          created here.
+        guard: >-
+          ${{ !(data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).?attributes.?timestamp.orValue("") >= data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.timestamp && data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).?attributes.?blockOnOutdatedBranch.orValue(false)) }}
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: branch_protection_ensure
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+            rule: ${{ inputs.branch }}
+            blockOnOutdatedBranch: false
+        dependsOn:
+          - step: protection-rules
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: no-outdated-branch-block-in-force
+        description: The branch's rule, if there is one, does not require an up-to-date branch.
+        task:
+          type: assert
+          expr: >-
+            !(data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).?attributes.?timestamp.orValue("") >= data.latest(inputs.forgejo, "repo-merge-settings-" + inputs.owner + "-" + inputs.name).attributes.timestamp && data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).?attributes.?blockOnOutdatedBranch.orValue(false))
+          message: >-
+            The ${{ inputs.branch }} rule of ${{ inputs.owner }}/${{ inputs.name }} still requires an up-to-date branch.
+          severity: high
+        dependsOn:
+          - step: no-outdated-branch-block
+            condition:
+              type: or
+              conditions:
+                - type: succeeded
+                - type: skipped
+          - step: protection-rules
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

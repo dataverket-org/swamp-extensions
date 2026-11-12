@@ -1131,13 +1131,19 @@ function trackerOf(context: Ctx, s: TrackerArgs): ForgeTracker {
 /** `@dataverket/forgejo/stagecraft-tracker`. */
 export const model = {
   type: "@dataverket/forgejo/stagecraft-tracker",
-  version: "2026.11.12.1",
+  version: "2026.11.12.2",
   globalArguments: GlobalArgs,
   upgrades: [
     {
       toVersion: "2026.11.12.1",
       description:
         "The type's first published version; global arguments as they are",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.2",
+      description:
+        "README: the merge settings a stagecraft repository needs; no code change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
