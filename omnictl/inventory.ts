@@ -168,7 +168,7 @@ export function clusterMembers(
  */
 export const model = {
   type: "@dataverket/omnictl/inventory",
-  version: "2026.10.01.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -181,6 +181,13 @@ export const model = {
       description:
         "pre-flight checks: the key resolves and Omni accepts it; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
     },
   ],
   globalArguments: GlobalArgs,

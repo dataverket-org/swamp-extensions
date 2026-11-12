@@ -523,7 +523,7 @@ async function resultOf(
 /** Talos machines through `talosctl`: inspection, config, lifecycle. */
 export const model = {
   type: "@dataverket/talosctl/node",
-  version: "2026.09.30.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -548,6 +548,13 @@ export const model = {
       description:
         "etcd and health go to control planes only; etcdStatus, serviceLogs and processes added; every method takes nodes; no global schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
     },
   ],
   globalArguments: GlobalArgsSchema,

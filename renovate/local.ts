@@ -1627,7 +1627,16 @@ export async function lookup(args: LookupArgs, context: Context) {
 /** Model definition for Renovate in local mode. */
 export const model = {
   type: "@dataverket/renovate/local",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks: {
     "container-binary-available": cliCheck({

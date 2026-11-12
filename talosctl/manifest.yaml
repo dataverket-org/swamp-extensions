@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/talosctl"
-version: "2026.10.27.1"
+version: "2026.11.12.1"
 description: >
   Talos Linux machines for swamp, through `talosctl`, with or without Omni.
 

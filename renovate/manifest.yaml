@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/renovate"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   What is out of date in the repositories on disk, as swamp data: Renovate run
   in its local mode, with no forge, no token and no pull request.

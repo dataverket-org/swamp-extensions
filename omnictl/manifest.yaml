@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/omnictl"
-version: "2026.10.27.1"
+version: "2026.11.12.1"
 description: >
   Sidero Omni for swamp, through `omnictl`. Two model types, two roles.
 

@@ -789,3 +789,256 @@ Deno.test("health fails when the check does, and writes nothing", () =>
     );
     assertEquals(h.written(), []);
   }));
+
+// ───── credentials: the Omni key and the talosconfig content ─────
+
+const KEY_MARK = "omni-key-marker-7f3a9c";
+const CONFIG_MARK = "talosconfig-marker-e41d06";
+const SECRET_ARGS: GlobalArgs = {
+  ...G,
+  nodes: [N1],
+  serviceAccountKey: KEY_MARK,
+  talosconfigContent: CONFIG_MARK,
+};
+
+/**
+ * Run `body` with a runner that answers `reply` and records, per call, the
+ * talosconfig path talosctl was given, whether that file held the content,
+ * and the Omni key in its environment. The real runner is put back after.
+ */
+async function withSecretStub(
+  reply: (seen: string) => RunResult,
+  body: (
+    context: ModelContext,
+    seen: { path: string; content: string; key: string }[],
+    t: ReturnType<typeof createModelTestContext>,
+  ) => Promise<void>,
+): Promise<void> {
+  const seen: { path: string; content: string; key: string }[] = [];
+  __setRunner(async (argv, opts) => {
+    const path = argv[argv.indexOf("--talosconfig") + 1];
+    const content = await Deno.readTextFile(path);
+    seen.push({ path, content, key: opts.env.OMNI_SERVICE_ACCOUNT_KEY });
+    return reply(`${content} ${opts.env.OMNI_SERVICE_ACCOUNT_KEY}`);
+  });
+  const t = createModelTestContext({ globalArgs: SECRET_ARGS });
+  try {
+    await body(t.context as unknown as ModelContext, seen, t);
+  } finally {
+    __setRunner();
+  }
+}
+
+function assertNoMarker(where: string, text: string): void {
+  for (const m of [KEY_MARK, CONFIG_MARK]) {
+    assertEquals(text.includes(m), false, `${where} holds ${m}`);
+  }
+}
+
+async function gone(path: string): Promise<boolean> {
+  return await Deno.stat(path).then(() => false, () => true);
+}
+
+Deno.test("a talosctl error that echoes the Omni key and the talosconfig content reaches no error, log or record", () =>
+  withSecretStub(
+    (both) => ({
+      code: 1,
+      stdout: "",
+      stderr: `rpc error: code = Unauthenticated: rejected ${both}`,
+    }),
+    async (context, seen, t) => {
+      const err = await assertRejects(
+        () => M.version.execute({}, context),
+        Error,
+        "talosctl version failed (exit 1): rpc error: code = Unauthenticated: rejected [REDACTED] [REDACTED]",
+      );
+      // the stub really got both values, so the redaction had work to do
+      assertEquals(seen.map((s) => [s.content, s.key]), [
+        [CONFIG_MARK, KEY_MARK],
+      ]);
+      assertNoMarker("the error", err.message);
+      assertNoMarker("the logs", JSON.stringify(t.getLogs()));
+      assertNoMarker("the records", JSON.stringify(t.getWrittenResources()));
+      assertEquals(t.getWrittenResources(), []);
+      assertEquals(await gone(seen[0].path), true, "temporary talosconfig");
+    },
+  ));
+
+Deno.test("a successful call with both secrets set records and logs neither, and removes the temporary talosconfig", () =>
+  withSecretStub(
+    () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        version: { tag: "v1.14.1", sha: "abc", arch: "amd64" },
+        platform: { name: "metal" },
+      }),
+      stderr: "",
+    }),
+    async (context, seen, t) => {
+      await M.version.execute({}, context);
+      assertEquals(seen.length, 1);
+      assertEquals(seen[0].path.includes("talosconfig-"), true);
+      assertEquals(
+        t.getWrittenResources().map((w) => w.name),
+        ["version-192-0-2-1"],
+      );
+      assertNoMarker("the logs", JSON.stringify(t.getLogs()));
+      assertNoMarker("the records", JSON.stringify(t.getWrittenResources()));
+      assertEquals(await gone(seen[0].path), true, "temporary talosconfig");
+    },
+  ));
+
+// ───── the pre-flight checks that run talosctl or read a file ─────
+
+const C = model.checks;
+
+async function withRunner<T>(
+  reply: (argv: string[]) => RunResult,
+  body: (calls: string[][]) => Promise<T>,
+): Promise<T> {
+  const calls: string[][] = [];
+  __setRunner((argv) => {
+    calls.push(argv);
+    return Promise.resolve(reply(argv));
+  });
+  try {
+    return await body(calls);
+  } finally {
+    __setRunner();
+  }
+}
+
+Deno.test("talosctl-available passes when talosctl reports its client version", () =>
+  withRunner(
+    () => ({ code: 0, stdout: "Client:\n\tTag: v1.14.1\n", stderr: "" }),
+    async (calls) => {
+      const r = await C["talosctl-available"].execute({
+        globalArgs: { talosctlPath: "/opt/talosctl" } as GlobalArgs,
+      });
+      assertEquals(r, { pass: true });
+      assertEquals(calls, [["/opt/talosctl", "version", "--client"]]);
+    },
+  ));
+
+Deno.test("talosctl-available fails with talosctl's error when it cannot run", () =>
+  withRunner(
+    () => ({ code: 126, stdout: "", stderr: "permission denied" }),
+    async () => {
+      const r = await C["talosctl-available"].execute({
+        globalArgs: { talosctlPath: "/opt/talosctl" } as GlobalArgs,
+      });
+      assertEquals(r.pass, false);
+      assertStringIncludes(
+        r.errors![0],
+        "talosctl version failed (exit 126): permission denied",
+      );
+    },
+  ));
+
+Deno.test("talosconfig-exists passes for a file that exists, for none named, and when content is given", async () => {
+  const path = await Deno.makeTempFile();
+  try {
+    const ok = (g: Partial<GlobalArgs>) =>
+      C["talosconfig-exists"].execute({ globalArgs: g as GlobalArgs });
+    assertEquals(await ok({ talosconfig: path }), { pass: true });
+    assertEquals(await ok({}), { pass: true });
+    assertEquals(
+      await ok({ talosconfig: "/nope/talosconfig", talosconfigContent: "x" }),
+      { pass: true },
+    );
+  } finally {
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("talosconfig-exists fails for a named file that is missing, also with empty content", async () => {
+  for (const g of [{}, { talosconfigContent: "" }]) {
+    const r = await C["talosconfig-exists"].execute({
+      globalArgs: { talosconfig: "/nope/talosconfig", ...g } as GlobalArgs,
+    });
+    assertEquals(r, {
+      pass: false,
+      errors: ["talosconfig not found: /nope/talosconfig"],
+    });
+  }
+});
+
+const CONTEXTS = "CURRENT   NAME   ENDPOINTS\n*         prod   192.0.2.1\n" +
+  "          lab    192.0.2.10\n";
+
+Deno.test("talos-context-exists passes for a named context the talosconfig has, and without one runs nothing", () =>
+  withRunner(
+    () => ({ code: 0, stdout: CONTEXTS, stderr: "" }),
+    async (calls) => {
+      const g = {
+        talosctlPath: "talosctl",
+        talosconfig: "/etc/tc",
+        retryDelayMs: 0,
+      };
+      assertEquals(
+        await C["talos-context-exists"].execute({
+          globalArgs: { ...g, talosContext: "lab" } as GlobalArgs,
+        }),
+        { pass: true },
+      );
+      assertEquals(calls, [[
+        "talosctl",
+        "config",
+        "contexts",
+        "--talosconfig",
+        "/etc/tc",
+      ]]);
+      assertEquals(
+        await C["talos-context-exists"].execute({
+          globalArgs: g as GlobalArgs,
+        }),
+        { pass: true },
+      );
+      assertEquals(calls.length, 1);
+    },
+  ));
+
+Deno.test("talos-context-exists fails for a context the talosconfig lacks and names the ones it has", () =>
+  withRunner(
+    () => ({ code: 0, stdout: CONTEXTS, stderr: "" }),
+    async () => {
+      const r = await C["talos-context-exists"].execute({
+        globalArgs: {
+          talosctlPath: "talosctl",
+          talosContext: "staging",
+          retryDelayMs: 0,
+        } as GlobalArgs,
+      });
+      assertEquals(r, {
+        pass: false,
+        errors: [
+          'talosContext "staging" is not in the talosconfig; it has prod, lab',
+        ],
+      });
+    },
+  ));
+
+Deno.test("talos-context-exists fails with talosctl's error, the talosconfig content redacted", () =>
+  withRunner(
+    (argv) => ({
+      code: 1,
+      stdout: "",
+      stderr: `failed to parse ${
+        Deno.readTextFileSync(argv[argv.indexOf("--talosconfig") + 1])
+      }`,
+    }),
+    async () => {
+      const r = await C["talos-context-exists"].execute({
+        globalArgs: {
+          talosctlPath: "talosctl",
+          talosContext: "prod",
+          talosconfigContent: CONFIG_MARK,
+          retryDelayMs: 0,
+        } as GlobalArgs,
+      });
+      assertEquals(r, {
+        pass: false,
+        errors: ["talosctl config failed (exit 1): failed to parse [REDACTED]"],
+      });
+    },
+  ));

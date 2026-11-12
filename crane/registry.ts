@@ -894,13 +894,20 @@ export const checks = {
 /** Model definition for one container registry driven through crane. */
 export const model = {
   type: "@dataverket/crane/registry",
-  version: "2026.10.29.2",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.10.29.2",
       description:
         "copy puts an image at its source registry and whole path under the namespace; no schema change",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
       upgradeAttributes: (
         old: Record<string, unknown>,
       ): Record<string, unknown> => old,

@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/crane"
-version: "2026.10.29.2"
+version: "2026.11.12.1"
 description: >
   A container registry driven through crane, the registry client of
   go-containerregistry: tags resolved to digests, images and indexes

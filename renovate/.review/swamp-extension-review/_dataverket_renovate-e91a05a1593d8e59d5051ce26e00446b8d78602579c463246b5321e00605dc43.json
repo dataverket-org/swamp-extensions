@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/renovate",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:28:14Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Third review, live on rootless Podman 4.9.3 with Renovate 44.226.2. network now takes none or a plain name: host, container, ns, private, bridge, default, slirp4netns and pasta are refused in any case, as is anything with ':', '=', ',' or '/'; a definition made earlier with network host is refused when run. `host.` and `Default.` pass the pattern and Podman reads them as network names that do not exist, not as modes. Planted again at logLevel info and debug: hostRules tokens and passwords, a tracked .npmrc, the npmrc option, user:password in registryUrls, .env and .git/config were found in nothing swamp keeps or prints. passProxy on an engine that is not Podman now logs that nothing is passed (shown with a stand-in binary that reports a Docker version). README says that Renovate repeats a refused configuration value."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Structured placeholders, the container's name before it starts, separate caps for warnings and other lines, and only Renovate's fixed message text is passed on."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. A path that is not well-formed Unicode is refused before anything starts (shown through JSON input); names are checked before anything starts; a name of 255 bytes with the prefix is taken and 256 refused with the count. A network name the engine does not know is a recorded state, not a throw: every repository is failed with 'exit 125: ... network not found'."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the tests against ef7f107. The strict fake container engine and most negative tests are gone (89 unit tests then, 25 now). lookup, the one method, runs through createModelTestContext with a stub at lib/cli.ts's __setSpawn that answers only listed prefixes and rejects any other call, restored in a finally: a run that records a repository and the inventory with Renovate's warnings logged, a run that exits non-zero recorded as failed and counted, and an image not held with pull never, which fails before any container and writes nothing. The pure parts keep their tests, including proxySecrets, data names, network refusal, configuration files that are links, directories, devices or FIFOs, and package.json bounds. The planted secrets, hanging runs, cancellation and hostile output that the unit suite covered before are now covered only by the live suite in smoke/ (engine.sh plants a proxy password and checks it is nowhere; fixtures.sh plants a value in a refused configuration), which the previous review relied on as well; no unit test plants the proxy password in lookup's records. Acceptable given the live suite. README and smoke/README.md now say so honestly."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Unchanged since the second review, where the time limit, a cancel, and swamp killed with Podman's own --timeout were shown live; no container of the type was left after any run of this round."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. The blocking finding of the second review is fixed: a `renovate` key in package.json gives configRead package.json and status ok (shown live), and one that says enabled false is failed with disabled-by-config. The three proof lines held against forgery, in one Git directory with an untracked renovate.json that Renovate did not read: each of the three lines as a whole JSON line and as bare text in a Dockerfile comment, in dependency names with line breaks, as the name and description of a package.json without a renovate key, and as names of tracked files; the record stayed config-not-read. In the raw debug output of that run the only message carrying repository text was 'npm file package.json has name \"...\"', which the anchored pattern `^Found (\\S+) config file$` cannot match, and no other message of Renovate 44.226.2 has that shape ('Found npm package files', 'Found 5 package file(s)' do not). Two small things README does not say, neither wrong in the record: (1) README 'Configuration' says a configuration Git does not track is not read; that holds for the configuration files, but an untracked package.json with a renovate key in a Git directory is read by Renovate (shown: its enabled false was obeyed) and the record says so truthfully with configRead package.json. (2) README does not say what a network name that does not exist gives: each repository failed with the engine's 'network not found', the method succeeds. One sentence each would do."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Unchanged since the second review: configuration files are lstat-checked regular files read to a bound, output is bounded at 32 MiB in the stream, the container is removed after a stopped run."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Placeholders only. Every data name in README carries the new prefix: the table (repo-web, repo-apps_2fweb, repo-_2e._2fweb, repo-my._2erepo) and the CEL example; inventory_all is unchanged. The archive holds local.ts, lib/cli.ts, README.md and LICENSE.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Plain z.object, no passthrough; the records of this round were stored by swamp against the schemas."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Both resources: lifetime infinite, garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. One method that reads and records; it creates, changes and deletes nothing that lasts."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. container-binary-available, label live, appliesTo lookup; lookup is kind action."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. Every repository record is `repo-` and the encoded path, so none can be inventory_all or one of swamp's report names: the path report-swamp-method-summary was stored as repo-report-swamp-method-summary and read back as the repository record, beside swamp's own report under its own name. The inventory's items carry the prefixed names. The duplicate check refuses another spelling and a symbolic link to the same directory. The 255-byte bound counts the prefix."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef7f107 shows local.ts changed only by the version and a new upgrades list with one identity entry, and lib/cli.ts, which it imports, is unchanged since ef7f107, so this verdict stands from the review of 2026.11.10.1. The method reads back no stored data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "model.version moves from 2026.11.10.1 to 2026.11.12.1 and manifest.yaml agrees. The type had no upgrades list; it now has one entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', identity upgradeAttributes; right since GlobalArgsSchema is unchanged."
+    }
+  ]
+}

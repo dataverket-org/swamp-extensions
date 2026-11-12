@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/crane",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:28:14Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Unchanged credential path (vault expressions, --password-stdin into a per-run DOCKER_CONFIG removed in finally). The new sourcePath and duplicate-target errors quote only the sources as given and derived paths and record names, never a credential."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. copy logs the count and '{target}: {action}' per source, so the new target path shows in the log. A refused source (not a repository path, or a duplicate target or record name) throws before the session is opened, and the message names both sources."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Source unchanged since 2026.10.29.2. Refused before any crane call or write: a source that does not become a repository path (Foo/bar, LocalHost/x, [::1]:5000/x, ghcr.io/Team/Hello); and two sources of one run at one target or one mirror record name (docker.io/nats:2.10 + docker.io/library/nats:2.10; ghcr.io/foo-bar/baz:v1 + ghcr.io/foo/bar-baz:v1). The first is still tested through sourcePath; the second, the in-run collision refusal, lost its unit test with the fake and is now untested (see testing-completeness). A target registry that refuses deep paths (Docker Hub) still fails only at crane copy time, as README.md says."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the new registry_test.ts against 5c05905. The fake crane over a fake registry is gone; each of the five methods (digest, describe, copy, tag, blob) runs through createModelTestContext with a stub exec at __setExec that answers only the argument prefixes its test lists and rejects any other call, restored in a finally. Each method has a success test asserting the record's spec, name and fields (digest also uses storedResources to check previousDigest and changed) and a failure test asserting the error and an empty write list. copy checks the password reaches crane on stdin only, is not in the arguments, the records or the log, and that DOCKER_CONFIG is a run-own directory. The pure parts (references, the arguments check, tar reading with pax and GNU long names) keep their tests. deno task test: 18 passed, 1 ignored (opt-in e2e). Thinner than before: the refusal of two sources colliding on one target, which the previous review relied on under error-handling, is no longer pinned by a unit test, and no failure path plants the password. Not blocking for a release whose source is unchanged; worth one test each later. README's new test paragraph matches the file."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. copy stays idempotent by digest at the new target. The stale-base-image hazard is closed for the default case: ko-signed-images' new first job 'base' (workflow-c0ab6bef...yaml:120-133) requires exactly one mirror record to match baseImageFrom/baseImageRecord, and describe, so every later job, depends on it. A model holding an old-layout record and a new one now fails the run instead of taking [0]. Remaining: a baseImageRecord set explicitly to an old-layout name (mirror-registry.example.org-mirror-static-latest) matches exactly one record and keeps building from that stale record without error. That needs a user who wrote the old name. The author reports that fabrikk-infra holds no mirror records today."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Registry use is unchanged. sourcePath follows docker/distribution normalisation where it matters: a host has '.' or ':' or is 'localhost'; library/ is added only for a single-component Docker Hub path; index.docker.io and registry-1.docker.io are folded into docker.io, as documented. The '_' port separator is injective over references that the Docker/OCI reference grammar accepts, because a domain component there has no '_'. It is not injective over everything sourcePath accepts. The first component is only checked for '.' or ':', so a host holding '_' passes, and crane 0.22.1 accepts such a host too (`crane digest foo.example_5000/x:1` gets as far as a DNS lookup). Failing pair: foo.example:5000/x and foo.example_5000/x both map to foo.example_5000/x. In one run the duplicate check refuses them; across runs they share one mirror repository. A non-numeric port is also taken: a.b:c/x maps to a.b_c/x, and crane then fails on it. IPv6 hosts are refused. Low severity: such a host is invalid under RFC 1123 and refused by containerd/Docker, so no node would ever pull through that mirror path."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Nothing new is opened. Source parsing and the duplicate check run before the Scratch directory is made, so a refusal leaves nothing behind."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. No real infrastructure named. Stale references to the old layout are gone from crane/ and signed-images/ (outside .swamp/ and .review/). The README slashless-read example is now config-prod:v1, with the full-reference rule for copy's paths. The namespace description distinguishes copy's and tag's paths. The SKILL.md pinned sentence is reworded. The Docker Hub-as-target limit and the Docker Hub folding are documented. The quality.yaml accept lines (crane 135; signed-images 294, 378, 414) each point at the first line of a command that names passwordKey, and quality passes. One residual overclaim: 'two sources never share a repository' (crane/README.md:61-62, registry.ts:329-331, signed-images/README.md:333 and :424) has the underscore-host exception in api-contracts. It is true for every host the Docker reference grammar admits."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. No schema shape changed; MirrorSchema is the same closed z.object. Its name field now holds <source registry>/<path>, while the digest record's name is still the last segment: same field name, two meanings across specs. Only the description text of globalArguments.namespace changed."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Unchanged: lifetime infinite; digest GC 30, others 10. GC is per instance name, so mirror records under old-layout names are never collected. ko-signed-images now refuses to choose between them when baseImageRecord is empty."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. As before: registry contents are evidence, not a managed resource; no delete. Images copied under the old layout stay at <namespace>/<last segment> under registry policy."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Unchanged: arguments (policy), crane-installed and registry-reachable (live) run before copy and tag. Per-source validation and the duplicate check belong in execute, since sources are method inputs, and run before any crane call."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. In-run collisions are now refused (crane/registry.ts, copy's seen map). Across runs they are not: sanitized() still writes '/' and '-' both as '-'. Failing input: in one model, copy ghcr.io/foo-bar/baz:v1@d1 in one run and ghcr.io/foo/bar-baz:v1@d2 in a later run. Both write mirror-<registry>-<namespace>-ghcr.io-foo-bar-baz-v1, and the second becomes the latest version of the first's record. Assertions filtered by workflowRunId are unaffected. A reader by name is not: ko-signed-images with baseImageRecord, or data.latest(...) as the signed-images README shows, then gets the other upstream's target and digest, silently, though it is still a mirror this model signed. Low likelihood (it needs a sanitizer-ambiguous pair with the same tag in one model) and far rarer than the old layout's real target collisions on the last segment. Still a reachable wrong-record read that an injective encoding or a hash suffix would remove. digest records have had the same cross-run collision on source repositories since the first version, and there it can carry a wrong firstSeenAt into a quarantine."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 5c05905 shows registry.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.10.29.2. Unchanged: digest reads its last record through readResource. Workflows read attributes.target/repository from mirror records and build no paths. In mirror-release-images, the image and its sha256-<hex> signature tag both go through sourcePath of the same source repository, so they share a repository and cosign verify at the target finds the signature. They run as two separate copy calls with different tags, so the new in-run duplicate check does not trip between them. Pre-existing and untouched: a slashless repository in release.json would send the signature digest to the target registry and namespace while the image copy reads Docker Hub."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "model.version is 2026.11.12.1 and manifest.yaml agrees. One new upgrades entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', identity upgradeAttributes; right since GlobalArgsSchema is unchanged. No test pins the version, which is acceptable."
+    }
+  ]
+}

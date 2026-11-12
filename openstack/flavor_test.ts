@@ -71,3 +71,36 @@ Deno.test("get fails on a missing flavor, and writes nothing", () =>
       assertEquals(h.written(), []);
     },
   ));
+
+// ───── the application credential secret ─────
+
+const SECRET_MARK = "appcred-secret-marker-5b8e21";
+
+Deno.test("a CLI error that echoes the application credential secret reaches no error, log or record", () =>
+  withStub(
+    [[
+      "flavor list",
+      fail(
+        `Authentication failed for secret ${SECRET_MARK} (HTTP 401)`,
+      ),
+    ]],
+    async (h) => {
+      const err = await assertRejects(
+        () => model.methods.list.execute({ all: false }, h.context),
+        Error,
+        "failed (exit 1): Authentication failed for secret [REDACTED] (HTTP 401)",
+      );
+      // the CLI really got the secret, so the redaction had work to do
+      assertEquals(h.envs.map((e) => e.OS_APPLICATION_CREDENTIAL_SECRET), [
+        SECRET_MARK,
+      ]);
+      assertEquals(err.message.includes(SECRET_MARK), false);
+      assertEquals(JSON.stringify(h.logs()).includes(SECRET_MARK), false);
+      assertEquals(JSON.stringify(h.written()).includes(SECRET_MARK), false);
+      assertEquals(h.written(), []);
+    },
+    {
+      applicationCredentialId: "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      applicationCredentialSecret: SECRET_MARK,
+    },
+  ));

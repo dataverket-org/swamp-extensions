@@ -591,10 +591,11 @@ Deno.test("readStatement judges one statement against a digest without the model
 });
 
 Deno.test("the type carries an upgrade to this version, and its arguments are unchanged", () => {
-  assertEquals(model.version, "2026.11.10.2");
+  assertEquals(model.version, "2026.11.12.1");
   assertEquals(model.upgrades.map((u) => u.toVersion), [
     "2026.11.10.1",
     "2026.11.10.2",
+    "2026.11.12.1",
   ]);
   const last = model.upgrades[model.upgrades.length - 1];
   assertEquals(last.toVersion, model.version);

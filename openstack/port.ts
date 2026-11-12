@@ -196,7 +196,16 @@ function securityGroupFlags(groups: string[] | undefined): string[] {
 /** Neutron port model. */
 export const model = {
   type: "@dataverket/openstack/port",
-  version: "2026.09.18.1",
+  version: "2026.11.12.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {

@@ -65,7 +65,16 @@ const GetArgs = z.object({
 /** Cinder volume type lookup model (read-only). */
 export const model = {
   type: "@dataverket/openstack/volume-type",
-  version: "2026.09.18.1",
+  version: "2026.11.12.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {

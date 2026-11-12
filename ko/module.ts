@@ -691,7 +691,16 @@ async function buildOne(
 /** Model definition for one Go module built by ko. */
 export const model = {
   type: "@dataverket/ko/module",
-  version: "2026.10.29.1",
+  version: "2026.11.12.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/talosctl",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:36:32Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Source unchanged since 2026.10.27.1: serviceAccountKey and talosconfigContent are sensitive, reach talosctl only through an allow-listed environment or a private temp file, and talosctl() redacts both from error text with redactSecrets. Now tested again in node_test.ts: with both set to marker values, a talosctl error that echoes them gives exactly 'talosctl version failed (exit 1): ... rejected [REDACTED] [REDACTED]', and neither marker is in the error, the logs or the records; the stub checks that talosctl really received the key in OMNI_SERVICE_ACCOUNT_KEY and the content in the --talosconfig file. A successful call records and logs neither. talos-context-exists redacts the talosconfig content from talosctl's error. I confirmed on a scratch copy that switching off the replacement in redactSecrets fails two of these tests."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. Only etcdStatus, serviceLogs, processes and volumes call context.logger (node.ts lines 278-1125, all with structured placeholders, no interpolation); the other twelve methods never log, so applyConfig, patchConfig, bootstrap, reboot, shutdown, reset and upgrade emit no info line before or after the talosctl call that names the nodes and mode, and no method logs on entry. Add an info line before and after each talosctl call in those methods (the result record's message already has the text)."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. talosctl() throws with the subcommand, exit code and redacted stderr, retries only isTransientError text, and serviceLogs/processes check every per-node answer before writing anything. version (node.ts 720-741) does not: it interleaves one talosctl call and one writeResource per node, so a node failing after another answered leaves version-<node> records behind in a failed execution; collect the answers first as serviceLogs does. version also JSON.parses stdout with no shape check and writes tag \"unknown\" instead of throwing when version.tag is missing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed node_test.ts against 9b8bffb, with the fixes made after the first review of this release. All 16 methods run through createModelTestContext with a stub runner at __setRunner that answers only listed argument prefixes and rejects any other call, restored in a finally; each has a success test asserting record specs, names and fields and a failure test asserting the error and no record. New since the first review: two credential tests (an error and a success with the Omni key and the talosconfig content planted, see credentials-secrets), both asserting the temporary talosconfig is gone afterwards, and pass and fail tests for talosctl-available, talosconfig-exists and talos-context-exists. deno task test: 59 passed; fmt:check, lint and check clean. The README's Tests section stays true. talosctl has no live suite, so these unit tests are the only proof of the redaction and the checks."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. The methods are reads or one-shot operations on machines the definition names, not create/delete of swamp-owned resources; applyConfig and patchConfig retry 12 times and bootstrap 20 times on transient gRPC errors, and per-node fan-out (perNode) keeps the other nodes' answers when one is down. A second bootstrap fails on talosctl's own error rather than succeeding silently, which the README states (\"once\"). narrow() refuses nodes outside the definition before anything runs."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. No HTTP; talosctl output is parsed by header-aligned parseTable (etcd status, processes), parseConcatJson (get -o json), parseUsage, parseLogs and the whitespace parsers for services, etcd members and config contexts, with fixtures recorded from talosctl 1.14. Table parsers tolerate missing columns (optional schema fields) and skip talosctl's `error from node` lines; the version shape fallback is noted under error-handling."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Source unchanged: talosconfigContent is written to a Deno.makeTempFile and removed in a finally; output is read to completion, stdin null, the signal passed to every spawn and to the retry sleep. The removal is tested again, on a failed and on a successful call."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. README.md and the test fixtures use RFC 5737 addresses (192.0.2.x) and example.com/example.net hostnames; no account identifiers, internal hostnames or subnet topology. The additional files are README.md and LICENSE.md."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. Every schema in node.ts and layout.ts is z.object without .passthrough() (grep finds none); enums constrain mode, sort and the argument ranges."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. All nine resource specs set lifetime and garbageCollection: version, service, etcdMember, result infinite/10; kubeconfig infinite/5; volumeLayout and etcdStatus 30d/20; serviceLog and processes 7d/20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. Not a CRUD lifecycle behavior: the machines exist outside swamp and the methods read them or run talosctl operations (apply, reboot, reset, upgrade); nothing is created or deleted for swamp to sync."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Four labelled checks, unchanged: talosctl-available (live), talosconfig-exists (policy), omni-key-readable (policy), talos-context-exists (live). Each now has a pass and a fail test: talosctl-available runs 'version --client' with the named binary and reports talosctl's error; talosconfig-exists passes for an existing file, none named, or content given, and fails for a missing file also with empty content; talos-context-exists passes for a known context, runs nothing without one, names the contexts it has when the one asked for is missing, and redacts the content from talosctl's error; omni-key-readable as before. The two policy checks never read a node or print a key value."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. Mechanical check enumerated every writeResource: version-<node>, service-<node>-<id>, etcd-<hostname>, etcd-status-<node> (control planes and unknown targets are disjoint sets), log-<node>-<service>, processes-<node>, volume-<hostname>, kubeconfig main, and result named per method (applyConfig, bootstrap, reboot, shutdown, reset, upgrade, patchConfig, health) all writing the same ResultSchema shape, one per execution. No two writes in one execution share a name; schema-write conformance and field coverage are 1:1 for all nine specs (version 6/6, service 5/5, etcdMember 6/6, kubeconfig 2/2, volumeLayout 14/14 with Disk 7/7 and Partition 6/6, result 4/4, etcdStatus both the reachable and unreachable paths, serviceLog 12/12, processes 7/7 with Process 8/8); processes is the one capped method and writes truncated = processes.length < total, serviceLog carries read/tail and matched/lines counts as its equivalent. Observations, not failures: result.success is only ever written true (failure throws), and processRecord falls back to pid -1 when PID is unparseable."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows node.ts changed only by the version and one identity upgrades entry, and talosctl.ts, tables.ts and layout.ts not at all, so this verdict stands from the review of 2026.10.27.1. No method reads stored state back; there is no readResource and no dataRepository access."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "model.version moves from 2026.09.30.1 to 2026.11.12.1 and manifest.yaml from 2026.10.27.1 to 2026.11.12.1. One new upgrades entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', identity upgradeAttributes; right since GlobalArgsSchema is unchanged. No test pins the version."
+    }
+  ]
+}

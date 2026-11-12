@@ -53,13 +53,15 @@ export interface Harness {
   context: ModelContext;
   /** Each call's arguments, joined by spaces, without the binary. */
   calls: string[];
+  /** Each call's environment, in the order of `calls`. */
+  envs: Record<string, string>[];
   written: () => {
     spec: string;
     name: string;
     data: Record<string, unknown>;
   }[];
   deleted: () => string[];
-  logs: () => { level: string; message: string }[];
+  logs: () => { level: string; message: string; args: unknown[] }[];
 }
 
 /**
@@ -72,10 +74,12 @@ export async function withStub(
   globalArgs: Partial<GlobalArgs> = {},
 ): Promise<void> {
   const calls: string[] = [];
+  const envs: Record<string, string>[] = [];
   const used = new Map<number, number>();
-  __setRunner((argv) => {
+  __setRunner((argv, opts) => {
     const line = argv.slice(1).join(" ");
     calls.push(line);
+    envs.push(opts.env);
     const i = routes.findIndex(([prefix]) => line.startsWith(prefix));
     if (i < 0) {
       return Promise.reject(new Error(`the stub has no answer for ${line}`));
@@ -114,6 +118,7 @@ export async function withStub(
     await body({
       context,
       calls,
+      envs,
       written: () =>
         t.getWrittenResources().map((w) => ({
           spec: w.specName,
@@ -122,7 +127,11 @@ export async function withStub(
         })),
       deleted: () => [...deleted],
       logs: () =>
-        t.getLogs().map((l) => ({ level: l.level, message: l.message })),
+        t.getLogs().map((l) => ({
+          level: l.level,
+          message: l.message,
+          args: l.args ?? [],
+        })),
     });
   } finally {
     __setRunner();

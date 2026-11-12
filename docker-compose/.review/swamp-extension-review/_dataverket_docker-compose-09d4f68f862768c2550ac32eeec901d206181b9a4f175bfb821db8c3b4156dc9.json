@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/docker-compose",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:28:14Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. No credentials; docker compose runs with the caller's docker."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Each docker compose call is logged with its argv; ensure logs what was already up or started, teardown what it removed."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. A failing docker compose throws with the subcommand, exit code and stderr, before the state resource is written."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the new compose_test.ts against 9b8bffb. ensure and teardown each run through createModelTestContext with a stub exec at __setExec that hands out the answers its test lists in order and rejects any call past them, restored in a finally. ensure: a success test that starts only the service not ready (asserts the up argv) and writes the state record with each service's status, and a failure test where up exits 1, asserting the message and no record. teardown: a success test asserting down --remove-orphans --volumes and an empty state record, and a failure test with no record. argv building, ps parsing in both shapes and readiness keep pure tests. No credential is taken. deno task test: 7 passed. The new README Tests section matches the file."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. ensure starts only services that are not running and healthy; teardown is docker compose down, which succeeds when the stack is gone."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. docker compose ps --format json is parsed as one object per line (Compose v2.21 and later) or as one JSON array (earlier Compose), with every field defaulted."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Subprocess output is read to the end; teardown removes orphans and, by default, volumes."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "The README gains a Tests section with no addresses or identifiers; tests use placeholder services and /repo."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Argument schemas are z.object without passthrough; the records follow the upstream state schema."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. The methods write the upstream type's state spec, whose lifetime and GC the upstream defines."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Two methods added to an upstream type that has the rest of the lifecycle."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. The methods act on the compose project the definition names."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Both write state/current, the instance the upstream ps method writes, with the same shape."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows no change to compose.ts at all, only manifest.yaml's version, so this verdict stands from the review of 2026.10.27.1. Nothing is read back from stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "compose.ts extends @smith/docker-compose with export const extension and carries no version of its own; only manifest.yaml moves to 2026.11.12.1, and no upgrades entry is due."
+    }
+  ]
+}

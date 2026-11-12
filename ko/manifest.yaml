@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/ko"
-version: "2026.10.29.1"
+version: "2026.11.12.1"
 description: >
   Go programs built into container images by ko, https://ko.build: no
   Dockerfile, no container daemon, one image per main package, pushed to a

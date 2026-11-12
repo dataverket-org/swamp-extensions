@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/cosign"
-version: "2026.11.10.2"
+version: "2026.11.12.1"
 description: >
   Container images signed and verified with cosign, https://github.com/sigstore/cosign,
   signed with a key, with or without a transparency log, verified against

@@ -323,7 +323,7 @@ const nodeName = (machine: string) =>
  */
 export const model = {
   type: "@dataverket/omnictl/cluster",
-  version: "2026.10.01.3",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.09.29.1",
@@ -348,6 +348,13 @@ export const model = {
       description:
         "deleteMachine deletes the Link, not the read-only Machine; the Link type is Links.omni.sidero.dev; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
     },
   ],
   globalArguments: GlobalArgs,

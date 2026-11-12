@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cosign",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:28:14Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. Fifth review, of a README-only change. In the fourth review, on the same sources: no cosign call of identify gets the key or its passphrase, values cosign printed go back to it as one argument each, and the mutations of this are killed."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. One text rule for identity, issuer and claims; cosign's words are made one safe line."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. No fault that blocks; a limit, now stated in README under Known limits. identify takes an image for unsigned only when cosign tree and cosign download signature agree, and that check goes by how cosign tree names a bundle. Reproduced live on registry:2 in the fourth review: a signature bundle that the registry's list names with no artifact type, or that is named by something that is neither a URI nor the bundle media type, is read correctly when nothing fails, and is recorded as 'unsigned' when a rate limit hits that bundle's blob in the same run (for the bundle with no artifact type, also its manifest). cosign 3.1.4 stores no signature this way, none of the 33 public images of smoke/survey.sh has one, and whoever can write such a shape to a registry can remove the signature outright. The other way round, another tool's artifact named by a URI fails the method. Everything else fails closed: faults on the referrers list, the fallback tag, a bundle's manifest, the .sig tag, the trusted root and the transparency log fail the method and record nothing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the new signer_test.ts against ef390ff. The fake cosign and the mutation-tested suite of the previous release are gone; in their place each of the nine methods (describe, generateKeyPair, sign, verify, identify, attest, verifyAttestation, signBlob, verifyBlob) runs through createModelTestContext with a stub exec at the __setExec seam that answers only the argument prefixes its test lists and rejects any other call. Every method has a success test that asserts on the record's spec, name and fields and a failure test that asserts the error and that nothing was written. Every one of those 18 tests calls assertNothingLeaked or assertNoSecret on records, log lines and the error, with the private key and a passphrase marker planted; generateKeyPair also checks the passphrase goes to cosign only through COSIGN_PASSWORD and that the key files are removed. Each stub is restored in a finally. The pure parts (key kinds, references, the arguments check, statement and certificate readers) keep their tests. deno task test: 31 passed, 2 ignored (the two opt-in e2e tests). The unit suite is much thinner than the 86 tests and 140 killed mutations of the last review; the README and smoke/README.md now say so honestly (the cases moved from 'only by the unit tests' to 'not covered by any test'), and the live suite in smoke/ stays the proof for the unchanged source. README's new test paragraph matches the file."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. No time limit of its own per cosign call; stated under Known limits with the bound (cosign's three minutes per call, at most 33 calls per image). On 33 real images a run took a few seconds."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. The three README corrections match what I observed. The sentence on unsigned now points to the limit. The sentence on other artifacts now says cosign does not go by the name and keeps whatever reads as a bundle, which is what GetBundles in cosign 3.1.4 does and what I saw live. The two new bullets under Known limits cover the three shapes I reproduced and the URI-named artifact of another tool. The first bullet says a fault on such a bundle is not noticed; for a bundle that is listed under another name a fault on its manifest is still noticed and only one on its content is not, so the text errs on the careful side. Notes that stay: identify depends on the printed lines of cosign tree and on --new-bundle-format=false, an option cosign 3.1.4 accepts and no longer documents, both under Known limits; only the first five identities of the tag form are confirmed; a key-signed record proves nothing about the key. One leftover outside README, for the next version: the comment above BUNDLE_LABEL in signer.ts still says cosign download signature passes over an artifact of another name."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Source unchanged since 2026.11.10.2: bundle files are removed after a run, a throw and a cancel. The new tests make every temporary file under one scratch root set with __setScratchRoot and remove it on unload."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "The README and smoke/README.md changes are test paragraphs only; the tests use registry.example.org and throwaway keys. Nothing of one organisation."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. No passthrough; every field of identification is written on every path."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. Infinite, 10, as the other specs."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. The type drives a signing tool; identify is a read."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. key-usable passes on an empty key at validate time and fails before sign, attest and signBlob, which also refuse an empty key themselves; checked through swamp in the first review and unchanged since."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. identification-<repository>-<12 hex of the digest>, as verification."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff ef390ff shows signer.ts changed only by the version and one identity upgrades entry, so this verdict stands from the review of 2026.11.10.2. No method reads back stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "model.version is 2026.11.12.1 and manifest.yaml agrees. One new upgrades entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', with an identity upgradeAttributes, which is right since GlobalArgsSchema is unchanged. A test asserts the chain 2026.11.10.1, 2026.11.10.2, 2026.11.12.1, that the last entry is the model's version and returns its input, and that a call written for 2026.10.28.1 still parses."
+    }
+  ]
+}

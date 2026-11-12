@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/openstack",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:36:32Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Source unchanged since 2026.10.27.1: applicationCredentialSecret is sensitive, passed only through the subprocess environment, and redactSecret masks it in every CliError; the keypair private key and the application credential secret are written once to sensitive fields. Now tested end to end in flavor_test.ts: with applicationCredentialSecret set to a marker, a CLI error that echoes it gives exactly '... failed (exit 1): Authentication failed for secret [REDACTED] (HTTP 401)', the CLI received the marker in OS_APPLICATION_CREDENTIAL_SECRET (test_support.ts now records each call's environment), and the marker is in no error, log line (with its arguments) or record. I confirmed on a scratch copy that not passing the secret to redactSecret in cli.ts fails this test. The minted secrets keep their tests (create stores the application credential secret only in its secret record and logs none; keypair stores the private half once)."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. Every method logs info on entry with structured placeholders (listing/reading/creating/deleting ... {name}); list, create, delete, find and the reuse/no-op branches also log completion, writeAll warns on duplicate names and release warns when still bound. The update/attach/bind/start/stop/reboot methods log only the entry line and rely on the refreshed resource for completion, a minor gap against the rubric but not a defect."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. Validation throws before any write (server create boot/NIC checks, volume create sizeGb, port fixedIp, bind/attach exactly-one), CLI failures become CliError with argv words, exit code and stderr, settle/pollUntil throw on error states and timeouts. Issue: cli.ts NOT_FOUND includes the bare /not found/i and /\\(HTTP 404\\)/, so an auth or catalog failure such as keystoneauth's \"Could not find versioned identity endpoints ... Not Found (HTTP 404)\" or \"public endpoint for volumev3 service in RegionOne region not found\" makes showRawOrNull/showKeypairOrNull/showCredentialOrNull return null, and every delete/release then logs \"already gone\" and succeeds without touching the cloud; anchor the patterns on the resource phrasings (\"No <noun> with a name or ID of\", \"No <noun> found for\", \"could not be found\", ResourceNotFound) and drop the two generic ones."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the tests against 9b8bffb, with the fix made after the first review of this release. test_support.ts installs a stub runner at __setRunner that answers only listed prefixes (an array for a poll) and fails any other call, records each call's environment and each log line's arguments, overrides the poll interval, and restores both in a finally. Every method of all 16 models is executed in at least two tests, at least one through assertRejects; success tests assert record specs, names and fields or the names deleted, failure tests assert the error and no record. method_kind_test pins the twelve deletes to kind action. The global applicationCredentialSecret is now planted (see credentials-secrets). deno task test: 202 passed; fmt:check, lint and check clean. Not blocking: openstackJson's refusal of empty and malformed output and openstackVersion without authentication are no longer tested directly. README says honestly that smoke/delete-kind.sh is the only test against a real cloud."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. Every create first runs show (or image list --name, floating ip by address/description) and reuses the existing resource; every delete/release treats not-found as a no-op and only calls deleteResource after the CLI succeeded (method_kind_test.ts covers the refusal case). addRule tolerates isConflict, removeRule tolerates isNotFound, addSubnet/removeSubnet/addRoute/removeRoute compare against the live router first; an interrupted create with wait leaves a named resource that the next run adopts."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. No HTTP: all calls go through python-openstackclient -f json, whose output is checked by assertShow/assertList and coerced by str/num/bool/strList/objList before any field is read; pagination and microversions are the CLI's. Every flag the models emit was verified against openstack 10.5.0 --help (server create --nic/--block-device/--use-config-drive/--hint, server add volume --enable-delete-on-termination, server group create --rule, image list --property/--tag, security group create --stateless, router create --external-gateway, router set --route, subnet set --no-*, port set --no-*, port list --status, floating ip list --status, application credential create --restricted). Truncation check: no method caps or pages results itself (listThenShow stores every id; image find selects the newest by design), so no truncated field is required."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. withTempFile removes the --user-data and --public-key files in finally with mode 0600; Deno.Command uses stdin null and piped stdout/stderr read to completion, with context.signal propagated and sleep aborting on it. Created resources are stored by id in the spec and deletes resolve by show before acting."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README and smoke/README.md changes are about tests only. fixtures.ts (not shipped) keeps placeholder UUIDs and no longer exports unused constants; no real cloud identifiers."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. All 23 schemas (16 resource specs, nested Attachment/Rule/pool/route objects and every argument schema) are z.object without passthrough, z.any or z.unknown (grep). Schema-write conformance and field coverage: every write goes through writeAll with a normalizeX(raw) object whose declared return type is z.infer of the target spec, so deno check (clean) guarantees 1:1 field coverage with no extra or missing fields; the two direct writeResource calls (keypair privateKey {name, privateKey}, application-credential secret {name, id, secret}) match their schemas exactly and no field is a hardcoded placeholder (zone id is <service>/<name>, floatingIp name is the address by design)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. All 18 specs across the 16 models set lifetime \"infinite\" with garbageCollection 10 (5 for the read-only flavor/zone/volumeType lookups, 3 for the privateKey and secret specs)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. server, image, volume, security-group, network, subnet, router and port have create/update/delete plus list/get; keypair, server-group, snapshot and application-credential have create/delete and list/get (OpenStack offers no update for them, snapshot rename excepted); floating-ip has allocate/bind/unbind/release; flavor, availability-zone and volume-type are read-only lookups. No model has a method named sync: list and get re-read live state and overwrite the stored resource, which is this collection design's drift mechanism, and every delete is kind action so one deletion does not tombstone the collection."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. common.ts exports checks auth-configured (labels [\"policy\"], offline via describeAuth(buildEnv)) and openstack-cli (labels [\"live\"], runs openstack --version) and all 16 models attach them, so --skip-check-label live works offline."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. Instance-name check: each spec is written by one prefix (server-, image-, keypair-/privatekey-, servergroup-, flavor-, zone-<service>-, volume-, volumetype-, snapshot-, securitygroup-, network-, subnet-, router-, port-, floatingip-, appcred-/secret-), so the two-spec models never collide; every method writing a spec does so through the same normalizeX so shapes are identical across list/get/create/update. writeAll suffixes a duplicate name with the id and update deletes the old instance on rename."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows each of the 16 model files changed only by the version and a new upgrades list with one identity entry, and cli.ts and common.ts not at all, so this verdict stands from the review of 2026.10.27.1. No method reads stored state back: update/delete/attach/bind re-read the live object with openstack show and only call context.deleteResource by instance name; there is no dataRepository or readResource use (grep)."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Fifteen types move from 2026.09.18.1 and one from 2026.09.20.1 to 2026.11.12.1, manifest.yaml from 2026.10.27.1. None had an upgrades list; each now has one entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', identity upgradeAttributes, which is right since GlobalArgsSchema is unchanged."
+    }
+  ]
+}

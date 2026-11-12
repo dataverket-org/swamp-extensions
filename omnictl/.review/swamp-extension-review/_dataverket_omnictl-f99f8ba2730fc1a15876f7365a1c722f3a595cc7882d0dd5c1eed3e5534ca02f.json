@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/omnictl",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:28:14Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. The key is serviceAccountKey (.meta sensitive, vault expression) or serviceAccountKeyFile read at call time, never both (common.ts resolveServiceAccountKey); it reaches omnictl only through OMNI_SERVICE_ACCOUNT_KEY in a clearEnv allow-listed environment (omnictl.ts buildEnv), never in argv, and run() redacts it from any failing stderr. joinTokens stores a SHA-256 fingerprint instead of the token; the stored talosconfig carries Omni's proxy and an identity, no key."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. Every log line uses structured placeholders, and discover, joinTokens and removeMachine log entry and completion. applyPatch, addMachine, setExtensions (non-dryRun path) and talosconfig log only their intent, and deleteMachine logs the count of patches before deleting but nothing after the Link is gone: a workflow log reads 'applying config patch X' with no line saying it was applied and read back. Add one info line after each writeResource/deleteResource."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. omnictl.ts isNotFound() matches /not found|doesn't exist|does not exist|NotFound/i on the whole error text, and defaultRunner's own missing-binary error reads 'omnictl binary not found; ...', so getResource() returns null instead of throwing when omnictl is not installed or omnictlPath is wrong. With --skip-check-label live (which the README recommends), deleteMachine then returns success as 'Omni already has no machine', removeMachine says 'is in no machine set', and addMachine says 'machine set X does not exist', all misleading. Match omnictl's resource-not-found text specifically (or throw a distinct error class from the runner and check it before the regex). Otherwise good: run() throws with exit code and redacted stderr, every Omni read happens before any writeResource, and apply-then-read-back throws when Omni returns nothing."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "Reviewed the new tests against 9b8bffb. test_support.ts installs a stub runner at __setRunner that answers only listed argument prefixes and rejects any other call, runs each method through createModelTestContext, and restores the real runner in a finally (deleteResource is recorded by the harness since this test context has none). Every method of both types has a success and a failure or refusal test: inventory joinTokens, discover, talosconfig; cluster applyPatch, addMachine, removeMachine, deleteMachine, setExtensions; each asserts the records written or the names deleted, the commands run, and nothing written on failure. The service-account key is a planted marker in every test's global arguments: joinTokens failure asserts [REDACTED] and no key in the error; joinTokens success asserts no token in records or log; talosconfig asserts no key in the record and no config in the log. Both pre-flight checks and the key-file forms keep tests. 37 passed. Thinner than before: the removal of the private temp directory used by mintTalosconfig and applyResource is no longer asserted. README's new Tests section matches the file, including 'There is no live suite'."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. applyPatch, addMachine and setExtensions are omnictl apply (create or update), so a rerun updates; deleteMachine is a no-op when the Link is gone and recomputes the machine's own patches on each run, so a failure between patch and Link deletion is safe to retry. removeMachine deliberately refuses a machine in no machine set (documented), so a retry after success fails rather than succeeds; that is a documented design choice."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. No HTTP; every call is omnictl. Checked offline against the local omnictl help text: cluster machine delete takes --timeout, talosconfig takes -c, --merge, --force and a path, apply takes -f and --dry-run, and --insecure-skip-tls-verify is global. COSI output is narrowed field by field with typeof guards (transform.ts asString/asNumber, inventory.ts joinTokenFromStatus, cluster.ts configPatchFromResource); parseOmnictlJson handles concatenated objects, a JSON array and empty output."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Source unchanged: mintTalosconfig and applyResource write into a private makeTempDir and remove it in finally on every path; output() reads both pipes, stdin null, the signal passed through. The removal is no longer asserted by a unit test since the fake was retired; worth one test later."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. Placeholders are clean: omni.example.net, <uuid>, ~/.talos/omni/*.key; no real IPs or hostnames in README.md or LICENSE.md (test fixtures use 10.0.0.x, RFC 1918 rather than RFC 5737, harmless). The README is however wrong about the code in two places: the 'When a machine is gone' section says deleteMachine deletes the machine's own patches 'and its Machine', while since 2026.10.01.3 cluster.ts deletes the Link (the table row above it says Link); and 'applyPatch and addMachine take dryRun=true' omits setExtensions, which also takes it (the manifest says every apply does)."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. All eleven z.object schemas in schema.ts, common.ts, inventory.ts and cluster.ts are plain z.object without passthrough; argument schemas constrain machine UUIDs, resource ids, extension names and the timeout with regexes."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. All eight specs set both: inventory's node, cluster, summary (30d, gc 20), talosconfig and joinToken (30d, gc 5); cluster's configPatch, machineSetNode and extensionsConfiguration (infinite, gc 5)."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. inventory is read-only by design (discover, talosconfig, joinTokens). cluster can create or update a ConfigPatch and an ExtensionsConfiguration and add or remove a machine, but has no method to delete a single ConfigPatch (a cluster- or machine-set-scoped one is only ever deletable by hand; deleteMachine removes a machine's own patches wholesale) or an ExtensionsConfiguration (extensions: [] empties it but leaves the resource), and no sync for any of the three specs, so a patch edited in the Omni UI is never detected as drift."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. Both models carry checks.ts: service-account-key (label policy: https endpoint, key set once, file readable and non-empty) and omni-authenticates (label live: one omnictl get Clusters.omni.sidero.dev); checks_test.ts asserts both labels and that an expired key is explained without leaking the key."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. Each spec has one writer and the names are prefixed (node-, cluster-, summary, talosconfig-, jointoken-, configpatch-, machinesetnode-) except two. joinTokens names instances jointoken-<spec.name>, falling back to the fingerprint only when the name is empty; Omni does not make token names unique, so two tokens with the same name overwrite each other within one execution, and the fingerprint (the unique key) should be in the name. setExtensions writes sanitizeInstanceName(id) with no spec prefix, against the convention schema.ts states (instance names are global across specs), so a user-chosen id like configpatch-x collides with a configPatch instance."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "2026.11.12.1 is a tests-only release: git diff 9b8bffb shows cluster.ts and inventory.ts changed only by the version and one identity upgrades entry each, so this verdict stands from the review of 2026.10.27.1. No method reads stored state back; every decision is made from a live omnictl get. The only stored-state access is removeMachine's context.deleteResource of the machineSetNode record; there is no dataRepository access. deleteResource is optional on MethodContext, so a context without it leaves the record behind."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "inventory moves from 2026.10.01.1 and cluster from 2026.10.01.3 to 2026.11.12.1, manifest.yaml from 2026.10.27.1. Each type gets one new upgrades entry, toVersion 2026.11.12.1, 'Tests only; global arguments unchanged', identity upgradeAttributes; right since the global arguments are unchanged."
+    }
+  ]
+}

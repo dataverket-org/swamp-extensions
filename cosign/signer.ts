@@ -2577,7 +2577,7 @@ async function identifyOne(
 /** Model definition for one cosign signing identity. */
 export const model = {
   type: "@dataverket/cosign/signer",
-  version: "2026.11.10.2",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -2592,6 +2592,13 @@ export const model = {
       toVersion: "2026.11.10.2",
       description:
         "A new method, identify, records who signed an image: the identity and OIDC issuer of each signing certificate cosign finds genuine, with no identity expected; a new record, identification. The key-usable check passes on an empty key unless the method signs, so a signer that only verifies validates; sign, attest and signBlob still refuse an empty key. No global argument and no existing record changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "Tests only; global arguments unchanged",
       upgradeAttributes: (
         old: Record<string, unknown>,
       ): Record<string, unknown> => old,
