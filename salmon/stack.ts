@@ -486,7 +486,7 @@ async function orRecord(
 /** Model definition for the Salmon stack. */
 export const model = {
   type: "@dataverket/salmon/stack",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -506,6 +506,14 @@ export const model = {
       description:
         "Every docker call has a time limit; upTimeoutSeconds, optional, 300 by default, bounds docker compose up with its image pull; a pre-flight check that docker compose runs; an issuerUrl with a user or password is refused. The stack record gains error",
       upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "unit tests in the swamp skill's pattern; the bundled lib/ adds a 64 MiB output limit per command (a larger output is refused as too-large); global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
     },
   ],
   checks: {

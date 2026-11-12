@@ -152,7 +152,7 @@ Deno.test("listInventory is the shared inventory plus what this domain adds", ()
 Deno.test("every type is read-only, versioned alike, and takes exactly the shared global arguments", () => {
   for (const m of [gateway, httproute, gatewayclass]) {
     assertEquals(Object.keys(m.methods).sort(), ["get", "list"]);
-    assertEquals(m.version, "2026.11.10.1");
+    assertEquals(m.version, "2026.11.12.1");
     assertEquals(m.globalArguments, KubectlGlobalArgsSchema);
     assertEquals(Object.keys(m.globalArguments.shape).sort(), [
       "context",

@@ -596,13 +596,21 @@ function binaryCheck(spec: {
 /** Model definition for a single on-demand kind cluster. */
 export const model = {
   type: "@dataverket/kind/cluster",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.11.10.1",
       description:
         "New optional global argument kubeconfig and optional record fields kubeconfig, manifestFailed and error. Every command has a time limit, and a cluster name that is not a name is refused before kind runs. No existing global argument and no stored field changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "unit tests in the swamp skill's pattern; the bundled lib/ adds a 64 MiB output limit per command (a larger output is refused as too-large); global arguments unchanged",
       upgradeAttributes: (
         old: Record<string, unknown>,
       ): Record<string, unknown> => old,

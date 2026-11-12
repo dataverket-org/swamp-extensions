@@ -274,6 +274,14 @@ and exactly 43 characters long is taken for a key authorization when a message
 quotes it. The fields that identify an object (names, namespaces, DNS names) are
 never blanked.
 
+## Output limit
+
+Each `kubectl` call may write at most 64 MiB to standard output and standard
+error together. A call that writes more is stopped, and the method fails with an
+error that says so. The bound is in the shared layer, `../lib/cli.ts`, and has
+no argument. This bound came with 2026.11.12.1, whose other change is the unit
+tests; no argument, data name or record field changed.
+
 ## Testing
 
 The live suite in [smoke/](./smoke/README.md) was run on Linux with rootless

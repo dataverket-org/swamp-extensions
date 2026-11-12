@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/gateway-api"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   The Kubernetes Gateway API, read as swamp data: Gateways, HTTPRoutes and
   GatewayClasses with their conditions, through kubectl. Read-only.

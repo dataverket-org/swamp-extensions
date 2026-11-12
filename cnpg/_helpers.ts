@@ -145,4 +145,4 @@ export const RESOURCES = {
 } as const;
 
 /** The version every type in this extension carries. */
-export const VERSION = "2026.11.10.1";
+export const VERSION = "2026.11.12.1";

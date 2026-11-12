@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/salmon",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:31:10Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version and the upgrades entries. What moved: stack_methods_test.ts and token_exchange_methods_test.ts are deleted, so the unit pins of the userinfo refusal in the methods and of the token_endpoint check are gone. The schema refusal of an issuer URL with a password is pinned live (smoke/neg-b.sh, planted password, then 'the password is nowhere in the repository'); what remains in the unit tests: the issued token's subject and roles recorded and never a token, a refused exchange recorded without the subject token Salmon repeats, and a refused compose up that keeps the key out. Not blocking: the second, in-method refusal for a definition that bypasses the schema and the token_endpoint refusals have no test now; the code is unchanged."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Structured placeholders; the endpoint that is logged is now a checked URL without userinfo; nothing is logged before the userinfo refusal."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "issue",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 721d0bd -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). compose up is tryCli then cliError, and only kind failed gets the log appended, so an over-limit up is thrown as CliError too-large; the other docker calls use runCli (too-large); kubectl is KubectlError other; salmonLogs reads at most the last 20 lines and keeps what was read if cut. The README's new section is true. The three small points of the earlier review stand, the code being unchanged: a run cancelled during an HTTP request ends as a plain Error with a misleading hint; on failure paths the record is written before the throw; an OAuth error member that is an object is recorded as '[object Object]:'."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "24 unit tests pass, with fmt:check, lint and check clean. stub_test.ts adds a stub fetch beside the stub spawn; both are put back by Symbol.dispose (the real fetch is saved and restored), and every method test uses `using`. Each method has a success and a failure test asserting on records: ensure starts the project from standard input, waits for discovery and records running, and a refused compose up fails with Salmon's log, records the error and keeps the key out; revoke restarts without the app's grants and records them revoked, and refuses an app the fixture grants nothing at before docker runs; stop records not running, and a failed compose down records the error with the container still running; test exchanges a minted token and records subject and roles, creates a missing ServiceAccount, records a refused exchange as not passed, and fails before the cluster is asked when the issuer does not answer. The project, configuration and seed keep their pure tests. Lost with the fakes, not blocking: the HTTP time limits (a fetch that never answers), the 3600 cap (only values below 1 are pinned), token_endpoint refusals and the in-method userinfo refusal (see credentials). No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: The three HTTP requests have limits (5, 15 and 30 s, body included, combined with the method's signal), upTimeoutSeconds and startTimeoutSeconds are capped at 3600, and the README now says what a failure and a hit limit leave behind and that stop removes it, with the observed Podman case. Left: when docker ps cannot answer after a failure, orRecord records running: false (stack.ts orRecord, the empty catch), although the README says running is 'as docker ps showed it'; unknown is written as not running. Either say so in the README or leave running as it was last known. By design and documented: nothing is torn down on failure; in a record with an error grants[].revoked is what was asked for; a test that could not be made leaves an older result, which may say passed: true, as the latest."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: The discovery document must be a JSON object with a token_endpoint that is an http or https URL without userinfo, checked before a token is minted; the exchange answer is narrowed to an object before a field is read; expires_in that is not a number is recorded as 0. The limits leave a slow but working Salmon room: 30 s for an exchange that fetches the cluster's keys, 15 s for discovery. fetch follows redirects, so a 307 or 308 from the endpoint would resend the token to a location that was not checked; the discovery document may name any http(s) origin anyway, so this opens nothing new. redirect: 'error' would make it explicit."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 721d0bd -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). Earlier note stands: fetchWithin clears its timers and listeners; an HTTP answer body has a time limit and no size cap, which the lib bound does not change (it is on processes only)."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md read again: the new 'Output limit' section and 'Changes in 2026.11.12.1' match lib, and the Testing text describes the stubs truly ('no model of Salmon or a cluster'). localhost, 127.0.0.1, example names and the public Salmon image only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No passthrough. namespace and serviceAccount carry lib's NAMESPACE_NAME and OBJECT_NAME patterns; probed that valid names (kube-system, a 63-character namespace, a dotted ServiceAccount name) and valid issuer URLs (IPv6 host, an @ in the path or query) are still accepted. Record schemas match their writes field for field on the success and the failure paths: stack 11 of 11, result 13 of 13."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: stack: infinite, 10 versions; result: infinite, 20 versions."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: All four methods declare kind: action. A failed method now records the observed running and the reason, and a refused exchange records passed: false, so the two stale-record cases of the first review are closed. Still no read method on stack: running is refreshed only by ensure, revoke or stop, so a container that dies between runs is not seen until one of them runs. Low; a get that only runs docker ps would close it."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: docker-compose-available and kubectl-cli-available, label live, 20 s, pinned including the missing binary; they run before every method since all are actions."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: stack/stack and result/result, fixed and predictable, one shape per name on success and failure paths."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 721d0bd -- salmon shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No method reads stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. Both types append the entry after the one to 2026.11.10.1; the README has 'Changes in 2026.11.12.1'."
+    }
+  ]
+}

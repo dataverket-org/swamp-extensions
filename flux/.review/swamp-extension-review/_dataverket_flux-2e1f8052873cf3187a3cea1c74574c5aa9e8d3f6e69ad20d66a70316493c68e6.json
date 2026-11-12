@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/flux",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:35:41Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version, the upgrades entries and the runFlux fix for an output past the bound. Planted-credential unit tests still exist: a condition message that quotes a credential (_helpers_test.ts), a Ready message in reset_test.ts, what flux printed in push_artifact_test.ts, and source list 'stores no credential'. Earlier note: messages, readyMessage, source url and push source stored through redact; errors and logs redacted and bounded by lib."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Entry and completion lines on every method, structured placeholders, nothing secret; reset logs a flux failure it does not throw."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 2a54add -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). kubectl calls (list, the read-back, get, reset's reads) are KubectlError other past the bound. Second pass: the must-fix of the first pass is fixed. runFlux (flux/_helpers.ts) now throws through cliError when the result is tooLarge, as for timedOut and cancelled, so a flux command past the bound fails with CliError kind too-large, 'more than 67108864 bytes of output; the process was stopped', and its doc comment says so. Every flux command goes through runFlux (helmrelease and kustomization reconcile, suspend and resume, reset, push_artifact), so the README's 'Output limit' paragraph and 'Upgrading to 2026.11.12.1' are now true. Side effect, not blocking: reset treats only failed and timeout as an attempt and reads status.lastHandledResetAt after it; a too-large flux is thrown at once, without that read, although the reset request may have been sent. The error says the process was stopped, a rerun reads the state, and 64 MiB from flux reconcile is not reachable in practice. Earlier notes on reset's poll and wording stand. Not blocking: the branch in lib/kubectl.ts that turns tooLarge into KubectlError other has no unit test of its own (lib/kubectl_test.ts does not mention it); lib/cli_test.ts covers the bound below it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "59 unit tests pass and 1 is ignored (the opt-in FLUX_E2E push), with fmt:check, lint and check clean. stub_test.ts is the swamp pattern, with one addition: a listed command that ends in ' *' matches every command it begins, for the scratch path push_artifact makes; it is put back by Symbol.dispose and every method test uses `using`. Each method has a success and a failure test asserting on records and errors: helmrelease list and refused list, reconcile (flux, then read back and record) and a failing flux that reads nothing back, suspend and a refused namespace, resume and a release gone on read-back; the same four for kustomization, and a kustomization reconcile whose flux answer is marked tooLarge fails with CliError kind too-large, one call, nothing written (stub_test.ts lets an answer say tooLarge as lib's spawn does; I reverted the fix in runFlux and this test failed, then restored it); source list (kinds whose CRD is missing skipped) and a refused read; get with its Jobs and a refused Job read as a note, and a missing release; reset recorded after a handled reset, and a flux failure with lastHandledResetAt unchanged that records nothing; push_artifact records the digest and removes its copy, and a failed push records nothing and removes its copy. The three deleted fixtures (jobs-*.json) are no longer read by any test, and the README no longer names them. Lost with the strict fake, not blocking: reset's poll after a flux that ran out of time, the 255-byte artifact name bound (no test names it now) and the cancelled runs have no unit test now; the README's Testing text says a hanging flux is not tested and claims none of them. No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Limits fit the commands: 60 s suspend, 330 s resume/reconcile/push, 630 s kustomization with source, 930 s helmrelease with source. The reset poll adds at most 30 s and one last read; the README's time limits section says so. push_artifact refuses a name the store cannot hold before it copies or pushes."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Unchanged: lists through listItems, get through expectObject, kubectl flags owned by the runner, the push output must hold a sha256 digest. The README's `swamp data delete <model> <name>` matches `swamp help data` (arguments behavior_id_or_name, data_name); it was not run."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 2a54add -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). The bound caps memory per call; the scratch copy of push_artifact is still made inside the try that removes it (a failed push removes it, pinned by a test)."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md and smoke/README.md read again. The Testing and design text describes the stub tests truly, and the fixtures line drops the Job fixtures that were deleted. The 'Output limit' paragraph and 'Upgrading to 2026.11.12.1' (a flux or kubectl call past 64 MiB is stopped and the method fails with an error that says so) are true since the runFlux fix. Example names, localhost and 127.0.0.1 only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: z.object without passthrough; no schema changed in this round."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: All six specs: lifetime infinite, garbageCollection 10, resetResult 20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Reads and drives objects Flux owns; no create, update or delete method."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Unchanged: two live checks, scoped on the source type."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "issue",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: Fixed in this round: the artifact name is checked against 255 bytes before anything is copied or pushed (push_artifact.ts:306-315; the escaped name is ASCII, so its length is its byte count), and the upgrade note now says the old artifact record stays, is never written again, what that does to a workflow, and how to delete it. Left, low: the same bound is not applied to the names built from a Kubernetes object. A namespace may be 63 and an object name 253 characters, so `<namespace>--<name>` reaches 318 bytes, `reset.` 324, `detail.` 325 and `<kind>--` 334; any object name above about 185 characters gives a name over 255. For list and get that is only a failed write, but reconcile, suspend, resume and reset run flux first and then cannot store the record. Such names are legal and rare (a Helm release name is at most 53). Fix: the same check, on dataName(namespace, name) with its prefix, before flux runs in the four changing methods. Also documented and not fixed, by choice: two tags that differ only in case share a directory on a case-insensitive file system."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 2a54add -- flux shows no change to any non-test source but the version, the upgrades entries and the runFlux fix for an output past the bound (flux/_helpers.ts, see error-handling), none of which touches this dimension, so this verdict stands. Earlier note: No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. Each of the three types appends this entry after the one to 2026.11.10.1; the README has 'Upgrading to 2026.11.12.1'."
+    }
+  ]
+}

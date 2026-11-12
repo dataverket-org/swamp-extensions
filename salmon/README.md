@@ -137,6 +137,11 @@ A kubectl limit also covers whatever the kubeconfig makes kubectl run: with an
 exec credential plugin, an interactive login must finish within the 35 s of one
 kubectl call, or the call is stopped. Log in before running `test`.
 
+Each `docker` and `kubectl` call may write at most 64 MiB to standard output and
+standard error together. A call that writes more is stopped, and the method
+fails with an error that says so. The bound is in the shared layer,
+`../lib/cli.ts`, and has no argument.
+
 ### What a time limit leaves behind
 
 Seen on 2026-11-10 with rootless Podman 4.9.3, where `docker` is Podman's
@@ -213,6 +218,13 @@ globalArguments:
 `ensure` and `test` then exchange a token for one carrying
 `roles: [users/Registry-Push]`; after `revoke --input app=db` the exchange fails
 with `invalid_target`.
+
+## Changes in 2026.11.12.1
+
+Definitions and records are as in 2026.11.10.1; no argument, data name or record
+field changed. The unit tests follow the swamp skill's pattern, and the bundled
+shared layer adds the 64 MiB output bound per command described above: a command
+that writes more is stopped, and the method fails with an error that says so.
 
 ## Changes in 2026.11.10.1
 

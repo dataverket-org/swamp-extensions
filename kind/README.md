@@ -190,6 +190,18 @@ waits for a person is stopped with kubectl.
 What reaches an error from kind or kubectl is one bounded line, with anything
 shaped like a credential blanked and kind's progress lines dropped.
 
+Each `kind`, `kubectl` and container tool call may write at most 64 MiB to
+standard output and standard error together. A call that writes more is stopped,
+and the method fails with an error that says so. The bound is in the shared
+layer, `../lib/cli.ts`, and has no argument.
+
+## Changes in 2026.11.12.1
+
+Definitions and records are as in 2026.11.10.1; no argument, data name or record
+field changed. The unit tests follow the swamp skill's pattern, and the bundled
+shared layer adds the 64 MiB output bound per command described above: a command
+that writes more is stopped, and the method fails with an error that says so.
+
 ## Changes in 2026.11.10.1
 
 Definitions made with 2026.10.29.1 work unchanged, and the data name `cluster`

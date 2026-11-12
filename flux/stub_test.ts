@@ -25,11 +25,16 @@ export interface Call {
 
 /**
  * One answer: what the command prints and how it exits, or a function of
- * the call. A `stdout` that is not a string is printed as JSON.
+ * the call. A `stdout` that is not a string is printed as JSON. `tooLarge`
+ * says the command was stopped at the output bound, as lib's spawn says it.
  */
-export type Reply =
-  | { stdout?: unknown; stderr?: string; code?: number }
-  | ((c: Call) => { stdout?: unknown; stderr?: string; code?: number });
+type Answer = {
+  stdout?: unknown;
+  stderr?: string;
+  code?: number;
+  tooLarge?: boolean;
+};
+export type Reply = Answer | ((c: Call) => Answer);
 
 /**
  * The command as a test names it: the binary and its arguments, without the
@@ -86,6 +91,7 @@ export function harness(
       code: a.code ?? 0,
       stdout: new TextEncoder().encode(out),
       stderr: a.stderr ?? "",
+      ...(a.tooLarge ? { tooLarge: true } : {}),
     });
   });
   const t = createModelTestContext({

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cnpg",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:31:10Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version (cluster.ts, backup.ts, scheduledbackup.ts and VERSION in _helpers.ts) and the upgrades entries. The pins named there are still unit tests: 'a marker in every credential-bearing field of a Cluster and its ObjectStore reaches no record', 'no credential reference, URL password or plugin parameter value is stored', the Backup's 'no credential reference, command output or URL password', the list 'with no credential', and the URL and free-text helpers. Not pinned by a unit test any more: that create passes parameter values of 8 or more characters as secrets on its call (backup.ts:527); the code is unchanged and the README states the rule. Earlier note: allowlist parsers read no credential field; create sends its manifest on standard input."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Entry and completion lines on every method, structured placeholders, free text through brief(); the unconfirmed create and a failed read while waiting are warnings with their reason."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff be6e916 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). All kubectl calls go through lib/kubectl.ts, so an output past the bound is KubectlError other, the method fails before its first write, which the README's 'Output limit' section says. One nuance the README does not spell out, not blocking: in list, an ObjectStore read that fails is recorded as the Cluster's reason with a warning rather than failing the method, and an over-limit ObjectStore read would be recorded that way too. Earlier note on the unconfirmed create and the four stated endings stands; the code is unchanged. Not blocking: the branch in lib/kubectl.ts that turns tooLarge into KubectlError other has no unit test of its own (lib/kubectl_test.ts does not mention it); lib/cli_test.ts covers the bound below it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "75 unit tests pass, with fmt:check, lint and check clean. stub_test.ts is the swamp pattern: createModelTestContext, a stub spawn through __setSpawn that answers only listed commands, restored by Symbol.dispose, declared with `using` in every method test. Each method has a success and a failure test that assert on records: cluster list (records, inventory naming the unhealthy one; an unreadable ObjectStore recorded with reason and a warning) and refused list; cluster get, get of a plugin Cluster with its ObjectStore, a missing Cluster and a refusal before kubectl; scheduledbackup list, empty list, refused Backup list, get and missing get; backup list, list of one Cluster, refused list, get and get of another object; create sends the Backup on standard input and records it as created, adopts an equal one, refuses a Cluster without the method's configuration, a missing Cluster and a same-named Backup with another request, each with nothing written. The comparison and health rules keep their pure tests. Lost with the strict fake, not blocking: the unconfirmed create and its read-back (the four endings), the slowest create within 170 s and the cancellation paths have no unit test now, and the live suite does not produce them on demand; a client-seam injection in smoke/ would bring them back, as AGENTS.md asks. The README's Testing text claims none of them. No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: The comparison holds against everything I tried: an identical re-run with CRD-defaulted onlineConfiguration is the same request; another cluster, method, target or online value, a parameter map with more, fewer, none or any against none, a number against a string and a null value are all a different request; absent parameters equal an empty map; key order does not matter. The read-back cannot take over a Backup with a different request, and the record's `adopted` says when the Backup was found rather than seen created (true also when this run's own unconfirmed create made it, as the README says: 'it may be another caller's'). Still by design and documented: a top-level field the request leaves out (target, online) is not compared, and an old Backup of that name with the same request is returned as this request, now with adopted true. Wait arithmetic: at most four calls of 39 s before the wait, body within 170 s."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: The health rules now follow the operator's own signals: hibernated in the inventory needs the annotation on, the condition cnpg.io/hibernation True and no fence; an absent, False or Unknown condition gives an unhealthy line that says the hibernation is not reached and what the condition says, so an operator that never sets the condition errs toward 'needs a look'; any fencedInstances value that is not a list of strings fences everything; volumeSnapshotTimes is read from the by-method maps whatever archive.source is. The author's choice to keep archiveFailing false for any Cluster with the hibernation annotation is sound: summary.archiving is forced false there, so the flag would otherwise be raised for every hibernating Cluster with an archiver, and one that does not reach hibernation is unhealthy in the inventory by its own reason. Two small documentation weaknesses, neither blocks: (1) in one inventory item `hibernated` means 'annotation on, condition True, not fenced' (cluster.ts:726-740) while the description of archiveFailing in the same schema says 'the Cluster is not hibernated' and means the annotation alone; say 'has no hibernation annotation' there. (2) README 'The Backup record and create': the sentences 'If it is not there, the method fails with the first error. A refusal that has a name ... fails at once.' now stand after the paragraph about `adopted` ('list and get write null'), where 'it' has lost its subject; they belong at the end of the paragraph before. Not verified without a cluster: whether a True condition can be left from an earlier hibernation when the annotation is set to on again."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff be6e916 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). One process at a time; the bound adds a cap on memory per call and changes nothing in the time arithmetic. Earlier note: the pre-flight check is outside the 170 s and the README says so."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md read again: the new 'Output limit' section matches lib, and the new Testing paragraph names what the stub tests pin, truly. Placeholders only; additional files are README.md and LICENSE.md. cnpg/fixtures.ts and test_support.ts are imported by tests only and are not in the archive's model list."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: z.object without passthrough; adopted (boolean or null), hibernationReached, volumeSnapshotTimes and the inventory's hibernated are in the schemas and written on every path (parseBackup writes adopted null, create overrides it on every record it builds); tests parse records with .strict()."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Every resource spec, inventories included: lifetime infinite, garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Read-only types plus one on-demand action on an immutable object; deletes and Cluster changes are out of scope and the README says so."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: kubectl-cli-available, labelled live, on all three types; create verifies the Cluster and the name inside the method before it writes."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: <namespace>--<name> for objects, inventory_all / inventory_ns_<namespace> for inventories; no collision possible; a list with two objects under one data name writes nothing; create, get and list write one schema under one name (adopted is null from list and get)."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff be6e916 -- cnpg shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. The three types had no upgrades array before; VERSION in _helpers.ts and the three literals agree."
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/cert-manager",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:31:10Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "issue",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version and the upgrades entry. The blanking is still pinned by unit tests that exist now: keyAuthorizations, acmeSecrets and seal in _helpers_test.ts, the HTTP-01 self-check text in no record or inventory line in _records_test.ts, and assertNoSecrets runs on the writes and logs of the list and get success tests of challenge, order, certificaterequest and issuer and of the trace test ('blanks the ACME values'). The three non-blocking points of the earlier review stand unchanged: (1) the shape finder misses a key authorization followed directly by a dot and a letter, preceded by a dot, cut short or broken by a line break, and the URL finder misses a percent-encoded path; (2) seal can blank an identity-adjacent field such as Challenge state when a hostile ACME server chooses a token or key equal to it; (3) README 'no ACME URL' holds for fields, not for a quoted message. None is new in this release."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Entry and completion at info with structured placeholders. The trace summary that is logged is built from sealed levels and sealed again; a unit test and smoke batch C look for the key authorization in it."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff f96ba17 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). Every kubectl call here goes through lib/kubectl.ts, so an output past the bound fails the method with KubectlError other before any write, which is what the README's new 'Output limit' section says ('fails with an error that says so'). The earlier notes stand: a deleted Certificate during the poll, a patch with no usable answer, a missing object told by kind; a run cancelled while the patch is out ends as a plain Error. Not blocking: the branch in lib/kubectl.ts that turns tooLarge into KubectlError other has no unit test of its own (lib/kubectl_test.ts does not mention it); lib/cli_test.ts covers the bound below it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "72 unit tests pass (deno task test), with fmt:check, lint and check clean. The strict fake is gone; stub_test.ts installs a stub spawn through __setSpawn and createModelTestContext, answers only the commands a test lists (an unlisted command rejects), and is put back by Symbol.dispose; every method test declares it with `using`, so the real spawn is restored even on failure. I read each method test: list and get of certificate, certificaterequest, order, challenge and issuer, trace and renew of certificate, each with a success test that asserts on the spec and data name of every record, on fields of the record and on the last log line, and a failure test that asserts the error and that nothing was written (refused list, missing object, not served CRD, refusal before kubectl runs). renew pins the patch body (the read resourceVersion, Issuing ManuallyTriggered) on standard input, the already-issuing refusal with one call and no patch, the Conflict answer and a refused patch. The README's new Testing text matches this. Lost with the fake, not blocking: no unit test runs renew with waitSeconds above 0 (the poll and the 'deleted' outcome), and none cancels a run; the poll is shown live by the smoke batches of 2026.11.10.1 only. Still open from the earlier review: no test holds the shapes the finder misses, and the stale resourceVersion refusal is shown for a stubbed Conflict only, as the README now says. No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: As in the first review: read, refuse a True Issuing condition, patch bound to the resourceVersion read, answer checked; a second run after an unknown outcome is refused as already issuing. A Certificate without a status gets conditions [Issuing] only."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: The condition matches cmctl renew; the outcome follows what cert-manager does with Issuing on success and failure. Lists and single objects are checked for kind, name and namespace. lastTransitionTime is the operator machine's clock, as with cmctl."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff f96ba17 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). Each kubectl call keeps its request timeout and its stop 5 s later; the bound adds a limit on memory per call and changes nothing else here. Earlier note: the poll is bounded by waitSeconds (at most 120) and counts read time."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md, smoke/README.md and manifest.yaml read again. New: an 'Output limit' section that matches lib (64 MiB, standard output and error together, no argument, came with 2026.11.12.1) and a Testing section that describes the stub tests truly; the renew paragraph now says the stale-resourceVersion refusal is shown by no live test and pinned for a stubbed Conflict, which is true. Placeholder names and example.org / example.test only. The earlier wording point ('no ACME URL' holds for fields, not quoted messages) stands."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Plain z.object, no passthrough; a test pins that every record has exactly its schema's fields. The new outcome `deleted` is in the enum and its description. Minor, as before: Date.parse accepts more than RFC 3339. See credentials (2) for the one way a sealed value can leave an enum."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Every spec has both; unchanged."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Read-only types plus one action; nothing is created or deleted."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: kubectl-cli-available, labelled live, on all five types; renew's own checks run before the write."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Both points of the first review are answered: an issuer list narrowed to one kind writes no inventory (tested), and the README says that get, trace and renew cannot see a second object of the same data name when a name or namespace holds `--`."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff f96ba17 -- cert-manager shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No method reads stored data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. These five types had no upgrades array before; their first entry is this one."
+    }
+  ]
+}

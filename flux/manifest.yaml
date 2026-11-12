@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/flux"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   Flux for swamp: HelmReleases, Kustomizations and sources as three model
   types, read with kubectl and driven with the flux CLI; and a directory

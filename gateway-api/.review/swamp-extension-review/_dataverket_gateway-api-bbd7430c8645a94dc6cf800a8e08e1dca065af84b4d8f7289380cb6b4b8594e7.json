@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/gateway-api",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:31:10Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version and the upgrades entries. What moved: negative_test.ts (planted credential in kubectl's output, in a condition message, and the kubeconfig in nothing a run leaves) is deleted. Condition messages are redacted by lib's condition reader, pinned in lib/kubectl_test.ts ('conditions are narrowed, broken entries dropped, and messages redacted'); redact and brief are pinned in lib/cli_test.ts; the live suite's no_secrets_stored looks for key material and the test kubeconfigs' tokens in .swamp and the outputs. The extension itself has no unit test with a planted credential now; not blocking, since every blanking path is lib's. Earlier note: no Secret read; certificateRefs hold group, kind, name and namespace only."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Info on entry and completion with structured placeholders; one warning for a version other than v1, pinned for all three types. Nothing secret-bearing is logged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 99082fa -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). Every call is lib/kubectl.ts, so an output past the bound is KubectlError other and nothing is written; the README's error table already lists 'other' and the new 'Output limit' section says the method fails with an error that says so. Earlier note: every item parsed before the first write; unhealthy objects are records. Not blocking: the branch in lib/kubectl.ts that turns tooLarge into KubectlError other has no unit test of its own (lib/kubectl_test.ts does not mention it); lib/cli_test.ts covers the bound below it."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "60 unit tests pass, with fmt:check, lint and check clean. stub_test.ts follows the swamp pattern (createModelTestContext, stub spawn through __setSpawn, only listed commands, restored by Symbol.dispose, `using` in every method test). Each method has a success and a failure test asserting on records: gateway list (records and one inventory, log count) and list on a cluster without the Gateway API; gateway get, an RBAC refusal naming the verbs, and an answer that is another Gateway; gatewayclass list ignoring the definition's namespace, an RBAC refusal, get and a bad name refused before kubectl; httproute list across namespaces, an answer of another kind, get, and NotFound; each failure asserts nothing was written. The health rules keep their pure tests, including superseded and one-listener rules. negative_test.ts (571 lines) is gone: its lib-level cases (timeouts, unreachable, not-json, missing binary, flag-shaped names, the request timeout on every call, data-name collisions) are pinned in lib/, and the refusals are in smoke d-refusals.sh. Not blocking, carried and new: no unit test mixes reports with and without observedGeneration under the one-listener rule (from the earlier review); a cancelled run is shown only by smoke f-cancel.sh of 2026.11.10.1 now. No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Read-only; a rerun replaces the same data names; one attempt per call. A list interrupted between record writes and the inventory write is repaired by the next run."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Both findings of the second review are fixed and verified by probe. Superseded (httproute.ts superseded): an old report is set aside only when the same controller has a report with current true on every spec parent the old one is about; a current report with no conditions, or with conditions that carry no observedGeneration, or from another controller, does not supersede, and the old report stays a finding (probed). The three edit shapes that were false alarms now read healthy with one leftover, and the README says Envoy Gateway v1.8.2 was run through them (cluster.sh resection). One listener is enough (refusedListener): only for a spec parent without a sectionName, only among one controller's reports that name a listener, never with an old report on either side; the v1 text of ParentReference.sectionName ('successful if at least one section in the parent resource accepts it') is what it implements. I found no status in which a refusal on a parent the route names, or a stale state with no current report, reads healthy. The author's deviation, that reports without observedGeneration take part in the one-listener rule, is the right call: requiring a known generation would make every refusing listener a finding for good on a controller that sets none, on a valid route; the cost is one unreachable-in-practice case (one controller, an accepting listener report without observedGeneration that is really old beside a current refusal with one), and a controller that sets none cannot be checked for staleness anywhere in this extension, which statusCurrent null already says. Inherent to the API's rule and stated in the README: a route named without a listener reads healthy when the listener the user had in mind refuses and another accepts; refusedListenerReports above 0 is the signal, and naming the listener is the remedy. Small, in the false-alarm or cosmetic direction, not worth holding a release: a refusing listener report beside an accepting report that names no listener (one controller mixing both forms) is still a finding; a refused listener's own ResolvedRefs False or missing conditions are not judged; the README could say in one sentence that a report with no observedGeneration counts as not old. kubectl answers are checked for kind and identity; the resource is asked for by full group."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 99082fa -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). One kubectl process per method, request timeout 30 s, stopped at 35 s; the bound caps memory per call."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md read again: the new 'Output limit' section matches lib, and the Testing paragraph describes the stub tests truly ('once with an answer and once with a failure, checking the records written, the log lines and the error'). smoke/README.md's 'covered by unit tests only' cases (leftoverListenerReports above 0, reports per listener, a stale report of a replaced controller, SupportedVersion False) still have unit tests (gateway_test.ts, httproute_test.ts, gatewayclass_test.ts). example.org and documentation addresses only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: z.object without passthrough. New fields checked against the writes: parents[].judged and notJudgedBecause (an enum of the three kinds, null when judged), summary.refusedListenerReports, leftoverParentReports as not-requested plus superseded (httproute); summary.leftoverListenerReports (gateway). Each is set on every path; 28 probe records parsed with HttpRouteSchema. The README's description of the three not-judged kinds matches the code. The inventory takes its lines from summary.unhealthy and now always names the controller; the two new counts are per record and not in the inventory, which is consistent since they are not findings."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Every resource spec has lifetime infinite and garbageCollection 10."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Read-only by design: list and get on each type, pinned by a test."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No mutating method. kubectl-cli-available is registered; the README says swamp does not run it before list or get and how to run it by hand."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Predictable names; an inventory name cannot equal an object's; the '--' collision refuses a list that sees both objects and the cross-list case is documented with its remedy."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 99082fa -- gateway-api shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No method reads stored state back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. The three types had no upgrades array before; their first entry is this one."
+    }
+  ]
+}

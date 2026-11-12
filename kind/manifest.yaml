@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/kind"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   One named kind (Kubernetes in Docker) cluster for swamp, created on demand
   for end-to-end tests.

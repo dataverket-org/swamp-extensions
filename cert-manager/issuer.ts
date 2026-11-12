@@ -41,8 +41,18 @@ export { issuerDataName };
 /** Swamp model for cert-manager Issuer and ClusterIssuer objects. */
 export const model = {
   type: "@dataverket/cert-manager/issuer",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   globalArguments: KubectlGlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "unit tests in the swamp skill's pattern; the bundled lib/ adds a 64 MiB output limit per command (a larger output is refused as too-large); global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+  ],
   checks: {
     "kubectl-cli-available": kubectlCliCheck,
   },

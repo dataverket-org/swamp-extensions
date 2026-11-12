@@ -130,7 +130,7 @@ type Ctx = FluxContext<SourceData>;
 /** Swamp model for FluxCD source objects (GitRepository, HelmRepository, OCIRepository). */
 export const model = {
   type: "@dataverket/flux/source",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   globalArguments: FluxGlobalArgsSchema,
   upgrades: [
     ...forkUpgrades,
@@ -138,6 +138,14 @@ export const model = {
       toVersion: "2026.11.10.1",
       description:
         "Released with get on the helmrelease type; a namespace that is not a Kubernetes name is refused before kubectl runs; every flux and kubectl call has a time limit; the artifact record is named by its escaped <repository>:<tag>; url, source and condition messages are stored with credentials blanked. No global argument and no stored field changed",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "unit tests in the swamp skill's pattern; the bundled lib/ adds a 64 MiB output limit per command (a larger output is refused as too-large); global arguments unchanged",
       upgradeAttributes: (
         old: Record<string, unknown>,
       ): Record<string, unknown> => old,

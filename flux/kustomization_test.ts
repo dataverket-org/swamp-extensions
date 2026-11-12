@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
+import { CliError } from "../lib/cli.ts";
 import { model, parseKustomization } from "./kustomization.ts";
 import { harness, list, notFound } from "./stub_test.ts";
 
@@ -114,6 +115,26 @@ Deno.test("reconcile throws what flux said when it fails and records nothing", a
     Error,
     "flux reconcile failed: ✗ kustomize build failed",
   );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("reconcile fails as too-large when flux writes past the output bound, and records nothing", async () => {
+  using h = harness({
+    "flux reconcile kustomization apps -n flux-system": {
+      code: 143,
+      stdout: "► annotating Kustomization apps",
+      tooLarge: true,
+    },
+  }, { globalArgs: G });
+  const err = await assertRejects(
+    () => M.reconcile.execute({ name: "apps" }, h.context),
+    CliError,
+    "bytes of output; the process was stopped",
+  );
+  assertEquals(err.kind, "too-large");
+  assertEquals(h.calls.map((c) => c.key), [
+    "flux reconcile kustomization apps -n flux-system",
+  ]);
   assertEquals(h.written(), []);
 });
 

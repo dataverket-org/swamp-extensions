@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/cert-manager"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   cert-manager for swamp: Certificates, CertificateRequests, ACME Orders and
   Challenges and issuers as five model types, read with kubectl, and a forced

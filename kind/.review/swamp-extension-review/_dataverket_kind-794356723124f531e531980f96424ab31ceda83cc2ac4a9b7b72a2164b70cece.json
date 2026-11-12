@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/kind",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:31:10Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1; no non-test source changed but the version and the upgrades entry. The type takes no credential. What moved: the unit test that planted a JWT, a password pair and URL userinfo in kind's error and looked in the error, the log and the record is gone; the record's error field goes through lib's brief and redact, which lib/cli_test.ts pins. Not blocking, as the earlier note said: redaction is by pattern, and an opaque value kubectl echoes from a manifest can reach the 400-character error field."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: Each method logs before its first command and on completion; the probe, the export and both delete branches are logged with structured placeholders; nothing secret."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 4015495 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). kind runs through runCli, so an output past the bound is CliError too-large; kubectl through lib/kubectl.ts is KubectlError other; the version probe (versionStarts) reads a tooLarge result as 'not that tool', which only words a hint. get records why the API server address could not be read instead of failing, so an over-limit kubectl there is a recorded reason, not a failed method; the README's 'the method fails' is a slight overstatement for that one read, not blocking. Earlier notes on the stopped-container question and the probe stand."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "15 unit tests pass, with fmt:check, lint and check clean. stub_test.ts keeps kind's own arguments whole and strips only kubectl's runner flags; the stub is restored by Symbol.dispose and every method test uses `using`. ensure: creates a missing cluster, applies the manifests and records context and address; a failed apply records the manifest and the error, then fails, with no kind create; a missing kubeconfig directory is refused before kind runs. get: an existing cluster with its address, one not there without reading kubectl, one whose address could not be read, and a kind list that fails and records nothing. delete: an existing cluster recorded gone, the no-argument case that does not run kind for a cluster that is gone, a failed delete that records nothing, and a missing kubeconfig directory. The pre-flight checks' appliesTo per method is pinned. The README says the no-kubeconfig-argument mode is now covered by no test, which is true and a loss accepted by the maintainer, not blocking; so is the cancelled apply that rethrows before the write. No live suite was run for this release. That is the maintainer's decision and I record the reason rather than a defect: lib at be98d11 is already published and ran live inside @dataverket/renovate 2026.11.10.1 (release commit ef7f107 descends from be98d11); lib's own tests run real processes (40 pass, among them a process that prints without end, one that ignores SIGTERM after its output was cut, output up to the bound read whole, and runCli naming too-large); and no suite of this extension comes near 64 MiB. The live results in smoke/README.md are those of 2026.11.10.1, whose model code is the same."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: delete without the kubeconfig argument runs kind delete cluster only when kind lists the cluster, as published, so nothing writes the default kubeconfig for an unlisted cluster; for a listed one kind removes the entries named kind-<name> and unsets current-context when it is that one, as published. With the argument kind delete always runs on that file, after the directory check and before any kind call. kind export runs only with the argument, once. A failed apply is recorded and a rerun converges."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: kind and kubectl commands and flags checked against kind 0.32 source and the strict fakes; exit status decides before stdout is read."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "The bundled lib/cli.ts and lib/kubectl.ts changed in be98d11 (git diff 4015495 -- ../lib): spawnProcess keeps at most maxOutputBytes of standard output and standard error together, stops a process that writes more as at its time limit (SIGTERM, SIGKILL after the grace, pipes let go) and marks the result tooLarge; tryCli sets the bound to 64 MiB when none is given and counts tooLarge as no success; cliError names it with kind too-large; lib/kubectl.ts throws KubectlError kind other, 'more than 67108864 bytes of output; kubectl was stopped'. now(), encodedName, assertDataName and appliesTo on cliCheck are new and not used by this extension. The rest of the lib diff is test files only (fakes and mutations.ts removed, test_inputs.ts added). Every spawn keeps its limit; the bound caps memory per call. Earlier note: a kind create stopped at its limit can leave containers and a killed kind a lock file; the README says both."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README.md and smoke/README.md read again: the new 'Output limit' section and 'Changes in 2026.11.12.1' match lib (see error-handling for the one read that records instead of failing), and the Testing text describes the stub tests truly, including that the no-argument mode is not covered by any test. No real address, host or identifier."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: z.object without passthrough. Every write sets the seven required fields; kubeconfig only with the argument; manifestFailed and error only where documented."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: cluster: lifetime infinite, garbageCollection 10, unchanged."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: ensure, get, delete; a kind cluster is not updated in place."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: kind-cli-available before ensure and delete, kubectl-cli-available before ensure, both from the repository root; matches what each method spawns; confirmed through swamp in a scratch repository."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: One spec, one fixed instance name cluster, at most one write per run."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Carried over from the review of 2026.11.10.1. git diff 4015495 -- kind shows no change to any non-test source but the version and the upgrades entry, so this verdict stands. Earlier note: No method reads stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Every type the manifest lists is at 2026.11.12.1 with an upgrades entry to 2026.11.12.1 and an identity upgradeAttributes; manifest.yaml is 2026.11.12.1; the global arguments, data names and record schemas are unchanged, so the no-op upgrade is right. Wording, not blocking: the entry says a larger output 'is refused as too-large'; for a kubectl call the error is KubectlError kind other, whose message names the bound. The README's 'an error that says so' is the accurate form. The entry follows the one to 2026.11.10.1; the README has 'Changes in 2026.11.12.1'."
+    }
+  ]
+}

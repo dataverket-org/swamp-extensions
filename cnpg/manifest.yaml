@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/cnpg"
-version: "2026.11.10.1"
+version: "2026.11.12.1"
 description: >
   CloudNativePG for swamp: PostgreSQL Clusters, ScheduledBackups and Backups
   (postgresql.cnpg.io/v1) as three model types, read with plain kubectl, and

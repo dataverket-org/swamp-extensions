@@ -285,7 +285,7 @@ Deno.test("get is added to the helmrelease type, with its own record", () => {
   assertEquals(extension.type, helmrelease.type);
   assertEquals(Object.keys(extension.methods[0]), ["get"]);
   assertEquals(Object.keys(extension.resources), ["detail"]);
-  assertEquals(helmrelease.version, "2026.11.10.1");
+  assertEquals(helmrelease.version, "2026.11.12.1");
   assertEquals(helmrelease.upgrades.at(-1)!.toVersion, helmrelease.version);
 });
 

@@ -18,7 +18,7 @@ import { extension as reset } from "./reset.ts";
 
 const FORK = "2026.10.05.1";
 
-const VERSION = "2026.11.10.1";
+const VERSION = "2026.11.12.1";
 
 Deno.test("the three types carry the fork's name, a version and an upgrade chain ending at it", () => {
   assertEquals(helmrelease.type, "@dataverket/flux/helmrelease");

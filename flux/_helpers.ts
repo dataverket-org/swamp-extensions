@@ -152,7 +152,9 @@ export function isFluxProgressLine(line: string): boolean {
 /**
  * Run a flux CLI command with optional kubeconfig/context overrides, stopped
  * after `timeoutMs`. Returns stdout as a string. A non-zero exit throws
- * `flux <subcommand> failed: <what flux said>`, one redacted line.
+ * `flux <subcommand> failed: <what flux said>`, one redacted line; a time
+ * limit, a cancelled run and output over the output bound throw lib's own
+ * error for each.
  */
 export async function runFlux(
   args: string[],
@@ -166,7 +168,9 @@ export async function runFlux(
     noise: isFluxProgressLine,
   };
   const r = await tryCli("flux", cliArgs(args, opts), cli);
-  if (r.timedOut || r.cancelled) throw cliError("flux", args, r, cli);
+  if (r.timedOut || r.cancelled || r.tooLarge) {
+    throw cliError("flux", args, r, cli);
+  }
   if (!r.success) {
     throw new CliError(
       "failed",

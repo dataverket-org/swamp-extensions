@@ -239,7 +239,7 @@ async function mintToken(
 /** Model definition for the Salmon token-exchange check. */
 export const model = {
   type: "@dataverket/salmon/token-exchange",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -247,6 +247,14 @@ export const model = {
       description:
         "kubectl runs with a request timeout and a time limit; a namespace or serviceAccount that is not a Kubernetes name is refused before kubectl runs; kubeconfig, optional; a pre-flight check that kubectl runs; an issuerUrl with a user or password is refused; a refused exchange is recorded with passed false. The result record gains httpStatus and error",
       upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "unit tests in the swamp skill's pattern; the bundled lib/ adds a 64 MiB output limit per command (a larger output is refused as too-large); global arguments unchanged",
+      upgradeAttributes: (
+        old: Record<string, unknown>,
+      ): Record<string, unknown> => old,
     },
   ],
   checks: {

@@ -356,6 +356,14 @@ operator's `error`; the method succeeds. Assert on the record:
   records is what the operator and the plugin wrote on the objects.
 - It does not enrich a plugin Backup with the ObjectStore's destination.
 
+## Output limit
+
+Each `kubectl` call may write at most 64 MiB to standard output and standard
+error together. A call that writes more is stopped, and the method fails with an
+error that says so. The bound is in the shared layer, `../lib/cli.ts`, and has
+no argument. This bound came with 2026.11.12.1, whose other change is the unit
+tests; no argument, data name or record field changed.
+
 ## Testing
 
 `deno task test` runs the unit tests: the parsers and the request checks, and

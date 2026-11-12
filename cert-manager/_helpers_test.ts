@@ -38,7 +38,7 @@ Deno.test("the five types carry the package name and one version", () => {
     "@dataverket/cert-manager/issuer",
   ]);
   for (const m of MODELS) {
-    assertEquals(m.version, "2026.11.10.1");
+    assertEquals(m.version, "2026.11.12.1");
     assertEquals(Object.keys(m.checks), ["kubectl-cli-available"]);
   }
 });
