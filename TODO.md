@@ -84,6 +84,36 @@ What is open in this repository, checked against the code on 2026-11-10.
     signed by another identity. Rerun `smoke/survey.sh` with each new cosign:
     `identify` reads `cosign tree` line by line and uses
     `--new-bundle-format=false`, which cosign 3.1.4 no longer documents.
+17. **zitadel: four suspected defects, seen while writing its unit tests on
+    2026-11-12.** None is fixed, and no test asserts the current behaviour.
+    Confirm each in its source, then fix it with a test.
+    - `grant.ts` `delete` tombstones the old id-based record name,
+      `grant-<userId>-<projectId>`, while `list` and `ensure` write
+      `grant-<username>-<project>`, so a deleted grant's live record stays.
+    - `app.ts` and `user.ts` `delete` name their deletion record by the id in
+      some branches and by the name in others.
+    - `settings.ts` `read` makes its four instance-wide reads in one `try`, so a
+      refusal on a later read leaves the earlier reads' records written.
+    - `user.ts` `authFactorRemove` with type `recovery-codes` always sends the
+      DELETE, since Zitadel offers no listing of recovery codes to check first.
+18. **forgejo: what the review of 2026.11.12.1 left open.** None blocks a
+    release; each is in the review report.
+    - `issue_state_ensure` posts its comment again on a retry after a failed
+      state change, and writes no record for issues it changed earlier in the
+      list when a later one fails.
+    - A relation block naming a deleted issue makes `relate parent_of` answer
+      `not_found` from the parent walk, though both tickets exist.
+    - The page loops assume the forge answers 50 items per page; one with a
+      lower `MAX_RESPONSE_ITEMS` stops early. `runnerList` asks for 100 and so
+      reads only the first 50 runners, and `runner_prune` misses the rest.
+    - `tag_protection_ensure`'s record name is the pattern reduced to safe
+      characters, so `release/*`, `release-*` and `release*` share one.
+    - `collaborator_ensure` never settles for a site admin, or a collaborator
+      with higher access through a team: every run grants again.
+    - `push_mirror_sync_now` fails with the forge's 500 while any mirror of the
+      repository cannot push.
+    - The tracker could offer the `pullRequests` capability (`link_pr`), the
+      next thing fabrikk's work items need.
 
 ## Later
 
