@@ -89,8 +89,14 @@ function trustedRecord(
 /** The instance, read with the key of one of its own users. */
 export const model = {
   type: "@dataverket/zitadel/instance",
-  version: "2026.11.08.1",
-  upgrades: [],
+  version: "2026.11.12.1",
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: GlobalArgsSchema,
   checks,
   resources: {

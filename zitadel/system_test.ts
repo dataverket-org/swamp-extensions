@@ -22,7 +22,7 @@ const LIVE_DOMAINS = {
 const m = model.methods;
 
 Deno.test("instanceList stores each instance with its friendly state", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: {
       result: [
         { id: "300", name: "prod", state: "INSTANCE_STATE_RUNNING" },
@@ -39,7 +39,7 @@ Deno.test("instanceList stores each instance with its friendly state", async () 
 });
 
 Deno.test("instanceList fails on a refused key and writes nothing", async () => {
-  const h = harness({ [SEARCH]: fail(401, "invalid signature") }, SYS);
+  using h = harness({ [SEARCH]: fail(401, "invalid signature") }, SYS);
   await assertRejects(
     () => m.instanceList.execute({}, h.context),
     Error,
@@ -50,7 +50,7 @@ Deno.test("instanceList fails on a refused key and writes nothing", async () => 
 
 Deno.test("instanceCreate emits the owner's token once, into the owner spec only", async () => {
   const pat = "PAT-SECRET-OWNER-0042";
-  const h = harness({
+  using h = harness({
     [SEARCH]: { result: [] },
     "POST /system/v1/instances/_create": { instanceId: "302", pat },
   }, SYS);
@@ -78,7 +78,7 @@ Deno.test("instanceCreate emits the owner's token once, into the owner spec only
 });
 
 Deno.test("instanceCreate leaves an instance already named so, and mints nothing", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: { result: [{ id: "302", name: "staging" }] },
   }, SYS);
   await m.instanceCreate.execute(
@@ -96,7 +96,7 @@ Deno.test("instanceCreate leaves an instance already named so, and mints nothing
 });
 
 Deno.test("instanceCreate fails when Zitadel returns no credential, storing nothing", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: { result: [] },
     "POST /system/v1/instances/_create": { instanceId: "302" },
   }, SYS);
@@ -117,7 +117,7 @@ Deno.test("instanceCreate fails when Zitadel returns no credential, storing noth
 });
 
 Deno.test("domainList takes the one instance listed and stores its domains", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: { result: [{ id: "300", name: "prod" }] },
     [DOMAINS]: LIVE_DOMAINS,
   }, SYS);
@@ -134,7 +134,7 @@ Deno.test("domainList takes the one instance listed and stores its domains", asy
 });
 
 Deno.test("domainList refuses to guess between two instances", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: { result: [{ id: "300" }, { id: "301" }] },
   }, SYS);
   await assertRejects(
@@ -146,7 +146,7 @@ Deno.test("domainList refuses to guess between two instances", async () => {
 });
 
 Deno.test("domainAdd adds a missing domain, not as primary", async () => {
-  const h = harness({
+  using h = harness({
     [DOMAINS]: LIVE_DOMAINS,
     "POST /system/v1/instances/300/domains": {},
   }, { ...SYS, ...ONE });
@@ -157,7 +157,7 @@ Deno.test("domainAdd adds a missing domain, not as primary", async () => {
 });
 
 Deno.test("domainAdd fails when the System API refuses, and writes nothing", async () => {
-  const h = harness({
+  using h = harness({
     [DOMAINS]: LIVE_DOMAINS,
     "POST /system/v1/instances/300/domains": fail(403, "no permission"),
   }, { ...SYS, ...ONE });
@@ -170,7 +170,7 @@ Deno.test("domainAdd fails when the System API refuses, and writes nothing", asy
 });
 
 Deno.test("domainRemove removes a confirmed custom domain and tombstones it", async () => {
-  const h = harness({
+  using h = harness({
     [DOMAINS]: LIVE_DOMAINS,
     "DELETE /system/v1/instances/300/domains/old.example.org": {},
   }, { ...SYS, ...ONE });
@@ -190,7 +190,7 @@ Deno.test("domainRemove refuses a wrong confirm, a generated and the primary dom
       ["id.example.org", "id.example.org", "is the primary"],
     ]
   ) {
-    const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+    using h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
     await assertRejects(
       () =>
         m.domainRemove.execute({ domain, confirm, dryRun: false }, h.context),
@@ -203,7 +203,7 @@ Deno.test("domainRemove refuses a wrong confirm, a generated and the primary dom
 });
 
 Deno.test("domainRemove with dryRun only plans", async () => {
-  const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+  using h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
   await m.domainRemove.execute(
     { domain: "old.example.org", confirm: "old.example.org", dryRun: true },
     h.context,
@@ -213,7 +213,7 @@ Deno.test("domainRemove with dryRun only plans", async () => {
 });
 
 Deno.test("domainSetPrimary makes a listed domain the primary", async () => {
-  const h = harness({
+  using h = harness({
     [DOMAINS]: LIVE_DOMAINS,
     "POST /system/v1/instances/300/domains/_set_primary": {},
   }, { ...SYS, ...ONE });
@@ -224,7 +224,7 @@ Deno.test("domainSetPrimary makes a listed domain the primary", async () => {
 });
 
 Deno.test("domainSetPrimary refuses a domain the instance does not have", async () => {
-  const h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
+  using h = harness({ [DOMAINS]: LIVE_DOMAINS }, { ...SYS, ...ONE });
   await assertRejects(
     () => m.domainSetPrimary.execute({ domain: "x.example.org" }, h.context),
     Error,

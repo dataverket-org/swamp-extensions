@@ -774,12 +774,17 @@ export const checks = {
 /** Model definition for one HTTP endpoint. */
 export const model = {
   type: "@dataverket/http/endpoint",
-  version: "2026.11.10.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.11.10.1",
       description:
         "bodyJson and bodyJsonShowValues are new, empty and false by default; the health record gains jsonMatched, jsonMismatches and jsonMismatchCount. No existing argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

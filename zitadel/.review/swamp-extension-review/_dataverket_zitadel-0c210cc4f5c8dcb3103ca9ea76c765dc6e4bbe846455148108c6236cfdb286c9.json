@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/zitadel",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:33:36Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No source change since 2026.11.08.1 apart from the version and one no-op upgrades entry per type, so the finding of that review stands: every emitted secret (PAT, key JSON, client secret, reset and passkey codes, the instance owner's credential) is in a spec marked sensitive, and no password is ever an argument. New in the tests: the stub harness plants PLANTED-ZITADEL-KEY-7f3c9a in keyJson and the method tests assert it reaches no record or log; common_test asserts every emitting field is marked sensitive; every method that emits a secret (user patCreate, keyCreate, secretGenerate, passwordResetLinkCreate, passkeyRegistrationLinkCreate, app secretRotate and keyCreate, system instanceCreate) is asserted to keep it out of the logs. The planted key only proves the methods do not copy global arguments into records, since the stub sits above getToken; the key handling itself is covered by api_test and the live suite. The seven accepted credentials-sensitive-field findings (accessTokenFile, tokenScope and five token lifetime fields) are as before: names and durations, not secrets."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: instanceCreate logs the name, the owner's username and the credential kind at info and the created id at warning, never the body or the secret; trustedDomainRemove logs at warning. authFactorList logs how many people and factors; the settings 403 warning names all four v1 Admin reads it now covers. No key, token, PAT or provider password reaches a log line; the first smoke run's failure message carried the instance id and Zitadel's own text only."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: instanceCreate fails before writing anything when Zitadel names no instance id or returns no pat or key, unit tested; a missing expirationDate is refused by the schema before any call (batch Q). domainList, domainAdd, domainRemove and domainSetPrimary still refuse to guess between two instances and name them (batch Q, live, after the second instance existed); the reachable check no longer requires exactly one instance, since a definition used for instanceList or instanceCreate has none to name, unit tested with two. trustedDomainRemove refuses a domain that is not trusted and a confirm that does not match, both before the DELETE. In settings read only an HTTP 403 on the v1 Admin block is downgraded to a warning, as before; the email and notification reads sit inside that block, so a reader of one organization is told once. A Zitadel older than the /admin/v1/email service would answer 404 and fail the read; v4 is what the suite runs and the README names."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "217 unit tests pass (deno task test). Every method of the nine types (86) has at least two tests named for it, and each has a failure path: a refused call through the stub fails the method, and refuses() asserts the error text and that nothing was written. The tests assert on records, on the calls that change something (writes()), on tombstones and on log lines where a method promises one. The stub answers only the routes a test lists, in order, and fails on any other call. harness() returns a disposable whose Symbol.dispose calls __setCaller(null), and every call site binds it with using, so the real caller is restored when the scope ends, also when a test throws; this closes the restore gap found in the first review of this version. assertNotLogged checks that the secret user patCreate, keyCreate (a marker in the key JSON), secretGenerate, passwordResetLinkCreate and passkeyRegistrationLinkCreate emit stays out of the logs; the last has a new test for the default return delivery, which also checks that the code lands in the sensitive passkey-registration record. With app secretRotate and keyCreate and system instanceCreate, every method that emits a secret is now checked against the logs, so the README sentence holds. The deleted fixtures.ts was test-only."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: instanceCreate converges on the name: a second run lists, finds, stores unchanged and makes no call to _create (batch Q live, unit tested). trustedDomainAdd lists first and reports unchanged. domainSetPrimary on the custom domain a creation named is unchanged, since Zitadel makes that domain primary at creation; the argument's description says so now. The residual risk is a run interrupted between the POST to _create and the first writeResource: the instance exists, its owner's credential was returned once and is gone, and the next run reports unchanged. The window is one in-memory write with no network call in it, and the only recovery is Zitadel's own RemoveInstance and a new create, which this type does not do on purpose."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: Paths and bodies read from proto/zitadel/system.proto, admin.proto, instance.proto, member.proto, settings.proto and policy.proto at main and confirmed live on v4.19.3: POST /system/v1/instances/_search and _create (instanceName, firstOrgName, customDomain, defaultLanguage, machine.personalAccessToken or machine.machineKey of KEY_TYPE_JSON, answering instanceId, pat or machineKey as base64); GET /admin/v1/instances/me; POST /admin/v1/domains/_search, /trusted_domains/_search and /members/_search, all paged with searchAll; POST /admin/v1/trusted_domains and DELETE /admin/v1/trusted_domains/{domain}; POST /admin/v1/email/_search and GET /admin/v1/policies/notification. GetMyInstance, ListInstanceDomains and the trusted-domain rpcs are marked deprecated at main in favour of the v2 instance service, which is beta and absent on the versions deployed; the paths answer on v4.19.3 and the module doc names the API. The System API lists instances with limit 1000 and no paging, as before."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: No new long-lived handles, timers or caches. authFactorList without a user makes two calls per human after one paged user search; an organization with a thousand people is two thousand calls in one run, which is the fan-out rule 6 asks for rather than a thousand runs."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1 except the README's test paragraph, which uses no host or identifier. Test values are zitadel.example.org, throwaway ids and marker strings; fixtures.ts is gone. The finding of the last review stands for the rest."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: InstanceCreateArgs: name min 1, ownerCredential a z.enum of two with a default, ownerUsername defaulting to admin, expirationDate a non-empty string that Zitadel validates as RFC3339; the schema refusal is live tested. AuthFactorListArgs.user is optional and min 1 when given. InstanceOwnerCredential has every field required but none optional beyond what the API may omit; InstanceMember.roles is an array; AuthSummary counts are numbers and the flags booleans. EmailProvider makes the SMTP fields optional since an HTTP provider has none."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: instance-owner is infinite with garbageCollection 5, as the other emitted-once secret specs; instance 5; instance-domain, trusted-domain, member, email-provider, notification and auth-summary infinite with 10, as every other list record. Fixed names, so repeated reads overwrite rather than accumulate; trustedDomainRemove tombstones the one instance it removed, kind action."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: Instances: list and create here, update and remove not, on purpose: removing an instance removes every organization and user in it and stays a deliberate act with the key in hand; the README says so. Trusted domains: list in read, add, remove; the Admin API has no update. Members: read only; adding a member is AddIAMMember, left out as the org type leaves out organization membership. Email providers and the notification policy: read only, as every other settings kind the type does not write."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: The shared checks run before every method of the instance type. The system type's reachable check now signs the assertion and lists instances, passing with any count, so a multi-instance deployment can run instanceList and instanceCreate; the domain methods resolve the instance when they run and refuse with the ids when there are several. Unit tested, and live: batch Q ran instanceCreate and instanceList after the second instance existed."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: instance-<id>, as domainList already named it, because an instance's name is mutable through UpdateInstance and two instances may be named alike; instance-owner-<instanceName>-<ownerUsername>; trusted-domain-<domain>; member-<preferredLoginName> falling back to the user id, through the sanitiser so an @ becomes a dash (member-kari-example-org, unit tested); email-provider-<description> falling back to the id; notification-instance; auth-summary-<username> beside the auth-factor-<username>-<type>-<id> names read already wrote. The reads and the writes of a trusted domain use the same name, so a remove overwrites the add's record and the tombstone names it."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 0b7c774 is the version and its no-op upgrades entry. From that review: No method reads stored state back. instanceCreate reads the live list for the name; trustedDomainAdd and Remove read the live trusted list. A workflow asserts on data.latest of auth-summary-<username>.mfa, instance-owner-<name>-<owner>.secret is a vault reference it can pass on, and instance-<id>.instanceId feeds a definition's instanceId."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "All nine types move from 2026.11.08.1 to 2026.11.12.1, the manifest too, each with a no-op upgrades entry ('tests only; global arguments unchanged') that passes attributes through. True: the diff from 0b7c774 outside tests, test helpers, README and deno.lock is only the version lines and these entries. instance.ts, whose upgrades list was empty, now has this one entry, which also clears the empty-upgrades warning of the last release."
+    }
+  ]
+}

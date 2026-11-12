@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/github"
-version: "2026.11.08.1"
+version: "2026.11.12.1"
 description: >
   GitHub repositories, releases, pull requests and repository settings for
   swamp, over the REST API. One model type, `@dataverket/github`.

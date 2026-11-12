@@ -5,7 +5,7 @@ import { assertNoPlanted, fail, harness } from "./test_support.ts";
 const ORG = { id: "100", name: "dataverket", state: "ORG_STATE_ACTIVE" };
 
 Deno.test("get stores the service user's organization", async () => {
-  const h = harness({ "GET /management/v1/orgs/me": { org: ORG } });
+  using h = harness({ "GET /management/v1/orgs/me": { org: ORG } });
   await model.methods.get.execute({}, h.context);
   const [w] = h.written();
   assertEquals([w.spec, w.name, w.data.id], ["org", "org-dataverket", "100"]);
@@ -13,7 +13,7 @@ Deno.test("get stores the service user's organization", async () => {
 });
 
 Deno.test("get fails when the instance refuses, and writes nothing", async () => {
-  const h = harness({ "GET /management/v1/orgs/me": fail(401, "no") });
+  using h = harness({ "GET /management/v1/orgs/me": fail(401, "no") });
   await assertRejects(
     () => model.methods.get.execute({}, h.context),
     Error,
@@ -24,7 +24,7 @@ Deno.test("get fails when the instance refuses, and writes nothing", async () =>
 });
 
 Deno.test("list stores every organization the search returns", async () => {
-  const h = harness({
+  using h = harness({
     "POST /v2/organizations/_search": {
       result: [ORG, { id: "101", name: "kunde" }],
     },
@@ -37,7 +37,7 @@ Deno.test("list stores every organization the search returns", async () => {
 });
 
 Deno.test("list fails on an API error and writes nothing", async () => {
-  const h = harness({ "POST /v2/organizations/_search": fail(403) });
+  using h = harness({ "POST /v2/organizations/_search": fail(403) });
   await assertRejects(
     () => model.methods.list.execute({}, h.context),
     Error,
@@ -47,7 +47,7 @@ Deno.test("list fails on an API error and writes nothing", async () => {
 });
 
 Deno.test("managerList stores each manager under its organization", async () => {
-  const h = harness({
+  using h = harness({
     "GET /management/v1/orgs/me": { org: ORG },
     "POST /management/v1/orgs/me/members/_search": {
       result: [{
@@ -64,7 +64,7 @@ Deno.test("managerList stores each manager under its organization", async () => 
 });
 
 Deno.test("managerList fails when the member search is refused", async () => {
-  const h = harness({
+  using h = harness({
     "GET /management/v1/orgs/me": { org: ORG },
     "POST /management/v1/orgs/me/members/_search": fail(403),
   });

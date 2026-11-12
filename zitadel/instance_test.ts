@@ -8,7 +8,7 @@ const LIVE_TRUSTED = { result: [{ domain: "login.example.org" }] };
 const m = model.methods;
 
 Deno.test("read stores the instance, its domains and its trusted domains", async () => {
-  const h = harness({
+  using h = harness({
     [ME]: {
       instance: {
         id: "300",
@@ -35,7 +35,7 @@ Deno.test("read stores the instance, its domains and its trusted domains", async
 });
 
 Deno.test("read refuses when the Admin API names no instance", async () => {
-  const h = harness({ [ME]: { instance: {} } });
+  using h = harness({ [ME]: { instance: {} } });
   await assertRejects(
     () => m.read.execute({}, h.context),
     Error,
@@ -45,7 +45,7 @@ Deno.test("read refuses when the Admin API names no instance", async () => {
 });
 
 Deno.test("memberList stores each member with their roles", async () => {
-  const h = harness({
+  using h = harness({
     "POST /admin/v1/members/_search": {
       result: [{
         userId: "9",
@@ -63,7 +63,7 @@ Deno.test("memberList stores each member with their roles", async () => {
 });
 
 Deno.test("memberList fails without iam.member.read and writes nothing", async () => {
-  const h = harness({
+  using h = harness({
     "POST /admin/v1/members/_search": fail(403, "no permission"),
   });
   await assertRejects(
@@ -75,7 +75,7 @@ Deno.test("memberList fails without iam.member.read and writes nothing", async (
 });
 
 Deno.test("trustedDomainAdd trusts a new domain", async () => {
-  const h = harness({
+  using h = harness({
     [TRUSTED]: LIVE_TRUSTED,
     "POST /admin/v1/trusted_domains": {},
   });
@@ -85,7 +85,7 @@ Deno.test("trustedDomainAdd trusts a new domain", async () => {
 });
 
 Deno.test("trustedDomainAdd fails when the Admin API refuses", async () => {
-  const h = harness({
+  using h = harness({
     [TRUSTED]: LIVE_TRUSTED,
     "POST /admin/v1/trusted_domains": fail(400, "invalid domain"),
   });
@@ -98,7 +98,7 @@ Deno.test("trustedDomainAdd fails when the Admin API refuses", async () => {
 });
 
 Deno.test("trustedDomainRemove removes a confirmed domain and tombstones it", async () => {
-  const h = harness({
+  using h = harness({
     [TRUSTED]: LIVE_TRUSTED,
     "DELETE /admin/v1/trusted_domains/login.example.org": {},
   });
@@ -118,7 +118,7 @@ Deno.test("trustedDomainRemove refuses a wrong confirm or an untrusted domain", 
       ["other.example.org", "other.example.org", "is not trusted"],
     ]
   ) {
-    const h = harness({ [TRUSTED]: LIVE_TRUSTED });
+    using h = harness({ [TRUSTED]: LIVE_TRUSTED });
     await assertRejects(
       () =>
         m.trustedDomainRemove.execute(

@@ -205,7 +205,7 @@ function sameProject(
 /** Zitadel projects and their roles. */
 export const model = {
   type: "@dataverket/zitadel/project",
-  version: "2026.11.08.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -234,6 +234,11 @@ export const model = {
       toVersion: "2026.11.08.1",
       description:
         "Released with the instance type and the system, user and settings changes of this version; nothing in this type changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

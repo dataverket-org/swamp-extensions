@@ -1,7 +1,13 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
 import { toBase64 } from "./api.ts";
 import { model } from "./user.ts";
-import { assertNoPlanted, fail, harness, type Reply } from "./test_support.ts";
+import {
+  assertNoPlanted,
+  assertNotLogged,
+  fail,
+  harness,
+  type Reply,
+} from "./test_support.ts";
 
 const M = model.methods;
 const ORG_ME = { "GET /management/v1/orgs/me": { org: { id: "100" } } };
@@ -30,7 +36,7 @@ async function run(
   args: Record<string, unknown>,
   routes: Record<string, Reply | Reply[]>,
 ) {
-  const h = harness(routes);
+  using h = harness(routes);
   const m = M[method] as unknown as {
     arguments: { parse(v: unknown): unknown };
     execute(a: unknown, c: unknown): Promise<unknown>;
@@ -46,7 +52,7 @@ async function refuses(
   routes: Record<string, Reply | Reply[]>,
   text: string,
 ) {
-  const h = harness(routes);
+  using h = harness(routes);
   const m = M[method] as unknown as {
     arguments: { parse(v: unknown): unknown };
     execute(a: unknown, c: unknown): Promise<unknown>;
@@ -240,6 +246,7 @@ Deno.test("patCreate stores the token once as a user credential", async () => {
     "user-credential-ci-bot-pat-77",
     "minted-pat",
   ]);
+  assertNotLogged(h, "minted-pat");
   assertNoPlanted(h);
 });
 
@@ -297,14 +304,15 @@ Deno.test("keyCreate stores the generated key JSON decoded", async () => {
     ...GET_MACHINE,
     "POST /v2/users/300/keys": {
       keyId: "88",
-      keyContent: toBase64('{"keyId":"88"}'),
+      keyContent: toBase64('{"keyId":"88","key":"KEY-MATERIAL-88"}'),
     },
   });
   const [w] = h.written();
   assertEquals([w.name, w.data.secret], [
     "user-credential-ci-bot-key-88",
-    '{"keyId":"88"}',
+    '{"keyId":"88","key":"KEY-MATERIAL-88"}',
   ]);
+  assertNotLogged(h, "KEY-MATERIAL-88");
 });
 
 Deno.test("keyCreate fails when Zitadel refuses the key", async () => {
@@ -364,6 +372,7 @@ Deno.test("secretGenerate rotates an existing secret", async () => {
     "new-secret",
     "rotated",
   ]);
+  assertNotLogged(h, "new-secret");
 });
 
 Deno.test("secretGenerate fails when Zitadel refuses", async () => {
@@ -459,6 +468,7 @@ Deno.test("passwordResetLinkCreate stores the returned code", async () => {
   });
   const [w] = h.written();
   assertEquals([w.spec, w.data.verificationCode], ["password-reset", "CODE1"]);
+  assertNotLogged(h, "CODE1");
 });
 
 Deno.test("passwordResetLinkCreate refuses a machine user", async () => {
@@ -490,6 +500,24 @@ Deno.test("passkeyRegistrationLinkCreate mails a link with the template", async 
     "email",
     undefined,
   ]);
+});
+
+Deno.test("passkeyRegistrationLinkCreate returns a code, stored and not logged", async () => {
+  const h = await run("passkeyRegistrationLinkCreate", { user: "301" }, {
+    ...GET_HUMAN,
+    "POST /v2/users/301/passkeys/registration_link": (c) => {
+      assertEquals(c.body, { returnCode: {} });
+      return { code: { id: "55", code: "PASSKEY-CODE-55" } };
+    },
+  });
+  const [w] = h.written();
+  assertEquals([w.spec, w.data.delivery, w.data.codeId, w.data.code], [
+    "passkey-registration",
+    "return",
+    "55",
+    "PASSKEY-CODE-55",
+  ]);
+  assertNotLogged(h, "PASSKEY-CODE-55");
 });
 
 Deno.test("passkeyRegistrationLinkCreate refuses a machine user", async () => {

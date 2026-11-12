@@ -241,7 +241,7 @@ function shapeDomain(
 /** The instance's domains, kept with a System API user. */
 export const model = {
   type: "@dataverket/zitadel/system",
-  version: "2026.11.08.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.11.06.1",
@@ -253,6 +253,11 @@ export const model = {
       toVersion: "2026.11.08.1",
       description:
         "instanceList lists every instance the deployment hosts and instanceCreate makes one with a machine owner whose token or key is emitted once; the instance record's state is now the friendly spelling (running, not INSTANCE_STATE_RUNNING) and carries the version. No argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

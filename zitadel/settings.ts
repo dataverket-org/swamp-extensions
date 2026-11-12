@@ -337,7 +337,7 @@ const KINDS: SettingsKind[] = [
 /** Zitadel settings, as they are in force. */
 export const model = {
   type: "@dataverket/zitadel/settings",
-  version: "2026.11.08.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -366,6 +366,11 @@ export const model = {
       toVersion: "2026.11.08.1",
       description:
         "read also stores each email provider and the notification settings when the key may read the instance; no argument changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

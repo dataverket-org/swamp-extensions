@@ -655,7 +655,7 @@ function records(
 /** A versitygw gateway, read through its admin API and its S3 API. */
 export const model = {
   type: "@dataverket/versitygw/gateway",
-  version: "2026.10.05.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.09.30.2",
@@ -673,6 +673,11 @@ export const model = {
       toVersion: "2026.10.05.1",
       description:
         "backend (versitygw, rgw, s3) with versitygw the default; check gains the three lock rules and allowedLockModes, and no longer applies versioning-enabled by default; existing definitions unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

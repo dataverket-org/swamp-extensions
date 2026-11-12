@@ -109,7 +109,11 @@ export const G = {
   tokenScope: "openid",
 };
 
-/** A context with the stub caller installed, and what the method did. */
+/**
+ * A context with the stub caller installed, and what the method did. Bind it
+ * with `using`: leaving the scope restores the real caller, also when the
+ * test throws.
+ */
 export function harness(
   routes: Record<string, Reply | Reply[]>,
   globalArgs: Record<string, unknown> = {},
@@ -169,7 +173,19 @@ export function harness(
       ),
     /** Instance names the method tombstoned. */
     forgotten: deleted,
+    /** Restores the real caller. */
+    [Symbol.dispose]: () => __setCaller(null),
   };
+}
+
+/** Assert that no log line carries `secret`, a value the method emitted. */
+export function assertNotLogged(
+  h: ReturnType<typeof harness>,
+  secret: string,
+): void {
+  if (h.logs().join("\n").includes(secret)) {
+    throw new Error("an emitted secret reached a log line");
+  }
 }
 
 /** Assert that nothing a method wrote or logged carries the planted key. */

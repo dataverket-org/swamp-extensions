@@ -146,7 +146,7 @@ function routes(extra: Record<string, Reply | Reply[]>) {
 const m = model.methods;
 
 Deno.test("app list stores each application under the project's name", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [OIDC_APP, API_APP] },
   }));
   await run(m.list, { project: "300" }, h);
@@ -159,7 +159,7 @@ Deno.test("app list stores each application under the project's name", async () 
 });
 
 Deno.test("app list fails on a project that does not exist", async () => {
-  const h = harness({ [`GET ${P}`]: fail(404, "Project not found") });
+  using h = harness({ [`GET ${P}`]: fail(404, "Project not found") });
   await assertRejects(
     () => run(m.list, { project: "300" }, h),
     Error,
@@ -169,7 +169,7 @@ Deno.test("app list fails on a project that does not exist", async () => {
 });
 
 Deno.test("app get resolves the application by name and stores it", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
   }));
   await run(m.get, { project: "300", app: "kubelogin" }, h);
@@ -178,7 +178,7 @@ Deno.test("app get resolves the application by name and stores it", async () => 
 });
 
 Deno.test("app get fails on an application the project does not have", async () => {
-  const h = harness(routes({ [`POST ${P}/apps/_search`]: { result: [] } }));
+  using h = harness(routes({ [`POST ${P}/apps/_search`]: { result: [] } }));
   await assertRejects(
     () => run(m.get, { project: "300", app: "nope" }, h),
     Error,
@@ -188,7 +188,7 @@ Deno.test("app get fails on an application the project does not have", async () 
 });
 
 Deno.test("ensureOidc creates a client and keeps the secret in the credential only", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [] },
     [`POST ${P}/apps/oidc`]: {
       appId: OIDC_ID,
@@ -218,7 +218,7 @@ Deno.test("ensureOidc creates a client and keeps the secret in the credential on
 });
 
 Deno.test("ensureOidc reads a 'No changes' answer as unchanged", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
     [`PUT ${OIDC_PATH}/oidc_config`]: fail(400, "No changes"),
     [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
@@ -232,7 +232,7 @@ Deno.test("ensureOidc reads a 'No changes' answer as unchanged", async () => {
 });
 
 Deno.test("ensureOidc refuses loginBaseUri without v2 before any call", async () => {
-  const h = harness({});
+  using h = harness({});
   await assertRejects(
     () =>
       run(m.ensureOidc, {
@@ -247,7 +247,7 @@ Deno.test("ensureOidc refuses loginBaseUri without v2 before any call", async ()
 });
 
 Deno.test("ensureOidc fails when the update is refused for another reason", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [OIDC_APP] },
     [`PUT ${OIDC_PATH}/oidc_config`]: fail(403, "permission denied"),
   }));
@@ -260,7 +260,7 @@ Deno.test("ensureOidc fails when the update is refused for another reason", asyn
 });
 
 Deno.test("ensureApi creates an API application with the jwt method", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [] },
     [`POST ${P}/apps/api`]: { appId: API_ID, clientId: "c2" },
     [`GET ${API_PATH}`]: { app: API_APP },
@@ -278,7 +278,7 @@ Deno.test("ensureApi creates an API application with the jwt method", async () =
 });
 
 Deno.test("ensureApi fails when the create is refused, and writes nothing", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`POST ${P}/apps/_search`]: { result: [] },
     [`POST ${P}/apps/api`]: fail(409, "already exists"),
   }));
@@ -298,7 +298,7 @@ Deno.test("redirectSet changes only the allowlist and carries the rest over", as
       redirectUris: ["https://new.example.org/cb"],
     },
   };
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: [{ app: OIDC_APP }, { app: after }],
     [`PUT ${OIDC_PATH}/oidc_config`]: {},
   }));
@@ -320,7 +320,7 @@ Deno.test("redirectSet changes only the allowlist and carries the rest over", as
 });
 
 Deno.test("redirectSet refuses an application that is not OIDC", async () => {
-  const h = harness(routes({ [`GET ${API_PATH}`]: { app: API_APP } }));
+  using h = harness(routes({ [`GET ${API_PATH}`]: { app: API_APP } }));
   await assertRejects(
     () => run(m.redirectSet, { project: "300", app: API_ID, add: ["x"] }, h),
     Error,
@@ -330,7 +330,7 @@ Deno.test("redirectSet refuses an application that is not OIDC", async () => {
 });
 
 Deno.test("app update renames and stores the new name", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: [{ app: OIDC_APP }, {
       app: { ...OIDC_APP, name: "kubectl" },
     }],
@@ -345,7 +345,7 @@ Deno.test("app update renames and stores the new name", async () => {
 });
 
 Deno.test("app update fails when the rename is refused", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
     [`PUT ${OIDC_PATH}`]: fail(400, "invalid name"),
   }));
@@ -358,7 +358,7 @@ Deno.test("app update fails when the rename is refused", async () => {
 });
 
 Deno.test("app setState deactivates an active application", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
     [`POST ${OIDC_PATH}/_deactivate`]: {},
   }));
@@ -371,7 +371,7 @@ Deno.test("app setState deactivates an active application", async () => {
 });
 
 Deno.test("app setState fails when the deactivation is refused", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
     [`POST ${OIDC_PATH}/_deactivate`]: fail(403, "denied"),
   }));
@@ -385,7 +385,7 @@ Deno.test("app setState fails when the deactivation is refused", async () => {
 });
 
 Deno.test("secretRotate keeps the new secret in the sensitive credential, out of the logs", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/api_config/_generate_client_secret`]: {
       clientSecret: SECRET,
@@ -402,7 +402,7 @@ Deno.test("secretRotate keeps the new secret in the sensitive credential, out of
 });
 
 Deno.test("secretRotate refuses an application that is neither OIDC nor API", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${P}/apps/5`]: { app: { id: "5", name: "saml", samlConfig: {} } },
   }));
   await assertRejects(
@@ -414,7 +414,7 @@ Deno.test("secretRotate refuses an application that is neither OIDC nor API", as
 });
 
 Deno.test("app delete removes the application and tombstones its record", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${OIDC_PATH}`]: { app: OIDC_APP },
     [`DELETE ${OIDC_PATH}`]: {},
   }));
@@ -429,7 +429,7 @@ Deno.test("app delete removes the application and tombstones its record", async 
 });
 
 Deno.test("app delete refuses a confirm that is not the live name", async () => {
-  const h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
+  using h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
   await assertRejects(
     () =>
       run(m.delete, { project: "300", app: OIDC_ID, confirm: "kubectl" }, h),
@@ -441,7 +441,7 @@ Deno.test("app delete refuses a confirm that is not the live name", async () => 
 });
 
 Deno.test("app delete with dryRun plans and changes nothing", async () => {
-  const h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
+  using h = harness(routes({ [`GET ${OIDC_PATH}`]: { app: OIDC_APP } }));
   await run(m.delete, {
     project: "300",
     app: OIDC_ID,
@@ -455,7 +455,7 @@ Deno.test("app delete with dryRun plans and changes nothing", async () => {
 
 Deno.test("keyCreate keeps the key JSON in the sensitive key record, out of the logs", async () => {
   const keyJson = '{"type":"application","keyId":"k1","key":"PRIVATE"}';
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys`]: { id: "k1", keyDetails: btoa(keyJson) },
   }));
@@ -473,7 +473,7 @@ Deno.test("keyCreate keeps the key JSON in the sensitive key record, out of the 
 });
 
 Deno.test("keyCreate fails when the instance refuses the key", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys`]: fail(400, "expiration in the past"),
   }));
@@ -486,7 +486,7 @@ Deno.test("keyCreate fails when the instance refuses the key", async () => {
 });
 
 Deno.test("keyList stores each key by id and expiry, with no material", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys/_search`]: {
       result: [{ id: "k1", type: "KEY_TYPE_JSON", expirationDate: "2027" }],
@@ -502,7 +502,7 @@ Deno.test("keyList stores each key by id and expiry, with no material", async ()
 });
 
 Deno.test("keyList fails when the key search is refused", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys/_search`]: fail(403, "denied"),
   }));
@@ -515,7 +515,7 @@ Deno.test("keyList fails when the key search is refused", async () => {
 });
 
 Deno.test("keyDelete deletes a key that belongs to the application", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys/_search`]: { result: [{ id: "k1" }] },
     [`DELETE ${API_PATH}/keys/k1`]: {},
@@ -526,7 +526,7 @@ Deno.test("keyDelete deletes a key that belongs to the application", async () =>
 });
 
 Deno.test("keyDelete never deletes a key the application does not hold", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [`GET ${API_PATH}`]: { app: API_APP },
     [`POST ${API_PATH}/keys/_search`]: { result: [{ id: "k1" }] },
   }));

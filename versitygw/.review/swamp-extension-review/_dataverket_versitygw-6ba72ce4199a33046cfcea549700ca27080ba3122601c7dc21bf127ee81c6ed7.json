@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/versitygw",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:27:33Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No source change since 2026.10.27.1 apart from the version and its no-op upgrades entry (and deno.json excluding .review/ from fmt), so the finding of that review stands. The method tests sign with the fixtures' throwaway root pair given as values and assert, through assertNoSecret, that neither the root secret nor any FIXTURE-SECRET account secret reaches a record, a log or an error, on success and on a refused signature; the key file and transport tests keep their masking checks."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: Entry and completion lines per method unchanged; findings logged at warning with rule, subject and detail."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: A backend without adminUrl is refused by the policy check; radosgw's listing-for-an-unknown-subresource is read as absent for ownershipControls, CORS and tags only, through one helper that rethrows anything else; JSON that is not JSON names what was expected."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "65 unit tests pass. Every method (health, accounts, buckets, bucketSettings, inventory, check) runs through createModelTestContext with a stub fetch at the transport's __setFetch seam, a success and a failure path each, asserting on the records, their inventory tag, the requests made, and that a failed run writes nothing; check reads through a stubbed queryData and is asserted to ask only for its own inventory. The stub answers only listed routes and is reset with __setFetch() in a finally in every test. The parsers still read answers recorded from a throwaway gateway (the fixtures that remain); the deleted fixtures were only used by the old fake gateway. negative_test keeps the key-source, parser and check refusals. Fewer tests than the 90 of the last review; the backends and the lock rules are covered by findings_test and parse_test and live by smoke/. README's test paragraph matches."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: Read-only everywhere; an inventory twice yields identical records, as the existing test asserts."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: radosgw admin ops: GET /user?list, /user?uid=, /bucket, /bucket?bucket=, signed SigV4 service s3, answers as observed live; ListAllMyBuckets parsed with Buckets/Bucket nesting; settings subresources unchanged."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: One request per user and per bucket on rgw, sequential; no files or handles beyond the existing CA client cache."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Unchanged apart from the README test paragraph. Test values are 127.0.0.1 ports and fixture names; the fixtures hold throwaway keys only."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: backend is an enum; allowedLockModes an enum array; inventory records gain backend and region, both required."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: Unchanged: infinite with garbageCollection 10 on every spec."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: A read-only audit model by design; no create, update or delete."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: root-key-named now also refuses a non-s3 backend without adminUrl; admin-reachable lists buckets through whichever backend is set."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: Unchanged: account-, bucket-, settings- prefixes with numbered suffixes on collisions."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.10.27.1: the only non-test source change from 9b8bffb is the version and its no-op upgrades entry. From that review: check reads its own inventory by tag through queryData as before."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Type 2026.10.05.1 to 2026.11.12.1 (the manifest from 2026.10.27.1, a license-only release), with a no-op upgrades entry ('tests only; global arguments unchanged'). True: the only non-test source change from 9b8bffb is the version. The aws4fetch dependency-trust warning (last published 26 months ago, threshold 24) is pre-existing and unchanged; the dependency is pinned and small, and its age is known."
+    }
+  ]
+}

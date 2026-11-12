@@ -74,7 +74,7 @@ const ids = { user: "200", project: "300" };
 const m = model.methods;
 
 Deno.test("grant list stores each grant under username and project name", async () => {
-  const h = harness({ [SEARCH]: { result: [GRANT] } });
+  using h = harness({ [SEARCH]: { result: [GRANT] } });
   await run(m.list, {}, h);
   const [w] = h.written();
   assertEquals([w.spec, w.name, w.data.roleKeys], [
@@ -87,13 +87,13 @@ Deno.test("grant list stores each grant under username and project name", async 
 });
 
 Deno.test("grant list fails when the search is refused", async () => {
-  const h = harness({ [SEARCH]: fail(403, "denied") });
+  using h = harness({ [SEARCH]: fail(403, "denied") });
   await assertRejects(() => run(m.list, {}, h), Error, "HTTP 403");
   assertEquals(h.written(), []);
 });
 
 Deno.test("grant ensure converges the role set of an existing grant", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [SEARCH]: { result: [GRANT] },
     "PUT /management/v1/users/200/grants/500": {},
   }));
@@ -104,7 +104,7 @@ Deno.test("grant ensure converges the role set of an existing grant", async () =
 });
 
 Deno.test("grant ensure creates a missing grant", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [SEARCH]: { result: [] },
     "POST /management/v1/users/200/grants": { userGrantId: "501" },
   }));
@@ -117,7 +117,7 @@ Deno.test("grant ensure creates a missing grant", async () => {
 });
 
 Deno.test("grant ensure fails on a user that does not exist", async () => {
-  const h = harness({ "GET /v2/users/200": fail(404, "User not found") });
+  using h = harness({ "GET /v2/users/200": fail(404, "User not found") });
   await assertRejects(
     () => run(m.ensure, { ...ids, roleKeys: ["reader"] }, h),
     Error,
@@ -127,7 +127,7 @@ Deno.test("grant ensure fails on a user that does not exist", async () => {
 });
 
 Deno.test("grant setState deactivates an active grant", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [SEARCH]: { result: [GRANT] },
     "POST /management/v1/users/200/grants/500/_deactivate": {},
   }));
@@ -141,7 +141,7 @@ Deno.test("grant setState deactivates an active grant", async () => {
 });
 
 Deno.test("grant setState fails when the user has no grant on the project", async () => {
-  const h = harness(routes({ [SEARCH]: { result: [] } }));
+  using h = harness(routes({ [SEARCH]: { result: [] } }));
   await assertRejects(
     () => run(m.setState, { ...ids, state: "inactive" }, h),
     Error,
@@ -151,7 +151,7 @@ Deno.test("grant setState fails when the user has no grant on the project", asyn
 });
 
 Deno.test("grant delete removes the grant", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [SEARCH]: { result: [GRANT] },
     "DELETE /management/v1/users/200/grants/500": {},
   }));
@@ -166,7 +166,7 @@ Deno.test("grant delete removes the grant", async () => {
 });
 
 Deno.test("grant delete with dryRun plans and calls no delete", async () => {
-  const h = harness(routes({ [SEARCH]: { result: [GRANT] } }));
+  using h = harness(routes({ [SEARCH]: { result: [GRANT] } }));
   await run(m.delete, { ...ids, dryRun: true }, h);
   assertEquals(h.calls.filter((c) => c.method === "DELETE"), []);
   assertEquals(h.written()[0].data.action, "planned");
@@ -174,7 +174,7 @@ Deno.test("grant delete with dryRun plans and calls no delete", async () => {
 });
 
 Deno.test("grant delete fails when the instance refuses the delete", async () => {
-  const h = harness(routes({
+  using h = harness(routes({
     [SEARCH]: { result: [GRANT] },
     "DELETE /management/v1/users/200/grants/500": fail(403, "denied"),
   }));

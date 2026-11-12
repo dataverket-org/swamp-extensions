@@ -395,7 +395,7 @@ function summarizeFactors(
 /** Users of a Zitadel organization, human and machine. */
 export const model = {
   type: "@dataverket/zitadel/user",
-  version: "2026.11.08.1",
+  version: "2026.11.12.1",
   upgrades: [
     {
       toVersion: "2026.10.01.3",
@@ -424,6 +424,11 @@ export const model = {
       toVersion: "2026.11.08.1",
       description:
         "authFactorList takes no user to audit every human in one run, and stores an auth-summary per person beside the factors; user became optional, nothing else changed",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description: "tests only; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

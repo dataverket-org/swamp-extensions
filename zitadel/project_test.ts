@@ -28,7 +28,7 @@ const GRANTS = { [`POST ${P}/200/grants/_search`]: { result: [GRANT] } };
 const MEMBERS = `POST ${P}/200/grants/300/members/_search`;
 
 Deno.test("list stores every project", async () => {
-  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  using h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
   await model.methods.list.execute({}, h.context);
   const [w] = h.written();
   assertEquals([w.spec, w.name, w.data.state], [
@@ -40,7 +40,7 @@ Deno.test("list stores every project", async () => {
 });
 
 Deno.test("list fails when the search fails, and writes nothing", async () => {
-  const h = harness({ [`POST ${P}/_search`]: fail(403) });
+  using h = harness({ [`POST ${P}/_search`]: fail(403) });
   await assertRejects(
     () => model.methods.list.execute({}, h.context),
     Error,
@@ -51,13 +51,13 @@ Deno.test("list fails when the search fails, and writes nothing", async () => {
 });
 
 Deno.test("get resolves a name and stores the project", async () => {
-  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  using h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
   await model.methods.get.execute({ project: "fabrikk" }, h.context);
   assertEquals(h.written()[0].data.id, "200");
 });
 
 Deno.test("get refuses a project that does not exist", async () => {
-  const h = harness({ [`GET ${P}/201`]: fail(404, "not found") });
+  using h = harness({ [`GET ${P}/201`]: fail(404, "not found") });
   await assertRejects(
     () => model.methods.get.execute({ project: "201" }, h.context),
     Error,
@@ -67,7 +67,7 @@ Deno.test("get refuses a project that does not exist", async () => {
 });
 
 Deno.test("ensure creates a missing project", async () => {
-  const h = harness({
+  using h = harness({
     [`POST ${P}/_search`]: { result: [] },
     [`POST ${P}`]: { id: "200" },
     ...GET_PROJECT,
@@ -88,7 +88,7 @@ Deno.test("ensure creates a missing project", async () => {
 });
 
 Deno.test("ensure leaves a project as asked alone", async () => {
-  const h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
+  using h = harness({ [`POST ${P}/_search`]: { result: [PROJECT] } });
   await model.methods.ensure.execute(
     { name: "fabrikk", roleAssertion: true },
     h.context,
@@ -98,7 +98,7 @@ Deno.test("ensure leaves a project as asked alone", async () => {
 });
 
 Deno.test("ensure fails when the create is refused", async () => {
-  const h = harness({
+  using h = harness({
     [`POST ${P}/_search`]: { result: [] },
     [`POST ${P}`]: fail(409, "already exists"),
   });
@@ -111,7 +111,7 @@ Deno.test("ensure fails when the create is refused", async () => {
 });
 
 Deno.test("update renames and keeps the flags it was not given", async () => {
-  const h = harness({
+  using h = harness({
     [`GET ${P}/200`]: [{ project: PROJECT }, {
       project: { ...PROJECT, name: "fabrikk2" },
     }],
@@ -132,7 +132,7 @@ Deno.test("update renames and keeps the flags it was not given", async () => {
 });
 
 Deno.test("update fails when the write is refused", async () => {
-  const h = harness({ ...GET_PROJECT, [`PUT ${P}/200`]: fail(400) });
+  using h = harness({ ...GET_PROJECT, [`PUT ${P}/200`]: fail(400) });
   await assertRejects(
     () =>
       model.methods.update.execute(
@@ -146,7 +146,7 @@ Deno.test("update fails when the write is refused", async () => {
 });
 
 Deno.test("setState deactivates an active project", async () => {
-  const h = harness({ ...GET_PROJECT, [`POST ${P}/200/_deactivate`]: {} });
+  using h = harness({ ...GET_PROJECT, [`POST ${P}/200/_deactivate`]: {} });
   await model.methods.setState.execute(
     { project: "200", state: "inactive" },
     h.context,
@@ -161,7 +161,7 @@ Deno.test("setState deactivates an active project", async () => {
 });
 
 Deno.test("setState fails when the project cannot be read", async () => {
-  const h = harness({ [`GET ${P}/200`]: fail(500) });
+  using h = harness({ [`GET ${P}/200`]: fail(500) });
   await assertRejects(
     () =>
       model.methods.setState.execute(
@@ -175,7 +175,7 @@ Deno.test("setState fails when the project cannot be read", async () => {
 });
 
 Deno.test("delete removes the project and tombstones its record", async () => {
-  const h = harness({ ...GET_PROJECT, [`DELETE ${P}/200`]: {} });
+  using h = harness({ ...GET_PROJECT, [`DELETE ${P}/200`]: {} });
   await model.methods.delete.execute(
     { project: "200", confirm: "fabrikk", dryRun: false },
     h.context,
@@ -191,7 +191,7 @@ Deno.test("delete removes the project and tombstones its record", async () => {
 });
 
 Deno.test("delete refuses a confirm that is not the live name", async () => {
-  const h = harness(GET_PROJECT);
+  using h = harness(GET_PROJECT);
   await assertRejects(
     () =>
       model.methods.delete.execute(
@@ -207,7 +207,7 @@ Deno.test("delete refuses a confirm that is not the live name", async () => {
 });
 
 Deno.test("delete with dryRun only plans", async () => {
-  const h = harness(GET_PROJECT);
+  using h = harness(GET_PROJECT);
   await model.methods.delete.execute(
     { project: "200", confirm: "fabrikk", dryRun: true },
     h.context,
@@ -217,7 +217,7 @@ Deno.test("delete with dryRun only plans", async () => {
 });
 
 Deno.test("roleList stores the roles keyed by project and key", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: {
       result: [{ key: "reader", displayName: "Reader" }],
@@ -233,7 +233,7 @@ Deno.test("roleList stores the roles keyed by project and key", async () => {
 });
 
 Deno.test("roleList fails when the search fails", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: fail(503),
   });
@@ -246,7 +246,7 @@ Deno.test("roleList fails when the search fails", async () => {
 });
 
 Deno.test("roleEnsure creates a missing role", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: { result: [] },
     [`POST ${P}/200/roles`]: {},
@@ -264,7 +264,7 @@ Deno.test("roleEnsure creates a missing role", async () => {
 });
 
 Deno.test("roleEnsure fails when the create is refused", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: { result: [] },
     [`POST ${P}/200/roles`]: fail(400),
@@ -282,7 +282,7 @@ Deno.test("roleEnsure fails when the create is refused", async () => {
 });
 
 Deno.test("roleRemove deletes the role and tombstones it", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: { result: [{ key: "reader" }] },
     [`DELETE ${P}/200/roles/reader`]: {},
@@ -296,7 +296,7 @@ Deno.test("roleRemove deletes the role and tombstones it", async () => {
 });
 
 Deno.test("roleRemove with dryRun deletes nothing", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/roles/_search`]: { result: [{ key: "reader" }] },
   });
@@ -310,7 +310,7 @@ Deno.test("roleRemove with dryRun deletes nothing", async () => {
 });
 
 Deno.test("projectGrantList stores each grant", async () => {
-  const h = harness({ ...GET_PROJECT, ...GRANTS });
+  using h = harness({ ...GET_PROJECT, ...GRANTS });
   await model.methods.projectGrantList.execute({ project: "200" }, h.context);
   const [w] = h.written();
   assertEquals([w.spec, w.name, w.data.roleKeys], [
@@ -321,7 +321,7 @@ Deno.test("projectGrantList stores each grant", async () => {
 });
 
 Deno.test("projectGrantList fails on an unknown project", async () => {
-  const h = harness({ [`POST ${P}/_search`]: { result: [] } });
+  using h = harness({ [`POST ${P}/_search`]: { result: [] } });
   await assertRejects(
     () =>
       model.methods.projectGrantList.execute({ project: "nope" }, h.context),
@@ -331,7 +331,7 @@ Deno.test("projectGrantList fails on an unknown project", async () => {
 });
 
 Deno.test("projectGrantEnsure converges the role set", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [`PUT ${P}/200/grants/300`]: {},
@@ -349,7 +349,7 @@ Deno.test("projectGrantEnsure converges the role set", async () => {
 });
 
 Deno.test("projectGrantEnsure fails when the grant is refused", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/grants/_search`]: { result: [] },
     [`POST ${P}/200/grants`]: fail(404, "org not found"),
@@ -367,7 +367,7 @@ Deno.test("projectGrantEnsure fails when the grant is refused", async () => {
 });
 
 Deno.test("projectGrantSetState deactivates the grant", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [`POST ${P}/200/grants/300/_deactivate`]: {},
@@ -384,7 +384,7 @@ Deno.test("projectGrantSetState deactivates the grant", async () => {
 });
 
 Deno.test("projectGrantSetState refuses a grant that does not exist", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/grants/_search`]: { result: [] },
   });
@@ -401,7 +401,7 @@ Deno.test("projectGrantSetState refuses a grant that does not exist", async () =
 });
 
 Deno.test("projectGrantDelete takes the grant back", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [`DELETE ${P}/200/grants/300`]: {},
@@ -415,7 +415,7 @@ Deno.test("projectGrantDelete takes the grant back", async () => {
 });
 
 Deno.test("projectGrantDelete refuses a confirm that is not the org name", async () => {
-  const h = harness({ ...GET_PROJECT, ...GRANTS });
+  using h = harness({ ...GET_PROJECT, ...GRANTS });
   await assertRejects(
     () =>
       model.methods.projectGrantDelete.execute(
@@ -430,7 +430,7 @@ Deno.test("projectGrantDelete refuses a confirm that is not the org name", async
 });
 
 Deno.test("projectGrantMemberList stores the grant's members", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [MEMBERS]: { result: [{ userId: "600", roles: ["PROJECT_GRANT_OWNER"] }] },
@@ -447,7 +447,7 @@ Deno.test("projectGrantMemberList stores the grant's members", async () => {
 });
 
 Deno.test("projectGrantMemberList refuses a grant that does not exist", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     [`POST ${P}/200/grants/_search`]: { result: [] },
   });
@@ -463,7 +463,7 @@ Deno.test("projectGrantMemberList refuses a grant that does not exist", async ()
 });
 
 Deno.test("projectGrantMemberEnsure adds a missing member", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [MEMBERS]: { result: [] },
@@ -486,7 +486,7 @@ Deno.test("projectGrantMemberEnsure adds a missing member", async () => {
 });
 
 Deno.test("projectGrantMemberEnsure fails when the add is refused", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [MEMBERS]: { result: [] },
@@ -505,7 +505,7 @@ Deno.test("projectGrantMemberEnsure fails when the add is refused", async () => 
 });
 
 Deno.test("projectGrantMemberRemove removes a member", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [MEMBERS]: { result: [{ userId: "600" }] },
@@ -520,7 +520,7 @@ Deno.test("projectGrantMemberRemove removes a member", async () => {
 });
 
 Deno.test("projectGrantMemberRemove leaves a non-member alone", async () => {
-  const h = harness({
+  using h = harness({
     ...GET_PROJECT,
     ...GRANTS,
     [MEMBERS]: { result: [] },

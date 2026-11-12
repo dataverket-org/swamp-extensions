@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/http",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:27:33Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No source change since 2026.11.10.1 apart from the version and its no-op upgrades entry, so the finding of that review stands: no credential is taken, and body values stay out of the record unless bodyJsonShowValues is set. The unit test for a JSON field that differs still asserts the body's value is absent from the record; the live suite covers logs and swamp's output."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: Unchanged shape: info on entry, info on ok with URL, status and latency, a warning with the record's error when not ok; structured placeholders. The JSON reason travels in that error, so no new log line."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: Only a bad definition throws, before any request and before any write: a bodyJson that is not an object, holds a non-JSON value, a non-finite number, is deeper than 32 levels, or names a field __proto__ (the schema refuses it at the top level, where a zod record would drop it without a word and leave an empty assertion that passes; found by the negative tests, confirmed live with a hand-written definition). Every body outcome is a record: content-type, too-large, not-utf8, too-deep, not-json, duplicate-key, not-object, missing, type, value. A body cut short or slower than timeoutMs is reachable false with jsonMatched null, as bodyContains already was."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "11 unit tests pass, 1 network test opt-in behind HTTP_E2E. health, the one method, runs through createModelTestContext with a stub fetcher at the __setFetcher seam, restored in a finally through the function it returns: a match after a redirect, a wrong status with a differing JSON field and a warning, a chain that does not verify recorded as tls failed, a redirect not followed, nothing listening, and two refusals (bad url, unreadable caFile) that throw before anything is written. The JSON judging (duplicates, depth, content type, too-large, equality) and the arguments check are tested as pure functions. Fewer tests than the 38 of the last review: the body cap at 1 MiB, the endless and slow bodies, invalid UTF-8, the redirect cap and the duplicate key end to end are no longer unit tested through a socket; smoke/local.sh covers each of them live through swamp (lj-huge, lj-endless, lj-utf8, lj-slow, lj-twice), and endpoint.ts is unchanged since that suite last ran on it. README's test paragraph says so accurately."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: Read-only, one GET per run under one timeout that also covers the body. bodyJson alone reads at most 1 MiB and nothing when the content type is not JSON; depth is checked by an iterative scan before JSON.parse, and comparison recurses only as deep as the definition, which is capped at 32."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "issue",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: The body is validated before any field is read: content type, size, UTF-8, depth, JSON, duplicate keys, object at the top; fields are read with Object.hasOwn only. Two strict choices a user may meet, both documented and without a switch: JSON served with another content type than application/json or +json is refused (content-type), and a duplicate key anywhere in the body, also in a part not asserted, is refused. A charset parameter is ignored and the body judged as UTF-8, as RFC 8259 requires. Numbers are compared as doubles."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "issue",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: bodyJson alone: the reader is cancelled at the first byte past 1 MiB, and the body is cancelled unread when not wanted; the timer and abort listener are cleared on every path as before. Kept from the version before, on purpose so existing definitions behave the same: with bodyContains the whole body is read into memory without a size bound, limited only by timeoutMs, and that holds when bodyJson is set beside it."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "The new tests use svc.test, example.org and 127.0.0.1; the README paragraph names no host beyond example.org and badssl.com, as before."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: The health record stays one closed z.object; the three new fields are always written, on the answer path and the unreachable path, and the unit tests parse every written record with the schema in strict mode. jsonMismatches is a closed object with enums for reason and kinds. bodyJson is a record of unknown values by need, checked for JSON-ness by the arguments check and before each run. Its schema is a preprocess around the record, so the registry lists its type as preprocess and the CLI wants bodyJson:json= for an object; the JSON schema swamp shows is still type object."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: Unchanged: health, lifetime infinite, garbageCollection 10. A record grows by at most 20 mismatches of bounded strings."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: A probe, not a managed resource."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: arguments now also covers bodyJson (JSON values only, depth, no __proto__); the same function runs at the start of health, so a read is guarded without swamp model validate."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: One spec, one instance, health, unchanged, so existing data.latest expressions keep working."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "Unchanged since 2026.11.10.1: the only non-test source change from 9ffc82b is the version and its no-op upgrades entry. From that review: Nothing is read back."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "2026.11.10.1 to 2026.11.12.1 in model and manifest, with a no-op upgrades entry ('tests only; global arguments unchanged') after the 2026.11.10.1 one. True: the only non-test source change from 9ffc82b is the version."
+    }
+  ]
+}

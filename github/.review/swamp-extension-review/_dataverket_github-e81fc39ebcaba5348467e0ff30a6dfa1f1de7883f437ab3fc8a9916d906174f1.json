@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/github",
+  "version": "2026.11.12.1",
+  "reviewedAt": "2026-11-12T15:27:33Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "No source change since 2026.11.08.1 apart from the version, its no-op upgrades entry and one reworded comment in repo_settings.ts, so the finding of that review stands. New in the tests: the stub plants ghp_PLANTEDtoken... as the token; sync asserts it is sent only as the Authorization credential, and the method tests assert it reaches no record, log or error, including a 404 whose body echoes the token, which is masked as [REDACTED]."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Every method logs its outcome at info with structured placeholders. writeRecord warns once per repository, with {legacy} and {name} as properties, the first time it writes a portable name while the pre-2026.11.08.1 name holds data, and points at the README for the removal. Verified live: one warning on the first run, none on the second, none for a repository never listed."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: The REST transport throws before any writeResource with method, path, status and GitHub's message; repoDelete treats 404 as absent. readOrNull swallows every error from readResource deliberately: the read-back only decides whether to print the notice, and a name Windows cannot store fails at the path rather than as not-found; the write itself still surfaces its own errors."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "32 unit tests pass. The open item of the last review is closed: the four Octokit methods (sync, ensureRepo, ensureRelease, openPr) now run through createModelTestContext with a stub standing in for globalThis.fetch, the one call Octokit and the repo_settings caller both make. Every method of github.ts and repo_settings.ts has a success and a failure path, asserting on records written, the requests that change something (dry runs post nothing, a missing branch and an unmatched expectMirrorOf are refused before any PATCH or DELETE) and that nothing was written on failure. The stub answers only the listed method and path and rejects anything else. The global fetch swap is put back in a finally on every path, including a throw; Deno runs the tests of a file one after another, so no other test sees the stub. README's new Development paragraph matches what the tests do."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "issue",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Unchanged: ensureRepo, ensureRelease and openPr find existing state first; default_branch_ensure reports unchanged; repo_delete treats absent as a no-op. Kept from upstream: ensureRepo creates only and never converges an existing repository's settings. The name change is non-destructive: nothing deletes, renames or rewrites data under an old name; removal is the user's swamp data delete --prefix, documented with its dry run."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Unchanged: every page of repositories, releases and pulls through Octokit paginate; branches_list follows every page up to a cap and records truncated. No Retry-After handling."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: No files, handles or cloud resources beyond what is recorded; every request carries the method's abort signal. The two read-backs in writeRecord run concurrently and hold nothing."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "The README gains a Development section with deno task commands and the test paragraph; tests use acme, tool, api.github.test, github.test and git.example.org. No real host or account."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Unchanged: every schema is a plain z.object; the info objects written are the schema types themselves, so schema-write conformance holds field for field (owner, repo, defaultBranch, branches, truncated, timestamp; owner, repo, defaultBranch, action, timestamp; owner, repo, action, timestamp)."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: All seven resource specs declare lifetime infinite and garbageCollection 10; the README says so in one place. An item left under an old name is never expired by GC, which is why the README gives the explicit delete."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "issue",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Unchanged: releases and pull requests are create only, as upstream designed. Narrow by intent."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Unchanged: github-token-accepted (label live) runs before every method and proves the token and that it can see the owner."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: Enumerated: repos; repo-<slug>; release-<slug>-<slug>; pull-<slug>-<slug>-<slug>; branches-<repo>; default-branch-<repo>; delete-<repo>. The three follow upstream's shape: spec word first, parts joined with -, the repository through the same slug helper, no owner since the owner is the model's. Each spec is written by one method; the first words differ from upstream's repo- so a repository named delete-x cannot collide with a delete receipt. No ':' anywhere (dataverket-org/swamp-extensions#1, swamp-club/swamp#3205); the repository is reduced to [A-Za-z0-9._-] with trailing dots trimmed. Verified live against swamp 20261106: the portability warning the old names drew is gone."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Unchanged since 2026.11.08.1: the only non-test source change from 7f7b5b8 is the version and its no-op upgrades entry. From that review: writeRecord reads back the latest record under the new and the old name through context.readResource, both tolerant of failure, only to decide whether to print the one-time notice; it uses nothing beyond the documented context API, never reads another behavior's data and never deletes. Old data is left in place; the README documents its removal with swamp data delete --prefix, dry run first, verified live."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "2026.11.08.1 to 2026.11.12.1 in model and manifest, with a no-op upgrades entry ('tests only; global arguments unchanged'). True: the only non-test source change from 7f7b5b8 is a comment. The version test asserts the new version and that the chain ends at it."
+    }
+  ]
+}

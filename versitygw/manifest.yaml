@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/versitygw"
-version: "2026.10.27.1"
+version: "2026.11.12.1"
 description: >
   A versitygw S3 gateway for swamp, read over its admin API and its S3 API.
   Read-only.

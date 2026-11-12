@@ -40,7 +40,7 @@ const none = { targets: [] };
 const m = model.methods;
 
 Deno.test("list stores every target", async () => {
-  const h = harness({ [SEARCH]: found });
+  using h = harness({ [SEARCH]: found });
   await m.list.execute({}, h.context);
   assertEquals(h.written().map((w) => [w.spec, w.name]), [[
     "target",
@@ -50,19 +50,19 @@ Deno.test("list stores every target", async () => {
 });
 
 Deno.test("list fails on an API failure and writes nothing", async () => {
-  const h = harness({ [SEARCH]: fail(403) });
+  using h = harness({ [SEARCH]: fail(403) });
   await assertRejects(() => m.list.execute({}, h.context), Error, "HTTP 403");
   assertEquals(h.written(), []);
 });
 
 Deno.test("get resolves a target by name and stores it", async () => {
-  const h = harness({ [SEARCH]: found });
+  using h = harness({ [SEARCH]: found });
   await m.get.execute({ target: "hook" }, h.context);
   assertEquals(h.written()[0].data.id, "t1");
 });
 
 Deno.test("get refuses a target that is neither a name nor an id", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: none,
     "GET /v2/actions/targets/nope": fail(404),
   });
@@ -75,7 +75,7 @@ Deno.test("get refuses a target that is neither a name nor an id", async () => {
 });
 
 Deno.test("ensure creates a missing target and stores its signing key once", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: none,
     "POST /v2/actions/targets": { id: "t1", signingKey: "sk-1" },
     "GET /v2/actions/targets/t1": { target: T },
@@ -96,7 +96,7 @@ Deno.test("ensure creates a missing target and stores its signing key once", asy
 });
 
 Deno.test("ensure explains an endpoint Zitadel will not call", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: none,
     "POST /v2/actions/targets": fail(400, "Errors.DeniedURL"),
   });
@@ -116,7 +116,7 @@ Deno.test("ensure explains an endpoint Zitadel will not call", async () => {
 });
 
 Deno.test("delete removes a target whose name is confirmed", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     "DELETE /v2/actions/targets/t1": {},
   });
@@ -129,7 +129,7 @@ Deno.test("delete removes a target whose name is confirmed", async () => {
 });
 
 Deno.test("delete refuses a confirm that is not the live name", async () => {
-  const h = harness({ [SEARCH]: found });
+  using h = harness({ [SEARCH]: found });
   await assertRejects(
     () =>
       m.delete.execute(
@@ -144,7 +144,7 @@ Deno.test("delete refuses a confirm that is not the live name", async () => {
 });
 
 Deno.test("delete with dryRun only reports", async () => {
-  const h = harness({ [SEARCH]: found });
+  using h = harness({ [SEARCH]: found });
   await m.delete.execute(
     m.delete.arguments.parse({ target: "hook", confirm: "hook", dryRun: true }),
     h.context,
@@ -157,13 +157,13 @@ const EXEC = "POST /v2/actions/executions/search";
 const COND = { event: { event: "user.human.added" } };
 
 Deno.test("executionList stores each execution by its condition", async () => {
-  const h = harness({ [EXEC]: { executions: [{ condition: COND }] } });
+  using h = harness({ [EXEC]: { executions: [{ condition: COND }] } });
   await m.executionList.execute({}, h.context);
   assertEquals(h.written()[0].spec, "execution");
 });
 
 Deno.test("executionList fails on an API failure", async () => {
-  const h = harness({ [EXEC]: fail(500) });
+  using h = harness({ [EXEC]: fail(500) });
   await assertRejects(
     () => m.executionList.execute({}, h.context),
     Error,
@@ -173,7 +173,7 @@ Deno.test("executionList fails on an API failure", async () => {
 });
 
 Deno.test("executionSet binds a condition to the resolved targets", async () => {
-  const h = harness({ [SEARCH]: found, "PUT /v2/actions/executions": {} });
+  using h = harness({ [SEARCH]: found, "PUT /v2/actions/executions": {} });
   await m.executionSet.execute(
     m.executionSet.arguments.parse({
       event: "user.human.added",
@@ -186,7 +186,7 @@ Deno.test("executionSet binds a condition to the resolved targets", async () => 
 });
 
 Deno.test("executionSet refuses a call with no condition", async () => {
-  const h = harness({});
+  using h = harness({});
   await assertRejects(
     () =>
       m.executionSet.execute(
@@ -200,7 +200,7 @@ Deno.test("executionSet refuses a call with no condition", async () => {
 });
 
 Deno.test("executionRemove clears a condition's targets", async () => {
-  const h = harness({ "PUT /v2/actions/executions": {} });
+  using h = harness({ "PUT /v2/actions/executions": {} });
   await m.executionRemove.execute(
     m.executionRemove.arguments.parse({ event: "user.human.added" }),
     h.context,
@@ -211,7 +211,7 @@ Deno.test("executionRemove clears a condition's targets", async () => {
 });
 
 Deno.test("executionRemove with dryRun calls nothing", async () => {
-  const h = harness({});
+  using h = harness({});
   await m.executionRemove.execute(
     m.executionRemove.arguments.parse({
       event: "user.human.added",
@@ -224,7 +224,7 @@ Deno.test("executionRemove with dryRun calls nothing", async () => {
 });
 
 Deno.test("catalog stores services, methods and functions", async () => {
-  const h = harness({
+  using h = harness({
     "GET /v2/actions/executions/services": { services: ["s"] },
     "GET /v2/actions/executions/methods": { methods: ["m"] },
     "GET /v2/actions/executions/functions": { functions: ["f"] },
@@ -238,7 +238,7 @@ Deno.test("catalog stores services, methods and functions", async () => {
 });
 
 Deno.test("catalog fails when one part is refused, and writes nothing", async () => {
-  const h = harness({
+  using h = harness({
     "GET /v2/actions/executions/services": { services: ["s"] },
     "GET /v2/actions/executions/methods": fail(403),
   });
@@ -249,7 +249,7 @@ Deno.test("catalog fails when one part is refused, and writes nothing", async ()
 const KEYS = "POST /v2/actions/targets/t1/publickeys/search";
 
 Deno.test("keyList stores a target's public keys", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     [KEYS]: { publicKeys: [{ id: "k1", state: "PUBLIC_KEY_STATE_ACTIVE" }] },
   });
@@ -259,7 +259,7 @@ Deno.test("keyList stores a target's public keys", async () => {
 });
 
 Deno.test("keyList fails on an unknown target", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: none,
     "GET /v2/actions/targets/x": fail(404),
   });
@@ -271,7 +271,7 @@ Deno.test("keyList fails on an unknown target", async () => {
 });
 
 Deno.test("keyAdd adds a public key and stores its id", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     "POST /v2/actions/targets/t1/publickeys": { id: "k2" },
   });
@@ -281,7 +281,7 @@ Deno.test("keyAdd adds a public key and stores its id", async () => {
 });
 
 Deno.test("keyAdd fails when the key is refused", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     "POST /v2/actions/targets/t1/publickeys": fail(400, "bad key"),
   });
@@ -294,7 +294,7 @@ Deno.test("keyAdd fails when the key is refused", async () => {
 });
 
 Deno.test("keySetState deactivates a key", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     "POST /v2/actions/targets/t1/publickeys/k1/deactivate": {},
   });
@@ -306,7 +306,7 @@ Deno.test("keySetState deactivates a key", async () => {
 });
 
 Deno.test("keySetState fails on an API failure", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     "POST /v2/actions/targets/t1/publickeys/k1/activate": fail(404),
   });
@@ -323,7 +323,7 @@ Deno.test("keySetState fails on an API failure", async () => {
 });
 
 Deno.test("keyRemove removes a key that belongs to the target", async () => {
-  const h = harness({
+  using h = harness({
     [SEARCH]: found,
     [KEYS]: { publicKeys: [{ id: "k1" }] },
     "DELETE /v2/actions/targets/t1/publickeys/k1": {},
@@ -337,7 +337,7 @@ Deno.test("keyRemove removes a key that belongs to the target", async () => {
 });
 
 Deno.test("keyRemove leaves a key the target does not have alone", async () => {
-  const h = harness({ [SEARCH]: found, [KEYS]: { publicKeys: [] } });
+  using h = harness({ [SEARCH]: found, [KEYS]: { publicKeys: [] } });
   await m.keyRemove.execute(
     m.keyRemove.arguments.parse({ target: "hook", keyId: "k9" }),
     h.context,

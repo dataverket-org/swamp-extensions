@@ -61,7 +61,7 @@ function kindRoutes(query: string): Record<string, Json> {
 }
 
 Deno.test("read stores each kind, the instance-wide settings and the IdPs", async () => {
-  const h = harness({
+  using h = harness({
     ...kindRoutes("?ctx.instance=true"),
     "POST /admin/v1/secretgenerators/_search": {
       result: [{
@@ -89,7 +89,7 @@ Deno.test("read stores each kind, the instance-wide settings and the IdPs", asyn
 });
 
 Deno.test("read warns and goes on when the key may not read the instance", async () => {
-  const h = harness({
+  using h = harness({
     ...kindRoutes("?ctx.orgId=42"),
     "POST /admin/v1/secretgenerators/_search": fail(403),
   });
@@ -101,7 +101,7 @@ Deno.test("read warns and goes on when the key may not read the instance", async
 });
 
 Deno.test("read fails on any other API failure", async () => {
-  const h = harness({ "GET /v2/settings/login": fail(500) });
+  using h = harness({ "GET /v2/settings/login": fail(500) });
   await assertRejects(
     () => m.read.execute(m.read.arguments.parse({}), h.context),
     Error,
@@ -116,7 +116,7 @@ const SECURITY_ARGS = {
 };
 
 Deno.test("securitySet writes and stores what is in force after", async () => {
-  const h = harness({
+  using h = harness({
     "PUT /v2/policies/security": {},
     "GET /v2/settings/security": { settings: { enableImpersonation: true } },
   });
@@ -133,7 +133,7 @@ Deno.test("securitySet writes and stores what is in force after", async () => {
 });
 
 Deno.test("securitySet reads 'No changes' as unchanged, and fails on others", async () => {
-  const same = harness({
+  using same = harness({
     "PUT /v2/policies/security": fail(400, "No changes"),
     "GET /v2/settings/security": { settings: {} },
   });
@@ -142,7 +142,7 @@ Deno.test("securitySet reads 'No changes' as unchanged, and fails on others", as
     same.context,
   );
   assertEquals(same.written()[0].data.action, "unchanged");
-  const h = harness({ "PUT /v2/policies/security": fail(403) });
+  using h = harness({ "PUT /v2/policies/security": fail(403) });
   await assertRejects(
     () =>
       m.securitySet.execute(
@@ -165,7 +165,7 @@ Deno.test("secretGeneratorSet changes only the expiry and keeps the character se
     expiry: "3600s",
     includeDigits: true,
   };
-  const h = harness({
+  using h = harness({
     [`GET ${GEN}`]: [
       { secretGenerator: current },
       { secretGenerator: { ...current, expiry: "172800s" } },
@@ -192,7 +192,7 @@ Deno.test("secretGeneratorSet changes only the expiry and keeps the character se
 });
 
 Deno.test("secretGeneratorSet refuses a call that changes nothing", async () => {
-  const h = harness({});
+  using h = harness({});
   await assertRejects(
     () =>
       m.secretGeneratorSet.execute(
@@ -206,7 +206,7 @@ Deno.test("secretGeneratorSet refuses a call that changes nothing", async () => 
 });
 
 Deno.test("loginTranslationSet sets an organization's translations", async () => {
-  const h = harness({ "PUT /v2/settings/hosted_login_translation": {} });
+  using h = harness({ "PUT /v2/settings/hosted_login_translation": {} });
   await m.loginTranslationSet.execute(
     m.loginTranslationSet.arguments.parse({
       locale: "nb",
@@ -224,7 +224,7 @@ Deno.test("loginTranslationSet sets an organization's translations", async () =>
 });
 
 Deno.test("loginTranslationSet refuses invalid JSON and a missing scope", async () => {
-  const h = harness({});
+  using h = harness({});
   await assertRejects(
     () =>
       m.loginTranslationSet.execute(
