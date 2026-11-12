@@ -18,8 +18,9 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
 
@@ -88,7 +89,7 @@ export async function repoUnitsEnsure(
   if (r.status === 404) {
     throw new Error(`repository ${a.owner}/${a.name} does not exist`);
   }
-  if (r.status >= 400) {
+  if (isFailure(r.status)) {
     throw new Error(
       `Forgejo API GET ${path} -> HTTP ${r.status}: ${
         typeof r.body.message === "string"
@@ -131,6 +132,7 @@ export async function repoUnitsEnsure(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -163,7 +165,7 @@ export const extension = {
       execute: async (args: RepoUnitsEnsureArgsT, context: Ctx) => {
         const a = RepoUnitsEnsureArgs.parse(args);
         const info = await repoUnitsEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info(

@@ -20,9 +20,13 @@ import {
   type ApiCall,
   call,
   type Caller,
+  callerOf,
   canonicalAddress,
-  fetchCaller,
+  failedMigrationError,
+  failure,
   type GlobalArgs,
+  isFailedMigration,
+  isFailure,
   redactToken,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
@@ -153,8 +157,8 @@ export async function pullMirrorEnsure(
     }
     return shape(a, created.body, [], "created");
   }
-  if (current.status >= 400) {
-    throw new Error(`Forgejo API GET ${path} -> HTTP ${current.status}`);
+  if (isFailure(current.status)) {
+    throw failure({ method: "GET", path }, current);
   }
   const r = current.body;
   if (r.mirror !== true) {
@@ -166,6 +170,7 @@ export async function pullMirrorEnsure(
         : `${a.owner}/${a.name} exists and is not a mirror; refusing to touch it.`,
     );
   }
+  if (isFailedMigration(r)) throw failedMigrationError(a.owner, a.name);
   const source = String(r.original_url ?? "");
   if (source && canonicalAddress(source) !== canonicalAddress(a.cloneAddr)) {
     throw new Error(
@@ -200,6 +205,7 @@ export async function pullMirrorEnsure(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -237,7 +243,7 @@ export const extension = {
           source: canonicalAddress(a.cloneAddr),
         });
         const info = await pullMirrorEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("Pull mirror {repo}: {action} {changed}", {

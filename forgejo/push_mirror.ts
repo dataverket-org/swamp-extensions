@@ -19,9 +19,11 @@ import {
   type ApiCall,
   call,
   type Caller,
+  callerOf,
   canonicalAddress,
-  fetchCaller,
+  failure,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
 
@@ -264,12 +266,11 @@ async function ownerRepos(api: Caller, owner: string): Promise<string[]> {
         path: `/api/v1/users/${enc(owner)}/repos?limit=50&page=${page}`,
       });
       items = Array.isArray(u.body) ? u.body : [];
-    } else if (r.status >= 400) {
-      await call(api, {
+    } else if (isFailure(r.status)) {
+      throw failure({
         method: "GET",
-        path: `/api/v1/orgs/${enc(owner)}/repos`,
-      });
-      items = [];
+        path: `/api/v1/orgs/${enc(owner)}/repos?limit=50&page=${page}`,
+      }, r);
     } else {
       items = Array.isArray(r.body) ? r.body : [];
     }
@@ -298,6 +299,7 @@ export async function pushMirrorList(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -385,7 +387,7 @@ export const extension = {
           remote: canonicalAddress(a.remoteAddress),
         });
         const info = await pushMirrorEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
           (message) =>
             context.logger.warning(
@@ -419,7 +421,7 @@ export const extension = {
       ) => {
         const a = PushMirrorListArgs.parse(args);
         const mirrors = await pushMirrorList(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         const failing = mirrors.filter((m) => m.lastError !== "");
@@ -481,7 +483,7 @@ export const extension = {
           remote: canonicalAddress(a.remoteAddress),
         });
         const info = await pushMirrorDelete(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("Push mirror {repo} -> {remote}: {action}", {
@@ -526,7 +528,7 @@ export const extension = {
           repo: `${a.owner}/${a.name}`,
         });
         await pushMirrorSyncNow(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         return { dataHandles: [] };

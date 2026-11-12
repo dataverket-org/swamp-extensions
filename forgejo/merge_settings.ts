@@ -30,8 +30,9 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, writeRecord } from "./names.ts";
 
@@ -189,7 +190,7 @@ export async function repoMergeSettingsEnsure(
   if (r.status === 404) {
     throw new Error(`repository ${full} does not exist`);
   }
-  if (r.status >= 400) throw forgeError("GET", path, r);
+  if (isFailure(r.status)) throw forgeError("GET", path, r);
   const hasPullRequests = r.body.has_pull_requests === true;
   const have = settingsOf(r.body);
   const given = SETTINGS.some(([arg]) => a[arg] !== undefined);
@@ -251,6 +252,7 @@ export async function repoMergeSettingsEnsure(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -285,7 +287,7 @@ export const extension = {
       execute: async (args: RepoMergeSettingsEnsureArgsT, context: Ctx) => {
         const a = RepoMergeSettingsEnsureArgs.parse(args);
         const info = await repoMergeSettingsEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info(

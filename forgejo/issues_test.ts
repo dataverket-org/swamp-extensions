@@ -1,331 +1,290 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import {
-  type ApiCall,
-  type Caller,
-  issueEnsure,
-  issueLabelsEnsure,
-  listIssues,
-} from "./issues.ts";
+import { harness, writes } from "./stub_test.ts";
+import { extension as issueExtension } from "./issues.ts";
 
-const PATH = "/api/v1/repos/acme/tool/issues";
-
-interface Existing {
-  number: number;
-  title: string;
-  state: "open" | "closed";
-}
-
-/**
- * A forge with the given issues. A search answers with every issue whose
- * title contains the query, the way Forgejo's `q` does; pages are 50 long.
- * A create answers with the next number, or with `createStatus` when set.
- */
-function fakeApi(
-  existing: Existing[],
-  createStatus = 201,
-): { api: Caller; calls: ApiCall[] } {
-  const calls: ApiCall[] = [];
-  const issueLabels: Record<number, number[]> = { 7: [3] };
-  let next = existing.reduce((m, i) => Math.max(m, i.number), 0) + 1;
-  const api: Caller = (c) => {
-    calls.push(c);
-    const [path, query = ""] = c.path.split("?");
-    if (c.method === "GET" && path === "/api/v1/orgs/acme") {
-      return Promise.resolve({ status: 200, body: { username: "acme" } });
-    }
-    if (c.method === "GET" && path === "/api/v1/orgs/acme/labels") {
-      return Promise.resolve({
-        status: 200,
-        body: [{
-          id: 11,
-          name: "llm-generated",
-          color: "6f42c1",
-        }] as unknown as Record<string, unknown>,
-      });
-    }
-    if (c.method === "GET" && path === "/api/v1/repos/acme/tool/labels") {
-      return Promise.resolve({
-        status: 200,
-        body: [{ id: 3, name: "bug", color: "ee0701" }] as unknown as Record<
-          string,
-          unknown
-        >,
-      });
-    }
-    const m = path.match(
-      /^\/api\/v1\/repos\/acme\/tool\/issues\/(\d+)\/labels$/,
+// ───── issue_state_ensure: its arguments; its behaviour is tested live ─────
+Deno.test("issue_state_ensure's arguments: 1 to 20 issues, open or closed, comment empty by default", () => {
+  const args = issueExtension.methods[0].issue_state_ensure.arguments;
+  const one = { number: 1, state: "closed" };
+  assertEquals(
+    args.parse({ owner: "a", name: "b", issues: [one] }).issues[0].comment,
+    "",
+  );
+  for (
+    const issues of [
+      [],
+      Array.from({ length: 21 }, (_, i) => ({ ...one, number: i + 1 })),
+      [{ number: 1, state: "merged" }],
+      [{ number: 0, state: "open" }],
+    ]
+  ) {
+    assertEquals(
+      args.safeParse({ owner: "a", name: "b", issues }).success,
+      false,
     );
-    if (m) {
-      const n = Number(m[1]);
-      issueLabels[n] ??= [];
-      const names: Record<number, string> = { 3: "bug", 11: "llm-generated" };
-      if (c.method === "GET") {
-        return Promise.resolve({
-          status: 200,
-          body: issueLabels[n].map((x) => ({
-            id: x,
-            name: names[x],
-          })) as unknown as Record<string, unknown>,
-        });
-      }
-      const b = c.body as { labels: number[] };
-      if (c.method === "POST") {
-        issueLabels[n] = [...new Set([...issueLabels[n], ...b.labels])];
-      }
-      if (c.method === "PUT") issueLabels[n] = [...b.labels];
-      return Promise.resolve({ status: 200, body: {} });
-    }
-    if (path !== PATH) {
-      return Promise.resolve({ status: 404, body: { message: "not found" } });
-    }
-    if (c.method === "GET") {
-      const p = new URLSearchParams(query);
-      const q = p.get("q") ?? "";
-      const page = Number(p.get("page") ?? "1");
-      const state = p.get("state") ?? "open";
-      const hits = existing
-        .filter((i) => state === "all" || i.state === state)
-        .filter((i) => i.title.includes(q))
-        .map((i) => ({
-          ...i,
-          html_url: `https://forge.example/acme/tool/issues/${i.number}`,
-        }));
-      const body = hits.slice((page - 1) * 50, page * 50);
-      return Promise.resolve({
-        status: 200,
-        body: body as unknown as Record<string, unknown>,
-      });
-    }
-    if (c.method === "POST") {
-      if (createStatus >= 400) {
-        return Promise.resolve({
-          status: createStatus,
-          body: { message: "issues are disabled" },
-        });
-      }
-      const b = c.body as { title: string; labels?: number[] };
-      const number = next++;
-      existing.push({ number, title: b.title, state: "open" });
-      const names: Record<number, string> = { 3: "bug", 11: "llm-generated" };
-      return Promise.resolve({
-        status: createStatus,
-        body: {
-          number,
-          title: b.title,
-          state: "open",
-          html_url: `https://forge.example/acme/tool/issues/${number}`,
-          labels: (b.labels ?? []).map((id) => ({ id, name: names[id] })),
-        },
-      });
-    }
-    return Promise.resolve({ status: 405, body: {} });
-  };
-  return { api, calls };
-}
+  }
+});
 
-const args = (
-  issues: { title: string; body?: string; labels?: string[] }[],
+// ───── the methods, through createModelTestContext with a stub client ─────
+
+const M = issueExtension.methods[0];
+const I = "/api/v1/repos/acme/tool/issues";
+const search = (q: string) =>
+  `GET ${I}?state=all&type=issues&limit=50&page=1&q=${encodeURIComponent(q)}`;
+const NEWEST = `GET ${I}?state=all&type=issues&sort=newest&limit=50&page=1`;
+const issue = (
+  n: number,
+  title: string,
+  extra: Record<string, unknown> = {},
 ) => ({
-  owner: "acme",
-  name: "tool",
-  issues: issues.map((i) => ({
-    title: i.title,
-    body: i.body ?? "",
-    labels: i.labels ?? [],
-  })),
+  number: n,
+  title,
+  state: "open",
+  html_url: `https://forge.example.com/acme/tool/issues/${n}`,
+  labels: [],
+  ...extra,
 });
 
-Deno.test("an issue with a new title is created with its body", async () => {
-  const { api, calls } = fakeApi([]);
-  const out = await issueEnsure(
-    api,
-    args([{ title: "Log every call", body: "Because." }]),
+Deno.test("issue_ensure files an issue the search and the newest issues do not have", async () => {
+  const h = harness({
+    [search("Log every call")]: {
+      status: 200,
+      body: [issue(3, "Log every call and more")],
+    },
+    [NEWEST]: { status: 200, body: [] },
+    [`POST ${I}`]: { status: 201, body: issue(4, "Log every call") },
+  });
+  await M.issue_ensure.execute(
+    {
+      owner: "acme",
+      name: "tool",
+      issues: [{ title: "Log every call", body: "b", labels: [] }],
+    },
+    h.context,
   );
-  assertEquals(out.length, 1);
-  assertEquals(out[0].action, "created");
-  assertEquals(out[0].number, 1);
-  assertEquals(out[0].url, "https://forge.example/acme/tool/issues/1");
-  const post = calls.find((c) => c.method === "POST");
-  assertEquals(post?.body, {
+  assertEquals(writes(h.calls).map((c) => c.body), [{
     title: "Log every call",
-    body: "Because.",
+    body: "b",
     labels: [],
+  }]);
+  assertEquals(h.written().map((w) => [w.spec, w.name, w.data.action]), [[
+    "issue",
+    "issue-acme-tool-4",
+    "created",
+  ]]);
+});
+
+Deno.test("issue_ensure finds an issue filed seconds ago among the newest, the search not yet", async () => {
+  const h = harness({
+    [search("Race")]: { status: 200, body: [] },
+    [NEWEST]: { status: 200, body: [issue(9, "Race", { state: "closed" })] },
   });
-});
-
-Deno.test("an existing issue of the exact title is left alone, even when closed", async () => {
-  const { api, calls } = fakeApi([{
-    number: 7,
-    title: "Log every call",
-    state: "closed",
-  }]);
-  const out = await issueEnsure(api, args([{ title: "Log every call" }]));
-  assertEquals(out[0].action, "unchanged");
-  assertEquals(out[0].number, 7);
-  assertEquals(out[0].state, "closed");
-  assertEquals(calls.map((c) => c.method), ["GET"]);
-});
-
-Deno.test("a search hit whose title merely contains the new one does not count", async () => {
-  const { api } = fakeApi([{
-    number: 3,
-    title: "Log every call and more",
-    state: "open",
-  }]);
-  const out = await issueEnsure(api, args([{ title: "Log every call" }]));
-  assertEquals(out[0].action, "created");
-  assertEquals(out[0].number, 4);
-});
-
-Deno.test("several issues in one call: each created or found on its own", async () => {
-  const { api, calls } = fakeApi([{ number: 1, title: "B", state: "open" }]);
-  const out = await issueEnsure(
-    api,
-    args([{ title: "A" }, { title: "B" }, { title: "C" }]),
-  );
-  assertEquals(out.map((i) => i.action), ["created", "unchanged", "created"]);
-  assertEquals(calls.filter((c) => c.method === "POST").length, 2);
-});
-
-Deno.test("the same title twice in one call is refused before any call", async () => {
-  const { api, calls } = fakeApi([]);
-  await assertRejects(
-    () => issueEnsure(api, args([{ title: "A" }, { title: "A" }])),
-    Error,
-    "same title",
-  );
-  assertEquals(calls.length, 0);
-});
-
-Deno.test("a blank title is refused before any call", async () => {
-  const { api, calls } = fakeApi([]);
-  await assertRejects(() => issueEnsure(api, args([{ title: "   " }])));
-  assertEquals(calls.length, 0);
-});
-
-Deno.test("an empty list is refused", async () => {
-  const { api } = fakeApi([]);
-  await assertRejects(() => issueEnsure(api, args([])));
-});
-
-Deno.test("the forge's refusal of a create is the error, with its message", async () => {
-  const { api } = fakeApi([], 403);
-  await assertRejects(
-    () => issueEnsure(api, args([{ title: "A" }])),
-    Error,
-    "HTTP 403: issues are disabled",
-  );
-});
-
-Deno.test("a match past the first page of search results is still found", async () => {
-  const existing: Existing[] = Array.from({ length: 50 }, (_, i) => ({
-    number: i + 1,
-    title: `Needle ${i}`,
-    state: "open" as const,
-  }));
-  existing.push({ number: 99, title: "Needle", state: "open" });
-  const { api, calls } = fakeApi(existing);
-  const out = await issueEnsure(api, args([{ title: "Needle" }]));
-  assertEquals(out[0].action, "unchanged");
-  assertEquals(out[0].number, 99);
-  assertEquals(calls.filter((c) => c.method === "GET").length, 2);
-});
-
-Deno.test("listIssues follows pages and filters by state", async () => {
-  const existing: Existing[] = Array.from({ length: 60 }, (_, i) => ({
-    number: i + 1,
-    title: `Issue ${i}`,
-    state: i % 2 === 0 ? "open" as const : "closed" as const,
-  }));
-  const { api } = fakeApi(existing);
-  assertEquals((await listIssues(api, "acme", "tool", "all")).length, 60);
-  assertEquals((await listIssues(api, "acme", "tool", "open")).length, 30);
-});
-
-Deno.test("an answer that is not a list of issues yields nothing rather than failing", async () => {
-  const api: Caller = () =>
-    Promise.resolve({ status: 200, body: { message: "odd" } });
-  assertEquals(await listIssues(api, "acme", "tool", "open"), []);
-});
-
-Deno.test("labels are resolved by name across the repository and its org, and sent as ids", async () => {
-  const { api, calls } = fakeApi([]);
-  const out = await issueEnsure(
-    api,
-    args([{ title: "A", labels: ["llm-generated", "bug"] }]),
-  );
-  assertEquals(out[0].labels, ["llm-generated", "bug"]);
-  const post = calls.find((c) => c.method === "POST");
-  assertEquals((post?.body as { labels: number[] }).labels, [11, 3]);
-});
-
-Deno.test("an unknown label name is refused before any issue is filed", async () => {
-  const { api, calls } = fakeApi([]);
-  await assertRejects(
-    () => issueEnsure(api, args([{ title: "A", labels: ["nope"] }])),
-    Error,
-    '"nope"',
-  );
-  assertEquals(calls.filter((c) => c.method === "POST").length, 0);
-});
-
-Deno.test("issue_labels_ensure adds the missing label and keeps the others; a PR number works the same", async () => {
-  const { api, calls } = fakeApi([]);
-  const out = await issueLabelsEnsure(api, {
+  await M.issue_ensure.execute({
     owner: "acme",
     name: "tool",
-    number: 7,
-    labels: ["llm-generated"],
-    exact: false,
-  });
-  assertEquals(out.action, "updated");
-  assertEquals(out.added, ["llm-generated"]);
-  assertEquals(out.labels, ["bug", "llm-generated"]);
-  const post = calls.find((c) => c.method === "POST");
-  assertEquals(post?.path, "/api/v1/repos/acme/tool/issues/7/labels");
-  assertEquals(post?.body, { labels: [11] });
+    issues: [{ title: "Race", body: "", labels: [] }],
+  }, h.context);
+  assertEquals(writes(h.calls), []);
+  assertEquals([h.written()[0].data.action, h.written()[0].data.state], [
+    "unchanged",
+    "closed",
+  ]);
 });
 
-Deno.test("issue_labels_ensure is unchanged when the label is there", async () => {
-  const { api, calls } = fakeApi([]);
-  const out = await issueLabelsEnsure(api, {
+Deno.test("issue_ensure refuses a label that is nowhere, before filing anything", async () => {
+  const h = harness({
+    ["GET /api/v1/repos/acme/tool/labels?limit=50&page=1"]: {
+      status: 200,
+      body: [],
+    },
+    ["GET /api/v1/orgs/acme"]: { status: 404 },
+  });
+  await assertRejects(
+    () =>
+      M.issue_ensure.execute({
+        owner: "acme",
+        name: "tool",
+        issues: [{ title: "x", body: "", labels: ["nope"] }],
+      }, h.context),
+    Error,
+    'label(s) "nope" exist neither on acme/tool nor on acme',
+  );
+  assertEquals([writes(h.calls), h.written()], [[], []]);
+});
+
+Deno.test("issue_labels_ensure adds a label by name and records the set", async () => {
+  const h = harness({
+    ["GET /api/v1/repos/acme/tool/labels?limit=50&page=1"]: {
+      status: 200,
+      body: [{ id: 3, name: "bug" }],
+    },
+    ["GET /api/v1/orgs/acme"]: { status: 404 },
+    [`GET ${I}/5/labels`]: { status: 200, body: [] },
+    [`POST ${I}/5/labels`]: { status: 200, body: [{ id: 3, name: "bug" }] },
+  });
+  await M.issue_labels_ensure.execute({
     owner: "acme",
     name: "tool",
-    number: 7,
+    number: 5,
     labels: ["bug"],
     exact: false,
-  });
-  assertEquals(out.action, "unchanged");
-  assertEquals(calls.filter((c) => c.method !== "GET").length, 0);
-});
-
-Deno.test("issue_labels_ensure exact replaces the set", async () => {
-  const { api, calls } = fakeApi([]);
-  const out = await issueLabelsEnsure(api, {
-    owner: "acme",
-    name: "tool",
-    number: 7,
-    labels: ["llm-generated"],
-    exact: true,
-  });
-  assertEquals(out.removed, ["bug"]);
-  assertEquals(out.labels, ["llm-generated"]);
-  assertEquals(calls.find((c) => c.method === "PUT")?.body, { labels: [11] });
+  }, h.context);
+  assertEquals(writes(h.calls).map((c) => c.body), [{ labels: [3] }]);
+  const w = h.written()[0];
+  assertEquals([w.name, w.data.action, w.data.added], [
+    "issue-labels-acme-tool-5",
+    "updated",
+    ["bug"],
+  ]);
 });
 
 Deno.test("issue_labels_ensure refuses an unknown label before touching the issue", async () => {
-  const { api, calls } = fakeApi([]);
+  const h = harness({
+    ["GET /api/v1/repos/acme/tool/labels?limit=50&page=1"]: {
+      status: 200,
+      body: [],
+    },
+    ["GET /api/v1/orgs/acme"]: { status: 404 },
+  });
   await assertRejects(
     () =>
-      issueLabelsEnsure(api, {
+      M.issue_labels_ensure.execute({
         owner: "acme",
         name: "tool",
-        number: 7,
-        labels: ["nope"],
+        number: 5,
+        labels: ["bug"],
         exact: false,
-      }),
+      }, h.context),
     Error,
-    '"nope"',
+    "exist neither",
   );
-  assertEquals(calls.filter((c) => c.path.includes("/issues/7/")).length, 0);
+  assertEquals(h.calls.some((c) => c.path.includes("/issues/")), false);
+});
+
+Deno.test("issue_list records the issues of a state", async () => {
+  const h = harness({
+    [`GET ${I}?state=open&type=issues&limit=50&page=1`]: {
+      status: 200,
+      body: [issue(1, "a"), issue(2, "b")],
+    },
+  });
+  await M.issue_list.execute(
+    { owner: "acme", name: "tool", state: "open" },
+    h.context,
+  );
+  assertEquals(h.written().map((w) => [w.name, w.data.action]), [[
+    "issue-acme-tool-1",
+    "listed",
+  ], ["issue-acme-tool-2", "listed"]]);
+});
+
+Deno.test("issue_list passes on the forge's refusal", async () => {
+  const h = harness({
+    [`GET ${I}?state=open&type=issues&limit=50&page=1`]: {
+      status: 404,
+      body: { message: "repo not found" },
+    },
+  });
+  await assertRejects(
+    () =>
+      M.issue_list.execute(
+        { owner: "acme", name: "tool", state: "open" },
+        h.context,
+      ),
+    Error,
+    "HTTP 404: repo not found",
+  );
+});
+
+Deno.test("issue_state_ensure comments, then closes; one already closed gets nothing", async () => {
+  const h = harness({
+    [`GET ${I}/1`]: { status: 200, body: issue(1, "a") },
+    [`GET ${I}/2`]: { status: 200, body: issue(2, "b", { state: "closed" }) },
+    [`POST ${I}/1/comments`]: { status: 201, body: { id: 7 } },
+    [`PATCH ${I}/1`]: { status: 201, body: issue(1, "a", { state: "closed" }) },
+  });
+  await M.issue_state_ensure.execute(
+    {
+      owner: "acme",
+      name: "tool",
+      issues: [{ number: 1, state: "closed", comment: "Done." }, {
+        number: 2,
+        state: "closed",
+        comment: "never",
+      }],
+    },
+    h.context,
+  );
+  assertEquals(writes(h.calls).map((c) => [c.method, c.body]), [["POST", {
+    body: "Done.",
+  }], ["PATCH", { state: "closed" }]]);
+  assertEquals(h.written().map((w) => [w.name, w.data.action]), [
+    ["issue-state-acme-tool-1", "updated"],
+    ["issue-state-acme-tool-2", "unchanged"],
+  ]);
+});
+
+Deno.test("issue_state_ensure refuses a pull request in the list before writing anything", async () => {
+  const h = harness({
+    [`GET ${I}/1`]: { status: 200, body: issue(1, "a") },
+    [`GET ${I}/2`]: { status: 200, body: issue(2, "pr", { pull_request: {} }) },
+  });
+  await assertRejects(
+    () =>
+      M.issue_state_ensure.execute(
+        {
+          owner: "acme",
+          name: "tool",
+          issues: [{ number: 1, state: "closed", comment: "x" }, {
+            number: 2,
+            state: "closed",
+            comment: "",
+          }],
+        },
+        h.context,
+      ),
+    Error,
+    "#2 of acme/tool is a pull request, not an issue",
+  );
+  assertEquals([writes(h.calls), h.written()], [[], []]);
+});
+
+Deno.test("issue_body_ensure rewrites a differing text and records no text", async () => {
+  const h = harness({
+    [`GET ${I}/1`]: { status: 200, body: issue(1, "a", { body: "old" }) },
+    [`PATCH ${I}/1`]: {
+      status: 201,
+      body: issue(1, "a", { body: "NEW-TEXT" }),
+    },
+  });
+  await M.issue_body_ensure.execute({
+    owner: "acme",
+    name: "tool",
+    number: 1,
+    body: "NEW-TEXT",
+  }, h.context);
+  assertEquals(writes(h.calls).map((c) => c.body), [{ body: "NEW-TEXT" }]);
+  assertEquals([h.written()[0].name, h.written()[0].data.action], [
+    "issue-body-acme-tool-1",
+    "updated",
+  ]);
+  assertEquals(JSON.stringify(h.written()).includes("NEW-TEXT"), false);
+});
+
+Deno.test("issue_body_ensure refuses a pull request, writing nothing", async () => {
+  const h = harness({
+    [`GET ${I}/2`]: { status: 200, body: issue(2, "pr", { pull_request: {} }) },
+  });
+  await assertRejects(
+    () =>
+      M.issue_body_ensure.execute({
+        owner: "acme",
+        name: "tool",
+        number: 2,
+        body: "x",
+      }, h.context),
+    Error,
+    "is a pull request",
+  );
+  assertEquals(writes(h.calls), []);
 });

@@ -1,13 +1,22 @@
 import { z } from "npm:zod@4";
-// Type-only imports — erased at compile time, never bundled. They anchor the
+// Type-only imports, erased at compile time and never bundled. They anchor the
 // `satisfies ModelDefinition<typeof GlobalArgs>` clause so each method's
-// `execute` is contextually typed without an explicit `any`.
+// `execute` is contextually typed without an explicit `any` (swamp skill,
+// typing.md); the same package and version as the unit tests.
 import type {
   DataHandle,
   MethodContext,
   ModelDefinition,
-} from "jsr:@systeminit/swamp-testing@0.20260521.16";
-import { redactToken } from "./api.ts";
+} from "jsr:@swamp-club/swamp-testing@0.20260917.35";
+import {
+  failedMigrationError,
+  isFailedMigration,
+  isFailure,
+  isRedirect,
+  redactToken,
+  redirectMessage,
+  unreachable,
+} from "./api.ts";
 import { dataName, legacyName, repoName, slug, writeRecord } from "./names.ts";
 
 /**
@@ -229,8 +238,8 @@ const MirrorInfo = z.object({
   ),
   neverSynced: z.boolean().describe("True if the mirror has never synced."),
   stale: z.boolean().describe(
-    "True when the last sync is older than staleFactor × interval (or the " +
-      "mirror never synced while periodic sync is enabled).",
+    "True when the last sync is older than staleFactor × interval, or the " +
+      "mirror never synced.",
   ),
   action: Action,
   timestamp: z.string(),
@@ -315,7 +324,7 @@ export interface ApiResult {
 }
 
 /**
- * The authenticated-call seam the methods use — swappable for unit tests. The
+ * The authenticated-call seam the methods use. The
  * global args are typed loosely as {@link Json} so this EXPORTED type stays
  * "fast-check" clean (referencing the zod-inferred `GlobalArgsT` would drag a
  * slow type onto the public API). The real implementation re-narrows. It
@@ -324,13 +333,6 @@ export interface ApiResult {
  * {@link call}/{@link callTolerant}.
  */
 export type CallerFn = (g: Json, call: ApiCall) => Promise<ApiResult>;
-
-let _callerOverride: CallerFn | null = null;
-
-/** Test-only seam: substitute the API caller. Pass `null` to restore the real one. */
-export function __setCaller(fn: CallerFn | null): void {
-  _callerOverride = fn;
-}
 
 /** The schema's default for `httpTimeoutMs`, applied again where defaults are not. */
 export const DEFAULT_HTTP_TIMEOUT_MS = 30000;
@@ -379,11 +381,33 @@ async function realCaller(g: GlobalArgsT, c: ApiCall): Promise<ApiResult> {
     headers["content-type"] = "application/json";
     body = JSON.stringify(c.body);
   }
-  const res = await fetchWithTimeout(
-    `${baseUrl(g)}${c.path}`,
-    { method: c.method, headers, body },
-    resolveTimeoutMs(g.httpTimeoutMs),
-  );
+  const url = `${baseUrl(g)}${c.path}`;
+  let res: Response;
+  try {
+    // Never follow a redirect: Forgejo answers a renamed repository's old
+    // name with a 301 to the new one, and following it would act on the
+    // renamed repository under a name nobody asked for.
+    res = await fetchWithTimeout(
+      url,
+      { method: c.method, headers, body, redirect: "manual" },
+      resolveTimeoutMs(g.httpTimeoutMs),
+    );
+  } catch (err) {
+    throw unreachable(c.method, url, err, g.token);
+  }
+  if (isRedirect(res.status)) {
+    await res.body?.cancel();
+    return {
+      status: res.status,
+      body: {
+        message: redirectMessage(
+          c.path,
+          res.headers.get("location"),
+          g.token,
+        ),
+      },
+    };
+  }
   // Forgejo answers a rejected credential with `access token does not exist
   // [sha: <the token>]`, so the value arrives in the body and would reach an
   // error message and the log. Mask it as the response becomes data.
@@ -399,9 +423,27 @@ async function realCaller(g: GlobalArgsT, c: ApiCall): Promise<ApiResult> {
   return { status: res.status, body: parsed };
 }
 
-/** Dispatch through the test override if set, else the real fetch caller. */
+/** Where an injected client rides on the global arguments; see {@link argsOf}. */
+const CLIENT = Symbol("forgejoClient");
+type Client = (c: ApiCall) => Promise<ApiResult>;
+
+/**
+ * The global arguments a method calls the forge with. A unit test puts a stub
+ * client on the context (`forgejoClient`, the injectable client of swamp's
+ * testing guide), and it travels with the arguments to {@link rawCall}; swamp
+ * never sets it, so a real run gets the context's own arguments.
+ */
+function argsOf(context: { globalArgs: GlobalArgsT }): GlobalArgsT {
+  const client = (context as { forgejoClient?: Client }).forgejoClient;
+  return client
+    ? { ...context.globalArgs, [CLIENT]: client } as GlobalArgsT
+    : context.globalArgs;
+}
+
+/** One authenticated call: the injected client in a unit test, else the forge. */
 function rawCall(g: GlobalArgsT, c: ApiCall): Promise<ApiResult> {
-  return (_callerOverride ?? realCaller)(g, c);
+  const client = (g as unknown as Record<symbol, Client | undefined>)[CLIENT];
+  return client ? client(c) : realCaller(g, c);
 }
 
 function errMsg(r: ApiResult): string {
@@ -412,10 +454,10 @@ function errMsg(r: ApiResult): string {
   return JSON.stringify(b);
 }
 
-/** Call and throw on any HTTP error (status ≥ 400). */
+/** Call and throw on any refusal: a 3xx (never followed), a 4xx or a 5xx. */
 async function call(g: GlobalArgsT, c: ApiCall): Promise<ApiResult> {
   const r = await rawCall(g, c);
-  if (r.status >= 400) {
+  if (isFailure(r.status)) {
     throw new Error(
       `Forgejo API ${c.method} ${c.path} -> HTTP ${r.status}: ${errMsg(r)}`,
     );
@@ -433,7 +475,7 @@ async function callTolerant(
   allow: number[],
 ): Promise<ApiResult> {
   const r = await rawCall(g, c);
-  if (r.status >= 400 && !allow.includes(r.status)) {
+  if (isFailure(r.status) && !allow.includes(r.status)) {
     throw new Error(
       `Forgejo API ${c.method} ${c.path} -> HTTP ${r.status}: ${errMsg(r)}`,
     );
@@ -762,8 +804,8 @@ function goDurationSeconds(s: string): number | null {
 /**
  * Derive a mirror's sync-health record from its repo object. A mirror is
  * stale when its last sync is older than `staleFactor × interval`, or when it
- * has never synced while periodic sync is enabled. With periodic sync
- * disabled (interval "0s") only never-synced counts as stale.
+ * has never synced, whatever its interval. With periodic sync disabled
+ * (interval "0s") only never-synced counts as stale.
  */
 function toMirrorInfo(
   r: Json,
@@ -777,7 +819,10 @@ function toMirrorInfo(
   const periodic = intervalSec !== null && intervalSec > 0;
   let stale = false;
   if (neverSynced) {
-    stale = periodic;
+    // A mirror that never synced is stale whatever its interval: a failed
+    // migration leaves one with no interval at all, which would otherwise
+    // pass every audit.
+    stale = true;
   } else if (periodic) {
     const last = Date.parse(String(r.mirror_updated));
     stale = Number.isFinite(last) &&
@@ -980,7 +1025,7 @@ const WebhookRetargetArgs = z.object({
 const MirrorStatusArgs = z.object({
   staleFactor: z.coerce.number().default(2).describe(
     "A mirror is stale when its last sync is older than staleFactor × its " +
-      "sync interval.",
+      "sync interval, or when it never synced.",
   ),
 });
 
@@ -1166,7 +1211,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.11.11.1",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1197,6 +1242,19 @@ export const model = {
       toVersion: "2026.11.11.1",
       description:
         "repo_merge_settings_ensure joins the type; global arguments unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.11.2",
+      description:
+        "The package gains a second type, @dataverket/forgejo/stagecraft-tracker; this type is unchanged",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.12.1",
+      description:
+        "Redirects are refused, never followed; fixes found against Forgejo 15.0.11; " +
+        "issue_state_ensure, issue_body_ensure and tag_protection_ensure join the type; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1268,7 +1326,7 @@ export const model = {
         _rawArgs,
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const v = await call(g, { method: "GET", path: "/api/v1/version" });
         const hz = await callTolerant(g, {
           method: "GET",
@@ -1276,7 +1334,7 @@ export const model = {
         }, [503]);
         const handle = await context.writeResource("server", "status", {
           version: String(v.body.version ?? "unknown"),
-          healthy: hz.status < 400,
+          healthy: !isFailure(hz.status),
           action: "observed",
           timestamp: nowIso(),
         });
@@ -1291,7 +1349,7 @@ export const model = {
         _rawArgs,
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
-        const g = context.globalArgs;
+        const g = argsOf(context);
         logInfo(context, "Listing organizations");
         const orgs = await pageAll(g, "/api/v1/orgs");
         const handles: DataHandle[] = [];
@@ -1317,7 +1375,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = RepoListArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         logInfo(context, "Listing repositories", { owner: a.owner ?? "(all)" });
         let repos: Json[];
         if (a.owner === undefined) {
@@ -1328,7 +1386,7 @@ export const model = {
             method: "GET",
             path: `/api/v1/orgs/${enc(a.owner)}`,
           }, [403, 404]);
-          if (org.status < 400) {
+          if (!isFailure(org.status)) {
             repos = await pageAll(g, `/api/v1/orgs/${enc(a.owner)}/repos`);
           } else {
             const user = await callTolerant(g, {
@@ -1380,7 +1438,7 @@ export const model = {
         _rawArgs,
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
-        const g = context.globalArgs;
+        const g = argsOf(context);
         logInfo(context, "Listing users (admin)");
         const users = await pageAll(g, "/api/v1/admin/users");
         const handles: DataHandle[] = [];
@@ -1428,7 +1486,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = MirrorStatusArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         logInfo(context, "Auditing mirrors");
         const found = await pageAll(g, "/api/v1/repos/search?mode=mirror");
         const handles: DataHandle[] = [];
@@ -1467,7 +1525,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = WebhookAuditArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         if (a.name && !a.owner) {
           throw new Error("`name` requires `owner` — pass both or neither.");
         }
@@ -1506,7 +1564,7 @@ export const model = {
             method: "GET",
             path: hooksPath(owner, name),
           }, [403, 404]);
-          if (res.status >= 400) {
+          if (isFailure(res.status)) {
             logInfo(context, "Skipping repo: hooks not readable", {
               repo: full,
               status: res.status,
@@ -1544,7 +1602,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = WebhookRetargetArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const full = `${a.owner}/${a.name}`;
 
         const listed = await call(g, {
@@ -1646,7 +1704,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = OrgEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const probe = await callTolerant(g, {
           method: "GET",
           path: `/api/v1/orgs/${enc(a.name)}`,
@@ -1716,7 +1774,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = RepoEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         let repo = await getRepoOrNull(g, a.owner, a.name);
         let action: z.infer<typeof Action>;
         if (repo === null) {
@@ -1789,19 +1847,31 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = CollaboratorEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const full = `${a.owner}/${a.name}`;
-        // A non-collaborator answers 404 here; the owner answers "owner",
-        // which no PUT can produce and must never be downgraded.
+        // Membership first: 204 for a collaborator, 404 for anyone else. The
+        // permission probe alone cannot say, because on a public repository
+        // the forge answers "read" for every user, collaborator or not.
+        const member = await callTolerant(g, {
+          method: "GET",
+          path: `${repoPath(a.owner, a.name)}/collaborators/${enc(a.user)}`,
+        }, [404]);
+        // The owner is no collaborator and answers "owner", which no PUT can
+        // produce and must never be downgraded.
         const probe = await callTolerant(g, {
           method: "GET",
           path: `${repoPath(a.owner, a.name)}/collaborators/${
             enc(a.user)
           }/permission`,
         }, [404]);
-        const current = probe.status === 404
+        const permission = probe.status === 404
           ? "none"
           : String(probe.body.permission ?? "none");
+        const current = permission === "owner"
+          ? "owner"
+          : member.status === 404
+          ? "none"
+          : permission;
         let action: z.infer<typeof Action>;
         if (current === "owner") {
           throw new Error(
@@ -1851,7 +1921,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = BranchProtectionEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const full = `${a.owner}/${a.name}`;
         const base = `${repoPath(a.owner, a.name)}/branch_protections`;
         const probe = await callTolerant(g, {
@@ -1913,7 +1983,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = BranchProtectionListArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const full = `${a.owner}/${a.name}`;
         const r = await call(g, {
           method: "GET",
@@ -1952,7 +2022,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = MirrorEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const existing = await getRepoOrNull(g, a.owner, a.name);
         let repo: Json;
         let action: z.infer<typeof Action>;
@@ -1995,6 +2065,9 @@ export const model = {
               "touch it. Pick a different name or remove the repo manually.",
           );
         } else {
+          if (isFailedMigration(existing)) {
+            throw failedMigrationError(a.owner, a.name);
+          }
           // Existing mirror: the source URL is fixed at migration time — a
           // different requested source is unreconcilable drift, not a PATCH.
           const orig = String(existing.original_url ?? "");
@@ -2059,7 +2132,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = MirrorSyncArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const repo = await getRepoOrNull(g, a.owner, a.name);
         if (repo === null) {
           throw new Error(`${a.owner}/${a.name} does not exist`);
@@ -2099,7 +2172,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = PrListArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         logInfo(context, "Listing pull requests", {
           repo: `${a.owner}/${a.name}`,
           state: a.state,
@@ -2133,7 +2206,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = PrGetArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const pr = await getPrOrNull(g, a.owner, a.name, a.index);
         if (pr === null) {
           throw new Error(`${a.owner}/${a.name}#${a.index} does not exist`);
@@ -2169,7 +2242,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = PrEnsureArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const wantHead = bareRef(a.head);
         const open = await pageAll(
           g,
@@ -2244,7 +2317,7 @@ export const model = {
         context,
       ): Promise<{ dataHandles: DataHandle[] }> => {
         const a = PrMergeArgs.parse(rawArgs);
-        const g = context.globalArgs;
+        const g = argsOf(context);
         const ref = `${a.owner}/${a.name}#${a.index}`;
         const pr = await getPrOrNull(g, a.owner, a.name, a.index);
         if (pr === null) throw new Error(`${ref} does not exist`);
@@ -2343,7 +2416,7 @@ async function setArchived(
   archived: boolean,
 ): Promise<{ dataHandles: DataHandle[] }> {
   const a = RepoTarget.parse(rawArgs);
-  const g = context.globalArgs;
+  const g = argsOf(context);
   const r = await call(g, { method: "GET", path: repoPath(a.owner, a.name) });
   let repo = r.body;
   let action: z.infer<typeof Action> = "unchanged";

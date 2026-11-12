@@ -15,7 +15,7 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
   type GlobalArgs,
 } from "./api.ts";
 import { dataName, legacyLabelName, writeRecord } from "./names.ts";
@@ -256,6 +256,7 @@ export async function labelEnsure(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -308,7 +309,7 @@ export const extension = {
       arguments: LabelEnsureArgs,
       execute: async (args: LabelEnsureArgsT, context: Ctx) => {
         const labels = await labelEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           args,
         );
         return await record(context, labels);
@@ -323,7 +324,7 @@ export const extension = {
         const s: Scope = { owner: a.owner, repo: a.name };
         const timestamp = new Date().toISOString();
         const labels = (await listLabels(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           s,
         )).map((l) => info(s, l, "listed", timestamp));
         return await record(context, labels);

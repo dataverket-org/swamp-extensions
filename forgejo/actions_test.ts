@@ -1,271 +1,218 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import { type ApiCall, type Caller } from "./api.ts";
-import {
-  actionsSecretPut,
-  repoRename,
-  runnerList,
-  runnerPrune,
-  runnerRegistrationToken,
-} from "./actions.ts";
+import { harness, writes } from "./stub_test.ts";
+import { extension } from "./actions.ts";
 
-/** A fake API: replies per `method path`, records every call. */
-function fakeApi(
-  replies: Record<
+Deno.test("the registration token's resource names no vault: swamp uses the repository's default", () => {
+  const spec = extension.resources.runnerRegistration as Record<
     string,
-    { status: number; body?: Record<string, unknown> | unknown[] }
-  >,
-): { api: Caller; calls: ApiCall[] } {
-  const calls: ApiCall[] = [];
-  const api: Caller = (c) => {
-    calls.push(c);
-    const r = replies[`${c.method} ${c.path}`];
-    if (!r) {
-      return Promise.resolve({
-        status: 404,
-        body: { message: `no reply for ${c.method} ${c.path}` },
-      });
-    }
-    return Promise.resolve({
-      status: r.status,
-      body: (r.body ?? {}) as Record<string, unknown>,
-    });
-  };
-  return { api, calls };
-}
-
-Deno.test("actionsSecretPut targets the repo or the org and reports created vs updated", async () => {
-  const repo = fakeApi({
-    ["PUT /api/v1/repos/example-org/example-repo/actions/secrets/COSIGN_PASSWORD"]:
-      {
-        status: 201,
-      },
-  });
-  const created = await actionsSecretPut(repo.api, {
-    owner: "example-org",
-    repo: "example-repo",
-    name: "COSIGN_PASSWORD",
-    value: "hunter2",
-  });
-  assertEquals(created, {
-    ...created,
-    scope: "repo",
-    target: "example-org/example-repo",
-    action: "created",
-  });
-  assertEquals(repo.calls[0].body, { data: "hunter2" });
-
-  const org = fakeApi({
-    ["PUT /api/v1/orgs/example-org/actions/secrets/REGISTRY_PASSWORD"]: {
-      status: 204,
-    },
-  });
-  const updated = await actionsSecretPut(org.api, {
-    owner: "example-org",
-    name: "REGISTRY_PASSWORD",
-    value: "x",
-  });
-  assertEquals(updated.scope, "org");
-  assertEquals(updated.action, "updated");
+    unknown
+  >;
+  assertEquals("vaultName" in spec, false);
 });
 
-Deno.test("runnerRegistrationToken returns the token and refuses an empty one", async () => {
-  const ok = fakeApi({
-    ["GET /api/v1/orgs/example-org/actions/runners/registration-token"]: {
-      status: 200,
-      body: { token: "reg-123" },
-    },
-  });
-  const info = await runnerRegistrationToken(ok.api, { owner: "example-org" });
-  assertEquals(info.token, "reg-123");
-  assertEquals(info.scope, "org");
+// ───── the methods, through createModelTestContext with a stub client ─────
 
-  const empty = fakeApi({
-    ["GET /api/v1/repos/example-org/example-repo/actions/runners/registration-token"]:
-      { status: 200, body: {} },
-  });
-  await assertRejects(
-    () =>
-      runnerRegistrationToken(empty.api, {
-        owner: "example-org",
-        repo: "example-repo",
-      }),
-    Error,
-    "no registration token",
+const M = extension.methods[0];
+const A = "/api/v1/repos/acme/tool/actions";
+const O = "/api/v1/orgs/acme/actions";
+const runner = (id: number, name: string, extra: Record<string, unknown>) => ({
+  id,
+  uuid: `u${id}`,
+  name,
+  status: "offline",
+  labels: ["x"],
+  ...extra,
+});
+
+Deno.test("actions_secret_put sends the value once and records only name and scope", async () => {
+  const h = harness({ [`PUT ${A}/secrets/DEPLOY_KEY`]: { status: 201 } });
+  await M.actions_secret_put.execute(
+    {
+      owner: "acme",
+      repo: "tool",
+      name: "DEPLOY_KEY",
+      value: "SECRET-VALUE-1",
+    },
+    h.context,
   );
-});
-
-Deno.test("runnerList reads both response shapes and classifies scope from ids", async () => {
-  const runner = (id: number, extra: Record<string, unknown>) => ({
-    id,
-    uuid: `u${id}`,
-    name: `r${id}`,
-    status: "online",
-    labels: ["example-repo-release"],
-    ephemeral: false,
-    version: "6.3.0",
-    owner_id: 0,
-    repo_id: 0,
-    ...extra,
-  });
-  const wrapped = fakeApi({
-    ["GET /api/v1/orgs/example-org/actions/runners?visible=true&limit=100&page=1"]:
-      {
-        status: 200,
-        body: {
-          runners: [
-            runner(1, { owner_id: 5 }),
-            runner(2, { repo_id: 9, labels: [{ name: "docker" }] }),
-          ],
-        },
-      },
-  });
-  const list = await runnerList(wrapped.api, { owner: "example-org" });
-  assertEquals(list.map((r) => [r.name, r.level, r.labels]), [
-    ["r1", "org", ["example-repo-release"]],
-    ["r2", "repo", ["docker"]],
+  assertEquals(h.calls[0].body, { data: "SECRET-VALUE-1" });
+  const w = h.written()[0];
+  assertEquals([w.spec, w.name, w.data.action, w.data.scope], [
+    "actionsSecret",
+    "actions-secret-acme-tool-DEPLOY_KEY",
+    "created",
+    "repo",
   ]);
-
-  const bare = fakeApi({
-    ["GET /api/v1/repos/example-org/example-repo/actions/runners?visible=true&limit=100&page=1"]:
-      {
-        status: 200,
-        body: [runner(3, {})],
-      },
-  });
-  const one = await runnerList(bare.api, {
-    owner: "example-org",
-    repo: "example-repo",
-  });
-  assertEquals(one.length, 1);
-  assertEquals(one[0].level, "instance");
-  assertEquals(one[0].target, "example-org/example-repo");
-});
-
-const REPO = (n: string) => `/api/v1/repos/example-org/${n}`;
-const repo = (n: string) => ({
-  name: n,
-  html_url: `https://forge/example-org/${n}`,
-  clone_url: `https://forge/example-org/${n}.git`,
-  ssh_url: `git@forge:example-org/${n}.git`,
-});
-
-Deno.test("repoRename verifies source and target, then patches the name", async () => {
-  const { api, calls } = fakeApi({
-    [`GET ${REPO("flux-bootstrap")}`]: {
-      status: 200,
-      body: repo("flux-bootstrap"),
-    },
-    [`PATCH ${REPO("flux-bootstrap")}`]: {
-      status: 200,
-      body: repo("example-repo-infra"),
-    },
-  });
-  const info = await repoRename(api, {
-    owner: "example-org",
-    name: "flux-bootstrap",
-    newName: "example-repo-infra",
-  });
-  assertEquals(info.action, "renamed");
-  assertEquals(info.to, "example-repo-infra");
   assertEquals(
-    info.cloneUrl,
-    "https://forge/example-org/example-repo-infra.git",
+    JSON.stringify([h.written(), h.logs()]).includes("SECRET-VALUE-1"),
+    false,
   );
-  assertEquals(calls.map((c) => `${c.method} ${c.path}`), [
-    `GET ${REPO("flux-bootstrap")}`,
-    `GET ${REPO("example-repo-infra")}`,
-    `PATCH ${REPO("flux-bootstrap")}`,
+});
+
+Deno.test("actions_secret_put passes on the forge's refusal and records nothing", async () => {
+  const h = harness({
+    [`PUT ${O}/secrets/X`]: { status: 404, body: { message: "org not found" } },
+  });
+  await assertRejects(
+    () =>
+      M.actions_secret_put.execute(
+        { owner: "acme", name: "X", value: "v" },
+        h.context,
+      ),
+    Error,
+    "HTTP 404: org not found",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("runner_registration_token records the token for the vault, under the target", async () => {
+  const h = harness({
+    [`GET ${O}/runners/registration-token`]: {
+      status: 200,
+      body: { token: "REG-TOKEN-1" },
+    },
+  });
+  await M.runner_registration_token.execute({ owner: "acme" }, h.context);
+  const w = h.written()[0];
+  assertEquals([w.spec, w.name, w.data.scope, w.data.target], [
+    "runnerRegistration",
+    "runner-registration-acme",
+    "org",
+    "acme",
   ]);
-  assertEquals(calls[2].body, { name: "example-repo-infra" });
 });
 
-Deno.test("repoRename refuses a missing source and an occupied target; a redirect does not count", async () => {
-  await assertRejects(
-    () =>
-      repoRename(fakeApi({}).api, {
-        owner: "example-org",
-        name: "nope",
-        newName: "x",
-      }),
-    Error,
-    "does not exist",
-  );
-  const occupied = fakeApi({
-    [`GET ${REPO("a")}`]: { status: 200, body: repo("a") },
-    [`GET ${REPO("b")}`]: { status: 200, body: repo("b") },
+Deno.test("runner_registration_token refuses an answer without a token", async () => {
+  const h = harness({
+    [`GET ${O}/runners/registration-token`]: { status: 200, body: {} },
   });
   await assertRejects(
-    () =>
-      repoRename(occupied.api, {
-        owner: "example-org",
-        name: "a",
-        newName: "b",
-      }),
+    () => M.runner_registration_token.execute({ owner: "acme" }, h.context),
     Error,
-    "already exists",
+    "Forgejo returned no registration token",
   );
-  // A GET of the target that answers with the *source* repo is Forgejo following a stale redirect: not occupied.
-  const redirect = fakeApi({
-    [`GET ${REPO("a")}`]: { status: 200, body: repo("a") },
-    [`GET ${REPO("old")}`]: { status: 200, body: repo("a") },
-    [`PATCH ${REPO("a")}`]: { status: 200, body: repo("old") },
-  });
-  const info = await repoRename(redirect.api, {
-    owner: "example-org",
-    name: "a",
-    newName: "old",
-  });
-  assertEquals(info.action, "renamed");
+  assertEquals(h.written(), []);
 });
 
-Deno.test("repoRename reports unchanged when the name is already the target", async () => {
-  const { api, calls } = fakeApi({
-    [`GET ${REPO("same")}`]: { status: 200, body: repo("same") },
-  });
-  const info = await repoRename(api, {
-    owner: "example-org",
-    name: "same",
-    newName: "same",
-  });
-  assertEquals(info.action, "unchanged");
-  assertEquals(calls.length, 1);
-});
-
-Deno.test("runnerPrune deletes only offline runners of the given name", async () => {
-  const runner = (id: number, name: string, status: string) => ({
-    id,
-    uuid: `u${id}`,
-    name,
-    status,
-    labels: ["example-repo-release"],
-    ephemeral: false,
-    version: "12.7.3",
-    owner_id: 0,
-    repo_id: 9,
-  });
-  const R = "/api/v1/repos/example-org/example-repo/actions/runners";
-  const { api, calls } = fakeApi({
-    [`GET ${R}?visible=true&limit=100&page=1`]: {
+Deno.test("runner_list records each runner with its level; two of a name by id", async () => {
+  const h = harness({
+    [`GET ${O}/runners?visible=true&limit=100&page=1`]: {
       status: 200,
       body: [
-        runner(1, "example-repo-release", "offline"),
-        runner(2, "example-repo-release", "idle"),
-        runner(3, "other", "offline"),
-        runner(4, "example-repo-release", "offline"),
+        runner(1, "b", { owner_id: 5 }),
+        runner(2, "b", { owner_id: 5 }),
+        runner(3, "c", {}),
       ],
     },
-    [`DELETE ${R}/1`]: { status: 204 },
-    [`DELETE ${R}/4`]: { status: 204 },
   });
-  const info = await runnerPrune(api, {
-    owner: "example-org",
-    repo: "example-repo",
-    name: "example-repo-release",
-  });
-  assertEquals(info.deleted.map((d) => d.id), [1, 4]);
-  assertEquals(info.kept, [{ id: 2, uuid: "u2", status: "idle" }]);
-  assertEquals(calls.filter((c) => c.method === "DELETE").map((c) => c.path), [
-    `${R}/1`,
-    `${R}/4`,
+  await M.runner_list.execute({ owner: "acme" }, h.context);
+  assertEquals(h.written().map((w) => [w.name, w.data.level]), [
+    ["runner-acme-b-1", "org"],
+    ["runner-acme-b-2", "org"],
+    ["runner-acme-c", "instance"],
   ]);
+});
+
+Deno.test("runner_list passes on the forge's refusal", async () => {
+  const h = harness({
+    [`GET ${O}/runners?visible=true&limit=100&page=1`]: {
+      status: 404,
+      body: { message: "not found" },
+    },
+  });
+  await assertRejects(
+    () => M.runner_list.execute({ owner: "acme" }, h.context),
+    Error,
+    "HTTP 404",
+  );
+});
+
+Deno.test("runner_prune deletes the offline runners of its scope and keeps the rest, saying why", async () => {
+  const h = harness({
+    [`GET ${A}/runners?visible=true&limit=100&page=1`]: {
+      status: 200,
+      body: [
+        runner(1, "b", { repo_id: 9 }),
+        runner(2, "b", { repo_id: 9, status: "idle" }),
+        runner(3, "b", { owner_id: 5 }),
+      ],
+    },
+    [`DELETE ${A}/runners/1`]: { status: 204 },
+  });
+  await M.runner_prune.execute(
+    { owner: "acme", repo: "tool", name: "b" },
+    h.context,
+  );
+  const d = h.written()[0].data;
+  assertEquals(h.written()[0].name, "runner-prune-acme-tool-b");
+  assertEquals(d.deleted, [{ id: 1, uuid: "u1" }]);
+  assertEquals(
+    (d.kept as { id: number; reason: string }[]).map((k) => [k.id, k.reason]),
+    [
+      [2, "not offline"],
+      [3, "an org runner; prune it at its own scope"],
+    ],
+  );
+});
+
+Deno.test("runner_prune passes on a refused delete", async () => {
+  const h = harness({
+    [`GET ${O}/runners?visible=true&limit=100&page=1`]: {
+      status: 200,
+      body: [runner(1, "b", { owner_id: 5 })],
+    },
+    [`DELETE ${O}/runners/1`]: { status: 403, body: { message: "no" } },
+  });
+  await assertRejects(
+    () => M.runner_prune.execute({ owner: "acme", name: "b" }, h.context),
+    Error,
+    "HTTP 403: no",
+  );
+  assertEquals(h.written(), []);
+});
+
+Deno.test("repo_rename renames, verify-first, and records the new URLs", async () => {
+  const R = "/api/v1/repos/acme";
+  const h = harness({
+    [`GET ${R}/old`]: { status: 200, body: { name: "old" } },
+    [`GET ${R}/new`]: { status: 404 },
+    [`PATCH ${R}/old`]: {
+      status: 200,
+      body: {
+        name: "new",
+        html_url: "h/new",
+        clone_url: "c/new",
+        ssh_url: "s/new",
+      },
+    },
+  });
+  await M.repo_rename.execute(
+    { owner: "acme", name: "old", newName: "new" },
+    h.context,
+  );
+  const w = h.written()[0];
+  assertEquals([w.name, w.data.action, w.data.htmlUrl], [
+    "repo-rename-acme-new",
+    "renamed",
+    "h/new",
+  ]);
+  assertEquals(writes(h.calls).map((c) => c.body), [{ name: "new" }]);
+});
+
+Deno.test("repo_rename refuses a name that is taken, writing nothing", async () => {
+  const R = "/api/v1/repos/acme";
+  const h = harness({
+    [`GET ${R}/old`]: { status: 200, body: { name: "old" } },
+    [`GET ${R}/new`]: { status: 200, body: { name: "new" } },
+  });
+  await assertRejects(
+    () =>
+      M.repo_rename.execute(
+        { owner: "acme", name: "old", newName: "new" },
+        h.context,
+      ),
+    Error,
+    "acme/new already exists; refusing to rename onto it",
+  );
+  assertEquals([writes(h.calls), h.written()], [[], []]);
 });

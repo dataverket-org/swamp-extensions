@@ -14,8 +14,10 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
+  failure,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
 
@@ -57,8 +59,8 @@ export async function orgDelete(
   if (current.status === 404) {
     return { org: a.name, id: 0, action: "absent", description: "", timestamp };
   }
-  if (current.status >= 400) {
-    throw new Error(`Forgejo API GET ${path} -> HTTP ${current.status}`);
+  if (isFailure(current.status)) {
+    throw failure({ method: "GET", path }, current);
   }
   const repos = await call(api, {
     method: "GET",
@@ -87,6 +89,7 @@ export async function orgDelete(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -121,7 +124,7 @@ export const extension = {
         const a = OrgDeleteArgs.parse(args);
         context.logger.info("Deleting organization {org}", { org: a.name });
         const info = await orgDelete(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("Organization {org}: {action}", {

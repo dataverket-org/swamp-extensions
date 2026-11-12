@@ -10,6 +10,11 @@
  * must exist on the repository or its organization before anything is filed.
  * `issue_labels_ensure` labels an existing issue or pull request by number.
  *
+ * `issue_state_ensure` opens or closes issues with a comment saying why, and
+ * `issue_body_ensure` rewrites an issue's text; both read every issue first
+ * and refuse a pull request's number before anything is written. Their names
+ * and arguments are those of the local extension they were folded in from.
+ *
  * @module
  */
 import { z } from "npm:zod@4";
@@ -17,12 +22,12 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
   type GlobalArgs,
 } from "./api.ts";
 
 import { labelsForIssues } from "./labels.ts";
-import { dataName, legacyName, writeRecord } from "./names.ts";
+import { dataName, legacyName, repoName, writeRecord } from "./names.ts";
 
 export type { ApiCall, Caller };
 
@@ -240,6 +245,31 @@ export async function listIssues(
   return out;
 }
 
+/**
+ * The repository's newest issues, one page, read without a search string.
+ * Forgejo's `q` goes through its issue indexer, which catches up with a new
+ * issue in the background, a second or so on a quiet forge; a listing without
+ * `q` reads the database. So an issue filed moments ago, by the last run say,
+ * is found here when the search does not have it yet.
+ */
+async function newestIssues(
+  api: Caller,
+  owner: string,
+  repo: string,
+): Promise<RawIssue[]> {
+  const r = await call(api, {
+    method: "GET",
+    path: `${
+      issuesPath(owner, repo)
+    }?state=all&type=issues&sort=newest&limit=${PAGE}&page=1`,
+  });
+  const items = Array.isArray(r.body) ? r.body as unknown[] : [];
+  return items.flatMap((it) => {
+    const i = rawIssue(it);
+    return i ? [i] : [];
+  });
+}
+
 /** File each issue whose exact title no issue of the repository has yet. */
 export async function issueEnsure(
   api: Caller,
@@ -255,7 +285,9 @@ export async function issueEnsure(
     const timestamp = new Date().toISOString();
     const found =
       (await listIssues(api, parsed.owner, parsed.name, "all", spec.title))
-        .find((i) => i.title === spec.title);
+        .find((i) => i.title === spec.title) ??
+        (await newestIssues(api, parsed.owner, parsed.name))
+          .find((i) => i.title === spec.title);
     if (found) {
       results.push({
         owner: parsed.owner,
@@ -300,8 +332,154 @@ export async function issueEnsure(
   return results;
 }
 
+// ─────────────────────── issue state and issue text ───────────────────────
+
+const IssueStateEnsureArgs = z.object({
+  owner: z.string().min(1).describe("Owning org or user login."),
+  name: z.string().min(1).describe("Repository name."),
+  issues: z.array(z.object({
+    number: z.number().int().positive().describe("The issue's number."),
+    state: z.enum(["open", "closed"]).describe("The state it is to have."),
+    comment: z.string().default("").describe(
+      "Markdown posted on the issue before its state changes, saying why. Not posted when the state is already right.",
+    ),
+  })).min(1).max(MAX_ISSUES_PER_CALL).describe(
+    "The issues and the state each is to have. Several in one call.",
+  ),
+});
+/** {@link IssueStateEnsureArgs} */
+export type IssueStateEnsureArgsT = z.infer<typeof IssueStateEnsureArgs>;
+
+/** An issue's state after `issue_state_ensure`. */
+const IssueStateInfo = z.object({
+  repo: z.string(),
+  number: z.number().int(),
+  title: z.string(),
+  state: z.enum(["open", "closed"]),
+  action: z.enum(["updated", "unchanged"]),
+  timestamp: z.string(),
+});
+/** {@link IssueStateInfo} */
+export type IssueState = z.infer<typeof IssueStateInfo>;
+
+const IssueBodyEnsureArgs = z.object({
+  owner: z.string().min(1).describe("Owning org or user login."),
+  name: z.string().min(1).describe("Repository name."),
+  number: z.number().int().positive().describe("The issue's number."),
+  body: z.string().min(1).describe(
+    "The issue's whole text, in Markdown. It replaces the text that is there.",
+  ),
+});
+/** {@link IssueBodyEnsureArgs} */
+export type IssueBodyEnsureArgsT = z.infer<typeof IssueBodyEnsureArgs>;
+
+/** Whether `issue_body_ensure` rewrote an issue's text; never the text. */
+const IssueBodyInfo = z.object({
+  repo: z.string(),
+  number: z.number().int(),
+  title: z.string(),
+  action: z.enum(["updated", "unchanged"]),
+  timestamp: z.string(),
+});
+/** {@link IssueBodyInfo} */
+export type IssueBody = z.infer<typeof IssueBodyInfo>;
+
+/** Read one issue, and refuse a number that is a pull request. */
+async function readIssue(
+  api: Caller,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<Record<string, unknown>> {
+  const issue = (await call(api, {
+    method: "GET",
+    path: `${issuesPath(owner, repo)}/${number}`,
+  })).body;
+  if (issue.pull_request) {
+    throw new Error(
+      `#${number} of ${owner}/${repo} is a pull request, not an issue`,
+    );
+  }
+  return issue;
+}
+
+/**
+ * Open or close issues, each with a comment saying why. Every issue is read
+ * before anything is written, so a pull request's number or a missing issue
+ * anywhere in the list stops the call with nothing changed. One whose state
+ * differs gets its comment, when there is one, and then the state; one that
+ * already has the state is left alone and gets no comment.
+ */
+export async function issueStateEnsure(
+  api: Caller,
+  a: IssueStateEnsureArgsT,
+): Promise<IssueState[]> {
+  const p = IssueStateEnsureArgs.parse(a);
+  const base = issuesPath(p.owner, p.name);
+  const found: Record<string, unknown>[] = [];
+  for (const want of p.issues) {
+    found.push(await readIssue(api, p.owner, p.name, want.number));
+  }
+  const results: IssueState[] = [];
+  for (const [i, want] of p.issues.entries()) {
+    const changes = found[i].state !== want.state;
+    if (changes) {
+      if (want.comment !== "") {
+        await call(api, {
+          method: "POST",
+          path: `${base}/${want.number}/comments`,
+          body: { body: want.comment },
+        });
+      }
+      await call(api, {
+        method: "PATCH",
+        path: `${base}/${want.number}`,
+        body: { state: want.state },
+      });
+    }
+    results.push({
+      repo: `${p.owner}/${p.name}`,
+      number: want.number,
+      title: String(found[i].title ?? ""),
+      state: want.state,
+      action: changes ? "updated" : "unchanged",
+      timestamp: new Date().toISOString(),
+    });
+  }
+  return results;
+}
+
+/**
+ * Give an issue the text given. One that already has it is left alone, and a
+ * number that is a pull request is refused before anything is written. The
+ * text is sent, never recorded.
+ */
+export async function issueBodyEnsure(
+  api: Caller,
+  a: IssueBodyEnsureArgsT,
+): Promise<IssueBody> {
+  const p = IssueBodyEnsureArgs.parse(a);
+  const issue = await readIssue(api, p.owner, p.name, p.number);
+  const changes = issue.body !== p.body;
+  if (changes) {
+    await call(api, {
+      method: "PATCH",
+      path: `${issuesPath(p.owner, p.name)}/${p.number}`,
+      body: { body: p.body },
+    });
+  }
+  return {
+    repo: `${p.owner}/${p.name}`,
+    number: p.number,
+    title: String(issue.title ?? ""),
+    action: changes ? "updated" : "unchanged",
+    timestamp: new Date().toISOString(),
+  };
+}
+
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -339,6 +517,20 @@ async function record(context: Ctx, issues: Issue[]) {
 export const extension = {
   type: "@dataverket/forgejo",
   resources: {
+    issueState: {
+      description:
+        "An issue's state as issue_state_ensure last set or found it.",
+      schema: IssueStateInfo,
+      lifetime: "infinite" as const,
+      garbageCollection: 20,
+    },
+    issueBody: {
+      description:
+        "Whether issue_body_ensure last rewrote an issue's text or found it as given. The text is not kept.",
+      schema: IssueBodyInfo,
+      lifetime: "infinite" as const,
+      garbageCollection: 20,
+    },
     issue: {
       description:
         "One issue of a repository: number, title, state and page, and whether issue_ensure created it or found it.",
@@ -355,6 +547,55 @@ export const extension = {
     },
   },
   methods: [{
+    issue_state_ensure: {
+      description:
+        "Open or close the issues given, each with a comment saying why. Several in one call. " +
+        "An issue already in that state is left alone and gets no comment; a pull request's number is refused " +
+        "before anything is written.",
+      arguments: IssueStateEnsureArgs,
+      execute: async (args: IssueStateEnsureArgsT, context: Ctx) => {
+        const infos = await issueStateEnsure(
+          callerOf(context),
+          args,
+        );
+        const dataHandles = [];
+        for (const info of infos) {
+          context.logger.info("Issue #{number} of {repo}: {state}, {action}", {
+            number: info.number,
+            repo: info.repo,
+            state: info.state,
+            action: info.action,
+          });
+          const name = repoName("issue-state", info.repo, info.number);
+          dataHandles.push(
+            await writeRecord(context, "issueState", name, name, { ...info }),
+          );
+        }
+        return { dataHandles };
+      },
+    },
+    issue_body_ensure: {
+      description:
+        "Give one issue the text given, replacing what is there. An issue that already has it is left alone; " +
+        "a pull request's number is refused before anything is written. The text is not recorded.",
+      arguments: IssueBodyEnsureArgs,
+      execute: async (args: IssueBodyEnsureArgsT, context: Ctx) => {
+        const info = await issueBodyEnsure(
+          callerOf(context),
+          args,
+        );
+        context.logger.info("Issue #{number} of {repo}: text {action}", {
+          number: info.number,
+          repo: info.repo,
+          action: info.action,
+        });
+        const name = repoName("issue-body", info.repo, info.number);
+        const handle = await writeRecord(context, "issueBody", name, name, {
+          ...info,
+        });
+        return { dataHandles: [handle] };
+      },
+    },
     issue_ensure: {
       description:
         "File the issues given, each unless an issue of the same exact title exists, open or closed. " +
@@ -362,7 +603,7 @@ export const extension = {
       arguments: IssueEnsureArgs,
       execute: async (args: IssueEnsureArgsT, context: Ctx) => {
         const issues = await issueEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           args,
         );
         return await record(context, issues);
@@ -375,7 +616,7 @@ export const extension = {
       arguments: IssueLabelsEnsureArgs,
       execute: async (args: IssueLabelsEnsureArgsT, context: Ctx) => {
         const info = await issueLabelsEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           args,
         );
         context.logger.info(
@@ -406,7 +647,7 @@ export const extension = {
         const a = IssueListArgs.parse(args);
         const timestamp = new Date().toISOString();
         const issues = (await listIssues(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a.owner,
           a.name,
           a.state,

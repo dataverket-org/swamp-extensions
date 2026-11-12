@@ -15,7 +15,14 @@
  */
 import { z } from "npm:zod@4";
 
-import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import {
+  call,
+  type Caller,
+  callerOf,
+  failure,
+  type GlobalArgs,
+  isFailure,
+} from "./api.ts";
 import { dataName, legacyName, repoName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
@@ -237,8 +244,8 @@ export async function repoRename(
   if (source.status === 404) {
     throw new Error(`${a.owner}/${a.name} does not exist; nothing to rename`);
   }
-  if (source.status >= 400) {
-    await call(api, { method: "GET", path: repoPath(a.owner, a.name) });
+  if (isFailure(source.status)) {
+    throw failure({ method: "GET", path: repoPath(a.owner, a.name) }, source);
   }
   const target = await api({
     method: "GET",
@@ -279,23 +286,53 @@ const RunnerPruneInfo = z.object({
   name: z.string(),
   deleted: z.array(z.object({ id: z.number().int(), uuid: z.string() })),
   kept: z.array(
-    z.object({ id: z.number().int(), uuid: z.string(), status: z.string() }),
+    z.object({
+      id: z.number().int(),
+      uuid: z.string(),
+      status: z.string(),
+      reason: z.string().describe(
+        "Why it was kept: not offline, or a runner of another scope that the " +
+          "forge lists here and deletes only at its own",
+      ),
+    }),
   ),
   timestamp: z.string(),
 });
 
-/** Delete every offline runner called `name` at a scope; online, idle, and active ones are kept. */
+/**
+ * Delete every offline runner called `name` of the scope's own level; online,
+ * idle, and active ones are kept. A repository's list also holds the runners
+ * of its organization and of the instance, and an organization's those of the
+ * instance: the forge lists them because they may run its jobs, and refuses
+ * to delete them through this scope. They are kept, with the reason.
+ */
 export async function runnerPrune(
   api: Caller,
   a: z.infer<typeof RunnerPruneArgs>,
 ): Promise<z.infer<typeof RunnerPruneInfo>> {
+  const level = a.repo ? "repo" : "org";
   const runners = (await runnerList(api, { owner: a.owner, repo: a.repo }))
     .filter((r) => r.name === a.name);
   const deleted: { id: number; uuid: string }[] = [];
-  const kept: { id: number; uuid: string; status: string }[] = [];
+  const kept: { id: number; uuid: string; status: string; reason: string }[] =
+    [];
   for (const r of runners) {
+    if (r.level !== level) {
+      kept.push({
+        id: r.id,
+        uuid: r.uuid,
+        status: r.status,
+        reason: `an ${r.level} runner; prune it at its own scope`,
+      });
+      continue;
+    }
     if (r.status !== "offline") {
-      kept.push({ id: r.id, uuid: r.uuid, status: r.status });
+      kept.push({
+        id: r.id,
+        uuid: r.uuid,
+        status: r.status,
+        reason: "not offline",
+      });
       continue;
     }
     await call(api, {
@@ -317,6 +354,7 @@ export async function runnerPrune(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal: AbortSignal;
   logger: { info(msg: string, props?: Record<string, unknown>): void };
   writeResource: (
@@ -338,11 +376,10 @@ export const extension = {
     },
     runnerRegistration: {
       description:
-        "A runner registration token, stored in the vault; the record holds a reference.",
+        "A runner registration token, stored in the repository's default vault; the record holds a reference.",
       schema: RunnerRegistrationInfo,
       lifetime: "infinite" as const,
       garbageCollection: 5,
-      vaultName: "infra",
     },
     runnerPrune: {
       description:
@@ -375,7 +412,7 @@ export const extension = {
       execute: async (args: z.infer<typeof RunnerListArgs>, context: Ctx) => {
         const a = RunnerListArgs.parse(args);
         const runners = await runnerList(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("{count} runner(s) visible to {target}", {
@@ -412,12 +449,13 @@ export const extension = {
     runner_prune: {
       description:
         "Delete every offline Actions runner with a given name at a repository or an organization (factory). " +
-        "Runners that are online, idle, or active are kept. One call handles all of them.",
+        "Runners that are online, idle, or active are kept, and so are runners of another scope the forge lists here " +
+        "(an organization's or the instance's, at a repository), each with the reason. One call handles all of them.",
       arguments: RunnerPruneArgs,
       execute: async (args: z.infer<typeof RunnerPruneArgs>, context: Ctx) => {
         const a = RunnerPruneArgs.parse(args);
         const info = await runnerPrune(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info(
@@ -454,7 +492,7 @@ export const extension = {
           target: a.repo ? `${a.owner}/${a.repo}` : a.owner,
         });
         const info = await actionsSecretPut(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("Actions secret {name}: {action}", {
@@ -484,7 +522,7 @@ export const extension = {
           to: `${a.owner}/${a.newName}`,
         });
         const info = await repoRename(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("Rename {to}: {action}", {
@@ -516,7 +554,7 @@ export const extension = {
           target: a.repo ? `${a.owner}/${a.repo}` : a.owner,
         });
         const info = await runnerRegistrationToken(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         const handle = await writeRecord(

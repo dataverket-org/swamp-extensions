@@ -13,8 +13,10 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
+  failure,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
 
@@ -66,8 +68,8 @@ export async function repoDelete(
       timestamp,
     };
   }
-  if (current.status >= 400) {
-    throw new Error(`Forgejo API GET ${path} -> HTTP ${current.status}`);
+  if (isFailure(current.status)) {
+    throw failure({ method: "GET", path }, current);
   }
   const wasEmpty = current.body.empty === true;
   if (!wasEmpty && !a.allowContent) {
@@ -88,6 +90,7 @@ export async function repoDelete(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -124,7 +127,7 @@ export const extension = {
           repo: `${a.owner}/${a.name}`,
         });
         const info = await repoDelete(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info(

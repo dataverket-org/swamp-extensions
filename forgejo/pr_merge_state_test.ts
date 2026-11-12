@@ -1,70 +1,78 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import type { Caller } from "./api.ts";
-import { prMergeState } from "./pr_merge_state.ts";
+import { extension } from "./pr_merge_state.ts";
+import { harness } from "./stub_test.ts";
 
-const PATH = "/api/v1/repos/example-org/example-repo/pulls/7";
-const api = (status: number, body: Record<string, unknown>): Caller => (c) =>
-  Promise.resolve(
-    c.path === PATH ? { status, body } : { status: 404, body: {} },
-  );
-const pr = { owner: "example-org", name: "example-repo", index: 7 };
+const m = extension.methods[0].pr_merge_state;
+const PR = "/api/v1/repos/acme/tool/pulls/7";
+const pr = { owner: "acme", name: "tool", index: 7 };
 const head = {
   head: { sha: "a".repeat(40) },
   base: { ref: "main" },
-  html_url: "https://forge.example.com/pr/7",
+  html_url: "https://forge.example.com/acme/tool/pulls/7",
 };
 
-Deno.test("an open PR has a head and no merge facts", async () => {
-  const r = await prMergeState(
-    api(200, {
-      ...head,
-      state: "open",
-      merged: false,
-      merge_commit_sha: "stale",
-    }),
-    pr,
-  );
-  assertEquals([r.merged, r.headSha, r.base, r.mergeSha, r.mergedBy], [
+Deno.test("pr_merge_state records an open pull request's head and no merge facts", async () => {
+  const h = harness({
+    [`GET ${PR}`]: { status: 200, body: { ...head, state: "open" } },
+  });
+  await m.execute(pr, h.context);
+  const w = h.written()[0];
+  assertEquals([w.spec, w.name], [
+    "prMergeState",
+    "pr-merge-state-acme-tool-7",
+  ]);
+  assertEquals([w.data.merged, w.data.mergeSha, w.data.headSha], [
     false,
+    undefined,
     "a".repeat(40),
-    "main",
-    undefined,
-    undefined,
   ]);
 });
 
-Deno.test("a merged PR carries the merge commit, time and merger", async () => {
-  const r = await prMergeState(
-    api(200, {
-      ...head,
-      state: "closed",
-      merged: true,
-      merge_commit_sha: "b".repeat(40),
-      merged_at: "2026-10-26T13:41:41Z",
-      merged_by: { login: "ann" },
-    }),
-    pr,
-  );
-  assertEquals([r.merged, r.mergeSha, r.mergedAt, r.mergedBy], [
-    true,
+Deno.test("pr_merge_state records a merged pull request's merge commit, time and merger", async () => {
+  const h = harness({
+    [`GET ${PR}`]: {
+      status: 200,
+      body: {
+        ...head,
+        state: "closed",
+        merged: true,
+        merge_commit_sha: "b".repeat(40),
+        merged_at: "2026-11-12T10:00:00Z",
+        merged_by: { login: "bo" },
+      },
+    },
+  });
+  await m.execute(pr, h.context);
+  const d = h.written()[0].data;
+  assertEquals([d.mergeSha, d.mergedAt, d.mergedBy], [
     "b".repeat(40),
-    "2026-10-26T13:41:41Z",
-    "ann",
+    "2026-11-12T10:00:00Z",
+    "bo",
   ]);
 });
 
-Deno.test("a merged PR without a merge commit is an error", async () => {
+Deno.test("pr_merge_state refuses a merged pull request without a merge commit", async () => {
+  const h = harness({
+    [`GET ${PR}`]: { status: 200, body: { ...head, merged: true } },
+  });
   await assertRejects(
-    () => prMergeState(api(200, { ...head, merged: true }), pr),
+    () => m.execute(pr, h.context),
     Error,
     "is merged but reports no merge commit",
   );
+  assertEquals(h.written(), []);
 });
 
-Deno.test("the forge's error is reported", async () => {
+Deno.test("pr_merge_state passes on the forge's refusal", async () => {
+  const h = harness({
+    [`GET ${PR}`]: {
+      status: 404,
+      body: { message: "pull request does not exist" },
+    },
+  });
   await assertRejects(
-    () => prMergeState(api(404, { message: "not found" }), pr),
+    () => m.execute(pr, h.context),
     Error,
-    `GET ${PATH} -> HTTP 404: not found`,
+    "HTTP 404: pull request does not exist",
   );
 });

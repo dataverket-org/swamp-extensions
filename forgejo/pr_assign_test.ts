@@ -1,90 +1,98 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.13";
-import {
-  type ApiCall,
-  type Caller,
-  prAssign,
-  userSearch,
-} from "./pr_assign.ts";
+import { extension } from "./pr_assign.ts";
+import { harness, writes } from "./stub_test.ts";
 
-function fakeApi(
-  replies: Record<string, { status: number; body?: unknown }>,
-): { api: Caller; calls: ApiCall[] } {
-  const calls: ApiCall[] = [];
-  const api: Caller = (c) => {
-    calls.push(c);
-    const r = replies[`${c.method} ${c.path}`];
-    if (!r) {
-      return Promise.resolve({
-        status: 404,
-        body: { message: `no reply for ${c.method} ${c.path}` },
-      });
-    }
-    return Promise.resolve({
-      status: r.status,
-      body: (r.body ?? {}) as Record<string, unknown>,
-    });
-  };
-  return { api, calls };
-}
+const { pr_assign, user_search } = extension.methods[0];
+const PR = "/api/v1/repos/acme/tool/pulls/4";
+const args = { owner: "acme", name: "tool", index: 4, assignees: ["bo"] };
 
-const PR = "/api/v1/repos/example-org/example-repo-infra/pulls/15";
-const args = {
-  owner: "example-org",
-  name: "example-repo-infra",
-  index: 15,
-  assignees: ["linus"],
-};
-
-Deno.test("pr_assign checks the login, reads the PR, patches assignees and records what Forgejo returns", async () => {
-  const { api, calls } = fakeApi({
-    "GET /api/v1/users/linus": { status: 200, body: { login: "linus" } },
+Deno.test("pr_assign checks the login, assigns, and records what the forge reports", async () => {
+  const h = harness({
+    ["GET /api/v1/users/bo"]: { status: 200, body: { login: "bo" } },
     [`GET ${PR}`]: {
       status: 200,
-      body: { state: "open", title: "t", assignees: [] },
+      body: { state: "open", title: "T", assignees: [] },
     },
     [`PATCH ${PR}`]: {
       status: 201,
-      body: { state: "open", title: "t", assignees: [{ login: "linus" }] },
+      body: { state: "open", title: "T", assignees: [{ login: "bo" }] },
     },
   });
-  const r = await prAssign(api, args);
-  assertEquals(r.action, "assigned");
-  assertEquals(r.assignees, ["linus"]);
-  assertEquals(calls.map((c) => c.method), ["GET", "GET", "PATCH"]);
-  assertEquals(calls[2].body, { assignees: ["linus"] });
+  await pr_assign.execute(args, h.context);
+  assertEquals(h.written().map((w) => [w.spec, w.name]), [[
+    "prAssignment",
+    "pr-assignment-acme-tool-4",
+  ]]);
+  assertEquals(
+    [h.written()[0].data.action, h.written()[0].data.assignees],
+    ["assigned", ["bo"]],
+  );
+  assertEquals(writes(h.calls).map((c) => c.body), [{ assignees: ["bo"] }]);
 });
 
-Deno.test("pr_assign is unchanged when the assignees already match", async () => {
-  const { api, calls } = fakeApi({
-    "GET /api/v1/users/linus": { status: 200, body: { login: "linus" } },
+Deno.test("pr_assign leaves a pull request whose assignees already match", async () => {
+  const h = harness({
+    ["GET /api/v1/users/bo"]: { status: 200 },
     [`GET ${PR}`]: {
       status: 200,
-      body: { state: "open", title: "t", assignees: [{ login: "linus" }] },
+      body: { state: "open", assignees: [{ login: "bo" }] },
     },
   });
-  const r = await prAssign(api, args);
-  assertEquals(r.action, "unchanged");
-  assertEquals(calls.length, 2);
+  await pr_assign.execute(args, h.context);
+  assertEquals(h.written()[0].data.action, "unchanged");
+  assertEquals(writes(h.calls), []);
 });
 
-Deno.test("pr_assign refuses an unknown login and a PR that is not open", async () => {
-  const { api } = fakeApi({});
-  await assertRejects(() => prAssign(api, args), Error, 'No user "linus"');
-  const closed = fakeApi({
-    "GET /api/v1/users/linus": { status: 200, body: { login: "linus" } },
-    [`GET ${PR}`]: { status: 200, body: { state: "closed", assignees: [] } },
+Deno.test("pr_assign refuses a login the forge does not know, before reading the pull request", async () => {
+  const h = harness({ ["GET /api/v1/users/bo"]: { status: 404 } });
+  await assertRejects(
+    () => pr_assign.execute(args, h.context),
+    Error,
+    'No user "bo" on the forge',
+  );
+  assertEquals([h.calls.length, h.written()], [1, []]);
+});
+
+Deno.test("pr_assign refuses a pull request that is not open", async () => {
+  const h = harness({
+    ["GET /api/v1/users/bo"]: { status: 200 },
+    [`GET ${PR}`]: { status: 200, body: { state: "closed" } },
   });
-  await assertRejects(() => prAssign(closed.api, args), Error, "not open");
+  await assertRejects(
+    () => pr_assign.execute(args, h.context),
+    Error,
+    "is closed, not open",
+  );
+  assertEquals(writes(h.calls), []);
 });
 
-Deno.test("user_search maps the search endpoint's data to logins and names", async () => {
-  const { api } = fakeApi({
-    "GET /api/v1/users/search?q=linus&limit=50": {
+Deno.test("user_search records each match by login", async () => {
+  const h = harness({
+    ["GET /api/v1/users/search?q=bo&limit=50"]: {
       status: 200,
-      body: { data: [{ login: "ljohansen", full_name: "Linus Johansen" }, {}] },
+      body: { ok: true, data: [{ login: "bo", full_name: "Bo B" }] },
     },
   });
-  assertEquals(await userSearch(api, "linus"), [
-    { login: "ljohansen", fullName: "Linus Johansen" },
-  ]);
+  await user_search.execute({ q: "bo" }, h.context);
+  assertEquals(
+    h.written().map((w) => [w.name, w.data.login, w.data.fullName]),
+    [
+      ["user-match-bo", "bo", "Bo B"],
+    ],
+  );
+});
+
+Deno.test("user_search passes on the forge's refusal", async () => {
+  const h = harness({
+    ["GET /api/v1/users/search?q=bo&limit=50"]: {
+      status: 500,
+      body: { message: "search broke" },
+    },
+  });
+  await assertRejects(
+    () => user_search.execute({ q: "bo" }, h.context),
+    Error,
+    "HTTP 500: search broke",
+  );
+  assertEquals(h.written(), []);
 });

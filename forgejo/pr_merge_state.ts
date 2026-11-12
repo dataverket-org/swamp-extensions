@@ -8,7 +8,7 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { call, type Caller, callerOf, type GlobalArgs } from "./api.ts";
 import { legacyName, repoName, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
@@ -91,6 +91,7 @@ export async function prMergeState(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: { info(msg: string, props?: Record<string, unknown>): void };
   writeResource(
@@ -124,7 +125,7 @@ export const extension = {
           index: a.index,
         });
         const info = await prMergeState(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info("{repo}#{index}: {state}, merged {merged}", {

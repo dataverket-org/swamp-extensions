@@ -16,7 +16,7 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
   type GlobalArgs,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
@@ -105,6 +105,7 @@ export async function repoTopicsEnsure(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -137,7 +138,7 @@ export const extension = {
       execute: async (args: RepoTopicsEnsureArgsT, context: Ctx) => {
         const a = RepoTopicsEnsureArgs.parse(args);
         const info = await repoTopicsEnsure(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         context.logger.info(

@@ -1,9 +1,11 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.11.11.1"
+version: "2026.11.12.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
-  a scoped access token, in one model type, `@dataverket/forgejo`.
+  a scoped access token, in the model type `@dataverket/forgejo`, and the
+  issues of one repository as a stagecraft tracker,
+  `@dataverket/forgejo/stagecraft-tracker`.
 
   A fork of `@thomas/forgejo` 2026.09.04.2 (MIT, copyright Thomas Elliott)
   merged with the methods dataverket had published as add-ons to it. The
@@ -30,10 +32,26 @@ description: >
 
   For software factories: a pull request's discussion read back (comments,
   reviews with their state, inline review comments) and a comment posted on
-  it, a pull request's merge commit, time and merger, and a
+  it, a pull request's merge commit, time and merger, issues opened or
+  closed with a comment saying why and an issue's text rewritten (a pull
+  request's number refused before anything is written), a tag protection
+  rule whose whitelists are converged as exact sets, and a
   `@swamp/software-factory` work item mirrored one way into a Forgejo issue
   that is rewritten from the factory's records, commented on when the stage
   changes or a blocking finding appears, and closed when the work item ends.
+
+  The second type is a tracker for `@swamp/stagecraft`, contract version 1,
+  behind stagecraft's publisher: `describe`, `operate` with the six
+  operations every tracker offers, and `labels`, which reports its label
+  scheme; the shipped workflow `@dataverket/forgejo-stagecraft-labels`
+  writes that scheme with the first type's `label_ensure`. A ticket is an issue;
+  its status and type are exclusive scoped labels (`status/new`,
+  `type/bug`), and the issue's state follows the status. `blocked_by` is the
+  forge's own issue dependency; parent, related and duplicate relations are
+  kept in a block the tracker owns at the end of both issues' bodies, and the
+  tracker enforces the contract's relation rules itself. It shares the forge
+  client and the label code with the first type, which knows nothing of
+  stagecraft.
 
   Two pre-flight checks: a policy check that `apiUrl` is the forge's base URL
   without a trailing `/api/v1`, and a live one that the token is still
@@ -41,6 +59,8 @@ description: >
   marked sensitive, so swamp vaults it and records a reference; a mirror's
   source or remote credential is sent to Forgejo once and never stored; and a
   token the forge echoes back in an error is masked before it becomes data.
+  No redirect is followed: a renamed repository's old name is refused with
+  the new name, never read, patched or deleted in its place.
 
   Records are stored under portable data names, `repo-<owner>-<repo>`,
   `pull-<owner>-<repo>-<index>`, `push-mirror-<owner>-<repo>-<remote>`
@@ -60,6 +80,7 @@ models:
   - topics.ts
   - units.ts
   - merge_settings.ts
+  - stagecraft_tracker.ts
   - pr_assign.ts
   - repo_delete.ts
   - org_delete.ts
@@ -68,7 +89,9 @@ models:
   - pr_comment.ts
   - pr_merge_state.ts
   - work_item_sync.ts
-workflows: []
+  - tag_protection.ts
+workflows:
+  - workflow-5a8da8d5-7458-4310-bf2d-66e1dbf4c394.yaml
 vaults: []
 datastores: []
 reports: []

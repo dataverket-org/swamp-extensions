@@ -18,7 +18,12 @@
  *
  * @module
  */
-import { fetchCaller, type GlobalArgs } from "./api.ts";
+import {
+  callerOf,
+  type ClientContext,
+  type GlobalArgs,
+  isFailure,
+} from "./api.ts";
 
 /**
  * Forgejo's base URL, without the API path. The schema says "no trailing
@@ -87,7 +92,7 @@ export const extension = {
         "The forge answers and the token is still accepted: it names the login, or refuses only a scope",
       labels: ["live"],
       execute: async (
-        context: { globalArgs: GlobalArgs; signal?: AbortSignal },
+        context: ClientContext,
       ) => {
         const shape = apiUrlProblem(context.globalArgs.apiUrl);
         // a bad URL is the other check's finding; do not repeat it as a 404
@@ -96,11 +101,11 @@ export const extension = {
           return { pass: false, errors: ["globalArguments.token is not set"] };
         }
         try {
-          const api = fetchCaller(context.globalArgs, context.signal);
+          const api = callerOf(context);
           const r = await api({ method: "GET", path: "/api/v1/user" });
           // a scope refusal is proof of acceptance: see scopeRefusal
           if (scopeRefusal(r.status, r.body)) return { pass: true };
-          if (r.status >= 400) {
+          if (isFailure(r.status)) {
             const b = r.body;
             const msg = typeof b.message === "string"
               ? b.message

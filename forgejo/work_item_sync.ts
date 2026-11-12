@@ -13,7 +13,7 @@
  * @module
  */
 import { z } from "npm:zod@4";
-import { call, type Caller, fetchCaller, type GlobalArgs } from "./api.ts";
+import { call, type Caller, callerOf, type GlobalArgs } from "./api.ts";
 import { dataName, legacyName, readOrNull, writeRecord } from "./names.ts";
 
 const enc = encodeURIComponent;
@@ -242,6 +242,7 @@ export async function syncIssue(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: { info(msg: string, props?: Record<string, unknown>): void };
   readResource(name: string): Promise<Record<string, unknown> | null>;
@@ -307,7 +308,7 @@ export const extension = {
             await readOrNull(context, legacyLink),
         );
         const link = await syncIssue(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
           await records(context, a.factory, a.workItem),
           prev.success ? prev.data : undefined,

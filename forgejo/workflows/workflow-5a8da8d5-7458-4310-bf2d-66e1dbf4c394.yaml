@@ -1,0 +1,54 @@
+id: 5a8da8d5-7458-4310-bf2d-66e1dbf4c394
+name: "@dataverket/forgejo-stagecraft-labels"
+description: >-
+  Converge a repository's labels to its stagecraft tracker's settings: one label status/<name>, type/<name> and
+  severity/<name> for each status, type and severity of the @dataverket/forgejo/stagecraft-tracker instance named,
+  scoped and exclusive, so an issue carries one of each. The tracker only reports its scheme (labels); the labels
+  are written by the @dataverket/forgejo instance named, with its label_ensure, which reads first, creates what is
+  missing, corrects a colour or a description that differs, keeps every other label and deletes nothing, so it is
+  safe to run again. Its label records say what it did to each label. The forgejo instance's token needs write on
+  the repository's labels; the tracker's token is not used.
+version: 1
+inputs:
+  properties:
+    tracker:
+      type: string
+      description: The @dataverket/forgejo/stagecraft-tracker instance whose repository and label scheme to use
+    forgejo:
+      type: string
+      description: The @dataverket/forgejo instance that writes the labels, with a token that may manage them
+  required:
+    - tracker
+    - forgejo
+jobs:
+  - name: labels
+    description: The tracker's label scheme, written through the base type
+    steps:
+      - name: scheme
+        description: The tracker records its label scheme from its settings; no forge call.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.tracker }}
+          methodName: labels
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: labels-ensure
+        description: Create or correct those labels on the tracker's repository; keep the rest; delete nothing.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: label_ensure
+          inputs:
+            owner: ${{ data.latest(inputs.tracker, "tracker-labels").attributes.owner }}
+            name: ${{ data.latest(inputs.tracker, "tracker-labels").attributes.repo }}
+            labels: ${{ data.latest(inputs.tracker, "tracker-labels").attributes.labels }}
+            prune: false
+        dependsOn:
+          - step: scheme
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

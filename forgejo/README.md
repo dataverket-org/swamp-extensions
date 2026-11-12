@@ -26,8 +26,14 @@ This extension can hold an admin-scoped token, so what it does is deliberate:
   and `runner_prune` read before they remove. A repository already gone is a
   no-op, one with commits is refused unless `allowContent` says otherwise, and
   an organization that still holds repositories is refused and names them,
-  because Forgejo has no undelete. A failed migration's empty shell repository
-  is detected and reported by `mirror_ensure`, never deleted on its own.
+  because Forgejo has no undelete. A failed migration's leftover, an empty
+  repository whether marked mirror or not, is refused by `mirror_ensure` and
+  `pull_mirror_ensure` with a request to delete it, never deleted on their own.
+- **A redirect is refused, never followed.** Forgejo answers a renamed
+  repository's old name with a 301 to the new one. Following it would read,
+  patch or delete the renamed repository under a name nobody asked for, so every
+  method refuses the old name with
+  `<owner>/<name> was renamed; it now redirects to <new path>`.
 - **One irreversible merge.** `pr_merge` writes to the base branch. It refuses a
   pull request that is closed, merged, draft or not reported mergeable, and
   refuses a head whose CI state is not `success` unless `force=true`. `force`
@@ -44,9 +50,11 @@ This extension can hold an admin-scoped token, so what it does is deliberate:
 - **No secret is recorded or logged.** A pull mirror's source token and a push
   mirror's remote credential are sent to Forgejo once and never read back. An
   Actions secret's value goes to Forgejo and only its name and scope are
-  recorded. The runner registration token is marked sensitive, so swamp vaults
-  it and records a reference. A token the forge echoes back in an error is
-  masked before it becomes data.
+  recorded. The runner registration token is marked sensitive, so swamp stores
+  it in the repository's default vault and records a reference; before
+  2026.11.12.1 the resource named a vault `infra`, and the method failed in a
+  repository without one. A token the forge echoes back in an error is masked
+  before it becomes data.
 
 ## Authentication
 
@@ -64,6 +72,12 @@ across all owners. Token CRUD (`/users/{u}/tokens`) is basic-auth only, so this
 model never mints or revokes tokens. `migrations.ALLOW_LOCALNETWORKS=false`
 makes private-address mirror sources fail with HTTP 422; GitHub sources are
 unaffected.
+
+`apiUrl` must be the address the forge answers on. A redirect is never followed,
+so an `http://` URL a proxy sends to `https://`, or to a login page, fails with
+the redirect's status and where it points, and so does the
+`forgejo-token-accepted` check. A forge that cannot be reached is reported with
+the URL that was tried and the connection's own reason.
 
 ## Use
 
@@ -143,57 +157,60 @@ Read and audit:
 | `repo_list`              | Every repository, or one owner's                                                                                                 |
 | `user_list`              | Users, admin view; never any credential                                                                                          |
 | `user_search`            | Search users by login or name fragment without admin scope, the way to find a login for `pr_assign`; Forgejo's top 50 matches    |
-| `mirror_status`          | Every pull mirror's last sync, interval and a `stale` flag (older than `staleFactor` times the interval)                         |
+| `mirror_status`          | Every pull mirror's last sync, interval and a `stale` flag (older than `staleFactor` times the interval, or never synced)        |
 | `branch_protection_list` | What each protected branch enforces                                                                                              |
 | `webhook_audit`          | Where every hook of an owner's repositories posts, and whether that is the `expectedUrl`                                         |
 | `pr_list`                | Pull requests in a state                                                                                                         |
 | `pr_get`                 | One pull request with the mergeable verdict and the head commit's CI state                                                       |
 | `push_mirror_list`       | The push mirrors an org or repository has, and stored records the forge no longer has; the audit a mirroring workflow asserts on |
-| `runner_list`            | The Actions runners an org or repository has, with their status                                                                  |
+| `runner_list`            | The Actions runners an org or repository may use, with their status and level (`repo`, `org`, `instance`)                        |
 | `issue_list`             | The issues of a repository in a state, every page, pull requests excluded                                                        |
 | `label_list`             | The labels of an organization or a repository, every page                                                                        |
 
 Idempotent provisioning:
 
-| Method                       | Does                                                                                                                 |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `org_ensure`                 | Find-or-create an organization and converge visibility and description                                               |
-| `repo_ensure`                | Find-or-create a repository and converge its settings                                                                |
-| `collaborator_ensure`        | Give a user access to a repository; never removes one, refuses the owner                                             |
-| `branch_protection_ensure`   | Find-or-create a branch protection rule and converge what it enforces                                                |
-| `mirror_ensure`              | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description               |
-| `mirror_sync_now`            | Queue an immediate pull sync                                                                                         |
-| `pull_mirror_ensure`         | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest    |
-| `push_mirror_ensure`         | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address  |
-| `push_mirror_sync_now`       | Queue an immediate push of every push mirror of a repository                                                         |
-| `repo_topics_ensure`         | Give a repository topics; additive unless `exact`                                                                    |
-| `repo_units_ensure`          | Switch a repository's Actions, packages or projects unit; sends only what is given                                   |
-| `repo_merge_settings_ensure` | Read or converge a repository's pull-request merge settings; sends only what is given                                |
-| `repo_rename`                | Rename a repository, verify-first                                                                                    |
-| `actions_secret_put`         | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value            |
-| `runner_registration_token`  | A registration token for `forgejo-runner register`, vaulted; its endpoint is deprecated since Forgejo 15, see below  |
-| `pr_ensure`                  | Open a pull request, find-or-create on the head and base pair, converging title and body                             |
-| `pr_assign`                  | Assign a pull request, every login checked against the forge first                                                   |
-| `issue_ensure`               | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name |
-| `issue_labels_ensure`        | The labels of an issue or a pull request by name; additive unless `exact`                                            |
-| `label_ensure`               | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`           |
-| `webhook_retarget`           | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                  |
-| `pr_feedback`                | Read a pull request's comments, reviews with their state, and each review's inline comments                          |
-| `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                         |
-| `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                            |
-| `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                     |
+| Method                       | Does                                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `org_ensure`                 | Find-or-create an organization and converge visibility and description                                                |
+| `repo_ensure`                | Find-or-create a repository and converge its settings                                                                 |
+| `collaborator_ensure`        | Give a user access to a repository; membership read first; never removes one, refuses the owner                       |
+| `branch_protection_ensure`   | Find-or-create a branch protection rule and converge what it enforces                                                 |
+| `tag_protection_ensure`      | Find-or-create a tag protection rule for a glob; both whitelists converged as exact sets; never deletes               |
+| `mirror_ensure`              | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description                |
+| `mirror_sync_now`            | Queue an immediate pull sync                                                                                          |
+| `pull_mirror_ensure`         | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest     |
+| `push_mirror_ensure`         | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address   |
+| `push_mirror_sync_now`       | Queue an immediate push of every push mirror of a repository                                                          |
+| `repo_topics_ensure`         | Give a repository topics; additive unless `exact`                                                                     |
+| `repo_units_ensure`          | Switch a repository's Actions, packages or projects unit; sends only what is given                                    |
+| `repo_merge_settings_ensure` | Read or converge a repository's pull-request merge settings; sends only what is given                                 |
+| `repo_rename`                | Rename a repository, verify-first                                                                                     |
+| `actions_secret_put`         | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value             |
+| `runner_registration_token`  | A registration token for `forgejo-runner register`, in the default vault; its endpoint is deprecated since Forgejo 15 |
+| `pr_ensure`                  | Open a pull request, find-or-create on the head and base pair, converging title and body                              |
+| `pr_assign`                  | Assign a pull request, every login checked against the forge first                                                    |
+| `issue_ensure`               | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name  |
+| `issue_labels_ensure`        | The labels of an issue or a pull request by name; additive unless `exact`                                             |
+| `issue_state_ensure`         | Open or close several issues, each with a comment saying why; one already in that state is left alone, uncommented    |
+| `issue_body_ensure`          | Give an issue the text given, replacing what is there; written only when it differs, never recorded                   |
+| `label_ensure`               | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`            |
+| `webhook_retarget`           | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                   |
+| `pr_feedback`                | Read a pull request's comments, reviews with their state, and each review's inline comments                           |
+| `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                          |
+| `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                             |
+| `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                      |
 
 Lifecycle and deletes:
 
-| Method               | Does                                                                                                                       |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `repo_archive`       | Archive a repository; a no-op when already archived                                                                        |
-| `repo_unarchive`     | The reverse                                                                                                                |
-| `pr_merge`           | Merge a pull request (squash, merge, rebase or rebase-merge) behind the guard described above. Irreversible                |
-| `push_mirror_delete` | Remove a push mirror, verify-first                                                                                         |
-| `runner_prune`       | Remove offline runners of a given name; a runner that dies before saving `.runner` leaves a record behind on every restart |
-| `repo_delete`        | Delete a repository, verify-first; refused with commits unless `allowContent`                                              |
-| `org_delete`         | Delete an organization, verify-first; refused while it still holds repositories                                            |
+| Method               | Does                                                                                                           |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `repo_archive`       | Archive a repository; a no-op when already archived                                                            |
+| `repo_unarchive`     | The reverse                                                                                                    |
+| `pr_merge`           | Merge a pull request (squash, merge, rebase or rebase-merge) behind the guard described above. Irreversible    |
+| `push_mirror_delete` | Remove a push mirror, verify-first                                                                             |
+| `runner_prune`       | Remove offline runners of a given name and of the scope's own level; another scope's are kept, with the reason |
+| `repo_delete`        | Delete a repository, verify-first; refused with commits unless `allowContent`                                  |
+| `org_delete`         | Delete an organization, verify-first; refused while it still holds repositories                                |
 
 ## Pre-flight checks
 
@@ -241,6 +258,22 @@ other:
   come back for a token it has accepted; `forgejo-token-accepted` passes it and
   fails on a 401, the real refusal. Narrow tokens are the design: `repo_list`
   explains how to list without `read:organization` or `read:user`.
+- **Redirects are refused, not followed.** Upstream's transport followed a
+  redirect, so a renamed repository's old name reached the renamed repository:
+  `repo_ensure` patched it and, among the former add-ons, `repo_delete` deleted
+  it. Both transports now refuse any 3xx with where it points, and a connection
+  that fails names the URL it tried.
+- **`collaborator_ensure` reads membership first.** Upstream took the permission
+  probe's answer for a grant, and on a public repository the forge answers
+  `read` for everyone: a new grant was recorded as `updated`, and
+  `permission=read` for someone who was no collaborator added nothing. The
+  method now asks `GET .../collaborators/<user>` (204 or 404) first.
+- **A failed migration's leftover is refused, and never-synced is stale.**
+  Forgejo 15 leaves a mirror whose migration failed as a repository marked
+  mirror, empty, with no interval. Upstream's `mirror_ensure` patched it and got
+  an HTTP 500 back; it now refuses it and asks for `repo_delete`.
+  `mirror_status` records any mirror that never synced as stale; upstream did so
+  only while periodic sync was on, so the leftover passed every audit.
 - **The former add-ons are methods of the same type.** They were published as
   `export const extension` on `@thomas/forgejo` and are now part of
   `@dataverket/forgejo`; their behaviour is unchanged. The scope statement
@@ -250,14 +283,21 @@ other:
 ## Push mirrors are not pull mirrors
 
 The base model's `mirror_ensure` sets up a _pull_ mirror: Forgejo fetching from
-somewhere else. `push_mirror_ensure` is the other direction — Forgejo pushes to
-a remote, which is how a forge-of-record mirrors to GitHub.
+somewhere else. `push_mirror_ensure` is the other direction: Forgejo pushes to a
+remote, which is how a forge-of-record mirrors to GitHub.
 
-It is find-or-create on the remote address. An existing mirror to the same
-address is left alone, because Forgejo has no update endpoint: changing the
-interval or the filter means delete and recreate, which this extension never
-does on its own. The remote credential is sent to Forgejo once and never
-recorded; Forgejo reports back only the address, the timing and the last error.
+It is find-or-create on the remote address, compared without credentials, case,
+a trailing slash or a trailing `.git`, so `.../repo` and `.../repo.git` are one
+remote, as every git host serves them. An existing mirror to the same address is
+left alone, because Forgejo has no update endpoint: changing the interval or the
+filter means delete and recreate, which this extension never does on its own.
+The remote credential is sent to Forgejo once and never recorded; Forgejo
+reports back only the address, the timing and the last error.
+
+`push_mirror_sync_now` passes on the forge's answer as it is. Forgejo pushes
+every mirror of the repository at once and answers HTTP 500 when one of them
+fails, a wrong credential say, or is still making its first push; the error
+names that mirror, and `push_mirror_list` shows its last error.
 
 ## Pull mirrors send only what they are given
 
@@ -269,11 +309,13 @@ mirror gets Forgejo's own defaults for the rest: public, unless the instance
 forces new repositories private; an existing mirror is changed only in the
 settings named, and `changed` in the record says which. A repository that is not
 a mirror is refused, an empty one is named as a migration still running or the
-leftover of a failed one, and a mirror of another source is an error, since
-Forgejo cannot change a mirror's source. A source token is sent once on create,
-masked in any error, and never recorded. Forgejo migrates synchronously, so a
-large source can outlast the model's `httpTimeoutMs`; the migration carries on,
-and the next run finds it.
+leftover of a failed one, a mirror that is empty and never synced is refused as
+what Forgejo 15 leaves when a migration fails, to be deleted (`repo_delete`)
+before trying again, and a mirror of another source is an error, since Forgejo
+cannot change a mirror's source. A source token is sent once on create, masked
+in any error, and never recorded. Forgejo migrates synchronously, so a large
+source can outlast the model's `httpTimeoutMs`; the migration carries on, and
+the next run finds it.
 
 `repo_topics_ensure` sets topics, the labels Forgejo shows on a repository and
 searches by. It adds the given topics and keeps the others unless `exact` makes
@@ -334,6 +376,11 @@ gone is a no-op, and one with commits is refused unless `allowContent` says
 otherwise, because Forgejo has no undelete. What is recorded is what was seen
 before the delete and what happened.
 
+A renamed repository's old name is refused, with the new name, before anything
+is deleted: the forge answers the old name with a redirect, and this package
+never follows one. Without that, deleting the old name after `repo_rename` would
+delete the renamed repository.
+
 `org_delete` does the same for an organization. One that is already gone is a
 no-op, and one that still holds repositories is refused and names them, because
 `repo_delete` is where the decision about each repository belongs; Forgejo would
@@ -350,13 +397,46 @@ Forgejo reports back, not what was asked for.
 already has an issue of that exact title, open or closed; a rerun files nothing
 twice, and a closed one is reported as found rather than reopened. The search is
 Forgejo's `q` on the title, followed to the end, and the match is the exact
-title, so an issue whose title merely contains the new one does not count. Two
+title, so an issue whose title merely contains the new one does not count. The
+search goes through Forgejo's issue indexer, which catches up with a new issue
+in the background, about a second on a quiet forge; when it finds nothing, the
+repository's 50 newest issues are read without a search, from the database, and
+matched the same way, so a rerun straight after a run files nothing twice. Two
 equal titles in one call are refused before anything is sent. `issue_list` reads
 a repository's issues in one state, every page.
 
 An issue is filed with labels by name. Every name must exist on the repository
 or on its organization, or the call is refused before any issue is filed; a
 found issue keeps the labels it has.
+
+## An issue's state and text
+
+`issue_state_ensure` takes one to twenty issues, each a number, the state it is
+to have (`open` or `closed`) and a comment, empty by default. It reads every
+issue first, so a pull request's number or an issue that is not there anywhere
+in the list stops the call before anything is written. An issue whose state
+differs gets its comment, when there is one, and then the new state; if the
+comment is refused, the state is not changed. One that already has the state is
+left alone and gets no comment, so a rerun posts nothing twice. Each issue gets
+a record `issue-state-<owner>-<repo>-<number>`.
+
+`issue_body_ensure` gives one issue the text given. It reads the issue first,
+refuses a pull request's number, and writes only when the text differs. The
+record, `issue-body-<owner>-<repo>-<number>`, says whether it was rewritten and
+never holds the text.
+
+## Tag protection
+
+`tag_protection_ensure` finds the rule for a tag glob (`namePattern`, the
+identity), creates it when it is missing, and converges `whitelistUsernames` and
+`whitelistTeams` as exact sets: a login or team left out is removed from the
+rule, and the order does not matter. It never deletes a rule, and an empty
+whitelist is a rule nobody may push matching tags through. Forgejo stores a
+login that cannot write to the repository but leaves it out of the rule's answer
+and of its effect, without an error; the method checks the forge's answer after
+each write and refuses, naming the login, rather than report an update that
+pushes nothing. Give the login write access (`collaborator_ensure`) and run
+again.
 
 ## Labels of an organization or a repository
 
@@ -394,15 +474,114 @@ Nothing in the issue flows back into the factory.
 is not necessarily the commit that was merged: compare the merge commit's tree
 when that matters.
 
+## A stagecraft tracker
+
+The package's second type, `@dataverket/forgejo/stagecraft-tracker`, makes the
+issues of one repository the tickets of a `@swamp/stagecraft` factory. It is a
+tracker as stagecraft's `TRACKERS.md` describes one, contract version 1: a
+stagecraft publisher sits in front of it and keeps the ledger, the cursor, the
+ticket index and the snapshots, and calls this type's `operate` for each write.
+It shares the forge client and the label code with `@dataverket/forgejo`, and
+holds only what is stagecraft's: the base type and its methods know nothing of
+stagecraft and are used without it.
+
+| Method     | What it does                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `describe` | Writes the `description` record stagecraft binds to: the tracker's name, contract 1, no options                   |
+| `operate`  | Makes one operation and writes its answer: `fetch_issue`, `create`, `comment`, `set_status`, `relate`, `unrelate` |
+| `labels`   | Records its label scheme from its settings, in the form `label_ensure` takes; calls no forge                      |
+
+```sh
+swamp model create @dataverket/forgejo/stagecraft-tracker tickets \
+  --global-arg apiUrl=https://git.example.com \
+  --global-arg 'token=${{ vault.get("infra", "forgejo-issues-token") }}' \
+  --global-arg owner=example-org --global-arg repo=tool
+swamp workflow run @dataverket/forgejo-stagecraft-labels \
+  --input tracker=tickets --input forgejo=forge
+swamp model method run tickets describe
+swamp model create @swamp/stagecraft/publisher tickets-pub --global-arg tracker=tickets
+```
+
+The workflow `@dataverket/forgejo-stagecraft-labels`, shipped in this package,
+takes the tracker's `labels` and writes them with the base type's `label_ensure`
+on the `@dataverket/forgejo` instance named (`forge` above): it reads the
+repository's labels, creates the tracker's that are missing, corrects a colour
+or a description that differs, keeps every other label and deletes nothing, so
+it is safe to run again. That instance's token is the one that may manage
+labels; the tracker's own token needs only the issues. Name a forgejo instance
+for the same forge as the tracker: the workflow writes to the owner and
+repository the tracker names, on whatever forge that instance points at.
+
+Then set the publisher's `statuses`, each status key of the factory mapped to a
+status of this tracker, name the tracker in the factory definition,
+`tracker: { kind: forgejo }`, and bind the factory to the publisher, as
+`TRACKERS.md` says.
+
+- **Tickets.** A ticket is an issue. Its stable id is the issue's number, `34`;
+  its display id is `#34`; `fetch_issue` takes either. A pull request is not a
+  ticket, and an id that is not a number is `invalid`.
+- **Statuses.** Each status is a label `status/<name>` and an issue state, from
+  the `statuses` global argument. The defaults are `new` and `in-progress`
+  (open), `shipped` and `closed` (closed). `create` files an issue in the first
+  status, which must be open. `set_status` converges the label and the state
+  together, and reports `changed: false` when both are already right. An issue
+  filed by hand without a status label reads as the first status of its state.
+- **Types.** Each type is a label `type/<name>`, from `types`; `create` refuses
+  one that is not listed, naming the ones that are. The defaults are `feature`,
+  `bug`, `security` and `finding`. `severities` adds labels `severity/<name>`
+  (`low`, `medium`, `high`, `critical`, mildest first and lighter as they get
+  milder) for a person or a later step to set. Each status, type and severity
+  has a colour and a description in the settings.
+- **Relations.** `blocked_by` is the forge's own issue dependency, which people
+  see and the forge can enforce; a repository with issue dependencies switched
+  off reads as having none, and refuses a new one as `invalid`. `parent_of`,
+  `related_to` and `duplicate_of` have no native form: they are kept in a block
+  the tracker owns at the end of both issues' bodies, between two HTML comments,
+  as lines a person reads (`Parent of: #12`, `Child of: #3`,
+  `Duplicate of: #7`). `fetch_issue` reads the block back and leaves it out of
+  the description. The tracker enforces the contract's relation rules itself:
+  none to itself, one parent, no parent loop within ten levels, a duplicate of
+  one ticket, a primary that is no duplicate, and no duplicates of a ticket that
+  has some.
+- **Comments and lists.** `fetch_issue` reads every comment in one call, as the
+  forge answers them all at once, and the dependency lists page by page.
+  `create` answers from the forge's reply to the create, so a read failing
+  afterwards cannot turn a filed issue into a failure that a retry files again.
+  A `relate` that wrote one issue's body and failed on the other is completed by
+  the retry, once the relation rules still hold for it.
+- **Answers.** `operate` never throws. A request that does not parse, an
+  operation it does not offer and every forge refusal are written as an answer
+  with a kind: 401 and 403 are `auth`, 404 `not_found`, 429 `rate_limited`, 400,
+  409 and 422 `invalid`, the rest `upstream`. An answer that succeeded is never
+  made again, and the `run` given is written into each answer.
+- **Not offered.** The optional capabilities, history, assign and pull requests.
+  Marking a duplicate does not close an issue (`closesDuplicates` false), so
+  stagecraft closes it through its `closed` status key.
+- **The token** needs read and write on the repository's issues. It is marked
+  sensitive, and the forge's echo of it is masked like everywhere else in this
+  package.
+
+stagecraft's `@swamp/stagecraft/conformance` workflow passes against it on
+Forgejo 15.0.11, through a publisher, with `statusNames=in-progress,shipped`,
+`createType=bug` and `missing=999999`, in the live suite (`smoke/`).
+
+## Checked against Forgejo 15.0.11
+
+The live suite in `smoke/` runs every method of both types against a throwaway
+Forgejo 15.0.11 in podman, through swamp, refusals and leaks included; its
+README says what each batch checks and what it cannot reach (`work_item_sync`
+beyond its refusal, GitHub, an online runner).
+
 ## Checked against Forgejo 17.0.1
 
-Every endpoint, method, request body field and query parameter this type uses
-exists in the API of Forgejo 17.0.1. One of them is deprecated:
-`runner_registration_token` reads `GET .../actions/runners/registration-token`,
-deprecated since Forgejo 15 and still served by 17.0.1. Its replacement,
-`POST .../actions/runners`, registers the runner itself and answers with the
-runner's own token, which `forgejo-runner create-runner-file` takes, so moving
-to it is a new method rather than a change to this one.
+Every endpoint, method, request body field and query parameter
+`@dataverket/forgejo` uses exists in the API of Forgejo 17.0.1. One of them is
+deprecated: `runner_registration_token` reads
+`GET .../actions/runners/registration-token`, deprecated since Forgejo 15 and
+still served by 17.0.1. Its replacement, `POST .../actions/runners`, registers
+the runner itself and answers with the runner's own token, which
+`forgejo-runner create-runner-file` takes, so moving to it is a new method
+rather than a change to this one.
 
 `repo_merge_settings_ensure` was run against Forgejo 17.0.1: each of its eleven
 settings written and read back, a second run with the same settings writing
@@ -427,39 +606,45 @@ swamp data query 'specName == "pushMirror" && isLatest' --json
 swamp data query 'specName == "runner" && isLatest' --json
 ```
 
-| Spec                 | Name                                         | Holds                                                                  |
-| -------------------- | -------------------------------------------- | ---------------------------------------------------------------------- |
-| `server`             | `status`                                     | Version and health, from `health`                                      |
-| `org`                | `<org>`                                      | An organization, from `org_list` and `org_ensure`                      |
-| `repo`               | `repo-<owner>-<repo>`                        | A repository and its settings                                          |
-| `user`               | `<login>`                                    | A user, admin view, never a credential                                 |
-| `mirror`             | `mirror-<owner>-<repo>`                      | A pull mirror's sync health                                            |
-| `webhook`            | `webhook-<owner>-<repo>-<id>`                | A webhook, audited or repointed, never its secret                      |
-| `collaborator`       | `collaborator-<owner>-<repo>-<login>`        | A user's access level on a repository                                  |
-| `branch_protection`  | `branch-protection-<owner>-<repo>-<rule>`    | A branch-protection rule                                               |
-| `pull_request`       | `pull-<owner>-<repo>-<index>`                | A pull request: state, mergeability, head CI                           |
-| `actionsSecret`      | `actions-secret-<target>-<name>`             | An Actions secret's name and scope. Never the value                    |
-| `runnerRegistration` | `runner-registration-<target>`               | A registration token, vaulted; the record holds a reference            |
-| `runner`             | `runner-<target>-<name or id>`               | A registered runner: name, online/offline status, labels               |
-| `runnerPrune`        | `runner-prune-<target>-<name>`               | Offline runners of one name deleted at a scope, and the live ones kept |
-| `repoRename`         | `repo-rename-<owner>-<new name>`             | Old and new name, and the URLs that changed                            |
-| `pushMirror`         | `push-mirror-<owner>-<repo>-<remote>`        | Remote address, timing, last push and last error                       |
-| `pushMirrorDelete`   | `push-mirror-delete-<owner>-<repo>-<remote>` | Which remote was removed from which repository                         |
-| `pullMirror`         | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed   |
-| `repoTopics`         | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                 |
-| `repoUnits`          | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                |
-| `repoMergeSettings`  | `repo-merge-settings-<owner>-<repo>`         | A repository's merge settings, and which changed                       |
-| `prAssignment`       | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                    |
-| `userMatch`          | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d      |
-| `repoDelete`         | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                             |
-| `orgDelete`          | `org-delete-<org>`                           | What the organization was, and what happened                           |
-| `issue`              | `issue-<owner>-<repo>-<number>`              | An issue filed or found by title                                       |
-| `issueLabels`        | `issue-labels-<owner>-<repo>-<number>`       | The labels set on an issue                                             |
-| `label`              | `label-<owner>-<repo or org>-<name>`         | A label of a repository or an organization                             |
-| `prFeedback`         | `pr-feedback-<owner>-<repo>-<index>`         | A pull request's discussion read back                                  |
-| `prComment`          | `pr-comment-<owner>-<repo>-<index>-<id>`     | A comment posted on a pull request                                     |
-| `prMergeState`       | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                         |
-| `workItemIssue`      | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                         |
+| Spec                     | Name                                         | Holds                                                                                |
+| ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `server`                 | `status`                                     | Version and health, from `health`                                                    |
+| `org`                    | `<org>`                                      | An organization, from `org_list` and `org_ensure`                                    |
+| `repo`                   | `repo-<owner>-<repo>`                        | A repository and its settings                                                        |
+| `user`                   | `<login>`                                    | A user, admin view, never a credential                                               |
+| `mirror`                 | `mirror-<owner>-<repo>`                      | A pull mirror's sync health                                                          |
+| `webhook`                | `webhook-<owner>-<repo>-<id>`                | A webhook, audited or repointed, never its secret                                    |
+| `collaborator`           | `collaborator-<owner>-<repo>-<login>`        | A user's access level on a repository                                                |
+| `branch_protection`      | `branch-protection-<owner>-<repo>-<rule>`    | A branch-protection rule                                                             |
+| `pull_request`           | `pull-<owner>-<repo>-<index>`                | A pull request: state, mergeability, head CI                                         |
+| `actionsSecret`          | `actions-secret-<target>-<name>`             | An Actions secret's name and scope. Never the value                                  |
+| `runnerRegistration`     | `runner-registration-<target>`               | A registration token, in the default vault; the record holds a reference             |
+| `runner`                 | `runner-<target>-<name or id>`               | A registered runner: name, online/offline status, labels                             |
+| `runnerPrune`            | `runner-prune-<target>-<name>`               | Offline runners of one name deleted at a scope, and those kept, each with the reason |
+| `repoRename`             | `repo-rename-<owner>-<new name>`             | Old and new name, and the URLs that changed                                          |
+| `pushMirror`             | `push-mirror-<owner>-<repo>-<remote>`        | Remote address, timing, last push and last error                                     |
+| `pushMirrorDelete`       | `push-mirror-delete-<owner>-<repo>-<remote>` | Which remote was removed from which repository                                       |
+| `pullMirror`             | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed                 |
+| `repoTopics`             | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                               |
+| `repoUnits`              | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                              |
+| `repoMergeSettings`      | `repo-merge-settings-<owner>-<repo>`         | A repository's merge settings, and which changed                                     |
+| `answer`, tracker        | `answer-...`, as the publisher names it      | One operation's result or failure; garbage-collected after 30 days                   |
+| `description`, tracker   | `description`                                | What the tracker says of itself                                                      |
+| `trackerLabels`, tracker | `tracker-labels`                             | The tracker's label scheme, as `label_ensure` takes it                               |
+| `prAssignment`           | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                                  |
+| `userMatch`              | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d                    |
+| `repoDelete`             | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                                           |
+| `orgDelete`              | `org-delete-<org>`                           | What the organization was, and what happened                                         |
+| `issue`                  | `issue-<owner>-<repo>-<number>`              | An issue filed or found by title                                                     |
+| `issueLabels`            | `issue-labels-<owner>-<repo>-<number>`       | The labels set on an issue                                                           |
+| `label`                  | `label-<owner>-<repo or org>-<name>`         | A label of a repository or an organization                                           |
+| `prFeedback`             | `pr-feedback-<owner>-<repo>-<index>`         | A pull request's discussion read back                                                |
+| `prComment`              | `pr-comment-<owner>-<repo>-<index>-<id>`     | A comment posted on a pull request                                                   |
+| `issueState`             | `issue-state-<owner>-<repo>-<number>`        | An issue's state as `issue_state_ensure` set or found it                             |
+| `issueBody`              | `issue-body-<owner>-<repo>-<number>`         | Whether `issue_body_ensure` rewrote an issue's text; never the text                  |
+| `tagProtection`          | `tag-protection-<owner>-<repo>-<pattern>`    | A tag protection rule: the pattern and who may push matching tags                    |
+| `prMergeState`           | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                                       |
+| `workItemIssue`          | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                                       |
 
 Every spec has an infinite lifetime except `userMatch`. `<target>` is an owner
 or `<owner>-<repo>`, the scope of an Actions method.

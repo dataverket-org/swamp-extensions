@@ -13,8 +13,10 @@ import {
   type ApiCall,
   call,
   type Caller,
-  fetchCaller,
+  callerOf,
+  failure,
   type GlobalArgs,
+  isFailure,
 } from "./api.ts";
 import { dataName, legacyName, writeRecord } from "./names.ts";
 
@@ -99,10 +101,8 @@ export async function prAssign(
     if (r.status === 404) {
       throw new Error(`No user "${login}" on the forge; check the login`);
     }
-    if (r.status >= 400) {
-      throw new Error(
-        `Forgejo API GET /api/v1/users/${login} -> HTTP ${r.status}`,
-      );
+    if (isFailure(r.status)) {
+      throw failure({ method: "GET", path: `/api/v1/users/${enc(login)}` }, r);
     }
   }
   const path = prPath(a.owner, a.name, a.index);
@@ -110,8 +110,8 @@ export async function prAssign(
   if (current.status === 404) {
     throw new Error(`${a.owner}/${a.name}#${a.index} does not exist`);
   }
-  if (current.status >= 400) {
-    throw new Error(`Forgejo API GET ${path} -> HTTP ${current.status}`);
+  if (isFailure(current.status)) {
+    throw failure({ method: "GET", path }, current);
   }
   if (String(current.body.state ?? "") !== "open") {
     throw new Error(
@@ -148,6 +148,7 @@ export async function prAssign(
 
 interface Ctx {
   globalArgs: GlobalArgs;
+  forgejoClient?: Caller;
   signal?: AbortSignal;
   logger: {
     info(msg: string, props?: Record<string, unknown>): void;
@@ -186,7 +187,7 @@ export const extension = {
       execute: async (args: z.infer<typeof UserSearchArgs>, context: Ctx) => {
         const a = UserSearchArgs.parse(args);
         const found = await userSearch(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a.q,
         );
         context.logger.info("{count} users match {q}: {logins}", {
@@ -222,7 +223,7 @@ export const extension = {
           assignees: a.assignees.join(", "),
         });
         const info = await prAssign(
-          fetchCaller(context.globalArgs, context.signal),
+          callerOf(context),
           a,
         );
         const handle = await writeRecord(
