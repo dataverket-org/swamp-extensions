@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.11.15.1",
+  "reviewedAt": "2026-11-15T11:09:21Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Unchanged for every method but the two new ones, which take their client from callerOf: the token travels only in fetchCaller's header and a token the forge echoes back is masked in the shared transport before it can reach wiki.ts's errors. Neither wiki method takes, records or logs a credential; the content of a page is the user's own markdown and is recorded only by wiki_page_get, as the method's purpose, never by wiki_page_ensure, whose input it is. Live: batch i's refusals with the narrow token carried no token, and batch h's grep of the scratch repository's .swamp found none."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Each wiki method logs once at completion with structured placeholders: page, repo, bytes and the commit count for get; page, repo, action and bytes for ensure. No content, path or credential is logged. The rest of the package is unchanged."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Every forge call goes through call(), so a refusal carries method, path, status and the forge's own message (batch i: a write with read:repository is 'HTTP 403 ... scope', a closed port the connection error). A 404 to the page listing means an empty wiki, a wiki unit that is off or a repository that is not there, which the forge does not tell apart at that endpoint; on that path only, both methods read the repository, so a missing repository is the forge's own 404 (GET /repos/{owner}/{repo} -> HTTP 404), a wiki that is off is named as such before any write, and only then is the page reported as absent, with owner, repository and title. The first live run showed the gap (a missing repository reported as a missing page); the check was added and proven in the rerun. A listing failure other than 404 is raised through call() as well."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "wiki_test.ts runs both methods through createModelTestContext with the stub client, as the other test files do: get through the listing to the escaped sub_url (never with the title in the path), get of an absent page, get on a missing repository (the forge's 404), ensure refusing a wiki that is off before any write, ensure creating from a 404 listing, rewriting at the listed sub_url, leaving matching content alone with no write, and a refused PATCH with the forge's message and no record; plus the UTF-8 base64 round trip. 173 tests in the package. The live suite gained batch i against Forgejo 15.0.11, 17 checks, run after batches a to h and the fault tests (all passing): create with the default message and no content in the record, unchanged with the forge's revision count unmoved, update as exactly one wiki commit with the message given and the previous hash, the content read back byte for byte with letters outside ASCII, the escaped path proven (the title as a path 404, the listed sub_url 200), a title matched ignoring case recorded under the forge's title, the narrow token reading but refused on write with nothing written, a wiki that is off named on read and on write, a missing repository as the forge's 404, and a closed port. The batch removes the page an earlier run left, so it can run again. Not tested: a wiki past 50 pages, which exercises the listing's second page; the loop follows the same page/limit shape as the package's other listings and shares their caveat that a forge with a lower MAX_RESPONSE_ITEMS stops early (TODO item 18)."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "wiki_page_ensure compares the SHA-256 of the bytes it is given with the bytes the page holds and writes only on a difference, so a rerun makes no wiki commit (batch i checks the forge's revision count). Create and update are each one request, so a failure leaves either the old page or the new one, never a half. Nothing deletes a page; the method set has no delete by design. wiki_page_get is read-only."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "The endpoints are Forgejo's: GET wiki/pages (paged with page and limit=50, read to the end), GET and PATCH wiki/page/{pageName}, POST wiki/new, with title, content_base64 and message as CreateWikiPageOptions names them, and GET /repos/{owner}/{repo} for has_wiki on the not-found path. pageName is Forgejo's stored path, not the title: proven on Forgejo 15, wiki/page/design-notes-v-2 is a 404 while the listed sub_url design+notes+v-2.- (dashes and spaces escaped, .- suffix) is the page, so the methods resolve a title through the listing and use the listed sub_url verbatim, never re-encoded; batch i proves both halves. A page's sub_url comes back with + in the listing and %20 in the page body; both are accepted by the forge and the record keeps what the page body says, falling back to the listed form."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "No handles or files; the fetch timeout is cleared in the shared caller's finally. The listing loop is bounded by the forge's own paging and returns at the first short page."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Tests use acme/tool and forge.example.com; the README's example uses example-org and a 'Design notes' page; the one real-world detail quoted, a page title that needed escaping, names no host. No hostname, policy word or habit of ours in schema, description or README."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "WikiPageInfo is a strict object; the record written is the WikiPage type itself for both methods, with content null after ensure and previousSha256 null after get and after a create. No passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "wikiPage is infinite with garbageCollection 20, as the other per-object specs; a get record carries the page's content, so 20 versions of a large page are 20 copies, which is the price of having the content queryable and is bounded by the forge's own size limits. The README's record table lists it."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Read and create-or-update, deliberately no delete: the README says a page is never deleted, as Forgejo keeps the wiki's history in git and a delete is a deliberate act in the UI. A listing of pages is internal to the two methods and not a method of its own yet; a wiki_page_list would follow the same loop if asked for."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Unchanged: forgejo-api-url-shape and forgejo-token-accepted run before wiki_page_ensure as before every mutating method."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "wiki-<owner>-<repo>-<title>, the title through the same slug as every other part, documented in the README's table. The title in the name is the forge's, so a page asked for in another case records under the one name (batch i: 'Design Notes V-2' and 'design notes v-2' are one record). Two titles the slug collapses to one string share a record (a b and a-b), which is also one page to Forgejo's own path rules."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "writeRecord with the new name twice, so no legacy read-back; nothing else reads swamp data."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Version 2026.11.15.1 with a no-op upgrades entry after 2026.11.12.2; the global arguments are unchanged, so a definition is stamped and not transformed. forgejo_test.ts checks the chain ends at the model's version. Verified on a real definition at 2026.11.09.1 that one run stamps it to the loaded version."
+    }
+  ]
+}

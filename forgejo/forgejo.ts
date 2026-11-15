@@ -1211,7 +1211,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.11.12.2",
+  version: "2026.11.15.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1261,6 +1261,12 @@ export const model = {
       toVersion: "2026.11.12.2",
       description:
         "README: the merge settings a stagecraft repository needs; no code change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.15.1",
+      description:
+        "wiki_page_get and wiki_page_ensure read and converge a repository's wiki pages; no schema change",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

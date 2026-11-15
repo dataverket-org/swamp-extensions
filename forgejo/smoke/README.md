@@ -21,7 +21,7 @@ export REPO=$(mktemp -d)
 ./models.sh
 
 # 3. the suite, in order: each batch builds on what the one before left
-for b in a b c d e f g h; do ./neg-$b.sh; done
+for b in a b c d e f g h i; do ./neg-$b.sh; done
 
 # 4. the faults the forge does not make on demand, injected over it
 (cd .. && deno task test:live)
@@ -52,6 +52,7 @@ other extensions' bundles, stagecraft's among them, stay.
 | `f`   | A wrong token, a closed port, an `apiUrl` ending in `/api/v1`, a token without the scope, and missing repositories, pull requests, owners and users, each reported as what it is and stopped before a write                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `g`   | The stagecraft tracker's labels made twice or another label touched; an answer made twice; a forge refusal that throws instead of being answered; a pull request taken for a ticket; a status move made twice or a second status label kept; another repository's dependency, or one past the first page, read wrong; a one-sided relation; a repository without the labels, without dependencies, or renamed; stagecraft's conformance workflow failing; the merge-settings workflow leaving a style other than merge commits, creating a branch rule (also from an older record of a rule deleted since), or turning pull requests on |
 | `h`   | A list cut at its first page (issues, the issue search, labels, push mirrors); an organization's label, a pull request's labels; a repository without issues; topics cleared or too many; a write without the scope, a refused read or delete, each carrying the forge's message; a pull mirror's settings or source compared wrong; a user's push mirrors missed; any token anywhere in `$REPO/.swamp`                                                                                                                                                                                                                                 |
+| `i`   | A wiki page created where the title as a path is a 404 while the listed escaped path is the page; a rerun with the same content making a wiki commit; an update without the message given or the hash of what was there; the content read back changed in any byte; a title matched ignoring case; a write with read:repository, a missing repository or a closed port, each carrying the forge's message; a wiki that is off named before any write; nothing written in any case                                                                                                                                                       |
 
 Every refusal is also checked for secrets: no run's output or error may carry a
 token, a password or a planted marker (`FIXTURE-SECRET-...`), and the last check

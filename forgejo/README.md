@@ -125,6 +125,11 @@ swamp model method run forge repo_topics_ensure \
 swamp model method run forge repo_units_ensure \
   --arg owner=example-org --arg name=tool --arg hasActions=true
 
+# a wiki page rewritten from a file; unchanged when the file is what the page holds
+swamp model method run forge wiki_page_ensure \
+  --arg owner=example-org --arg name=tool --arg page='Design notes' \
+  --arg content=@design-notes.md --arg message='Rework after review'
+
 # merge settings: read them, then offer merge commits only
 swamp model method run forge repo_merge_settings_ensure \
   --arg owner=example-org --arg name=tool
@@ -166,6 +171,7 @@ Read and audit:
 | `runner_list`            | The Actions runners an org or repository may use, with their status and level (`repo`, `org`, `instance`)                        |
 | `issue_list`             | The issues of a repository in a state, every page, pull requests excluded                                                        |
 | `label_list`             | The labels of an organization or a repository, every page                                                                        |
+| `wiki_page_get`          | One wiki page by its title, with its markdown content, size, hash and last commit                                                |
 
 Idempotent provisioning:
 
@@ -199,6 +205,7 @@ Idempotent provisioning:
 | `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                          |
 | `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                             |
 | `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                      |
+| `wiki_page_ensure`           | Create a wiki page or rewrite it to the content given; unchanged when it already holds those bytes; never deletes     |
 
 Lifecycle and deletes:
 
@@ -457,6 +464,27 @@ had, and a runner past the first page would have survived every `runner_prune`.
 `user_search` is the one deliberate cap: it is a search, and it returns
 Forgejo's top 50 matches.
 
+## Wiki pages
+
+`wiki_page_get` reads one page of a repository's wiki by its title and records
+its markdown, size, SHA-256 and last commit. `wiki_page_ensure` creates the page
+or rewrites it to the content given, with the message given or `Add <title>` /
+`Update <title>`, and leaves a page that already holds those bytes alone, so a
+rerun makes no wiki commit. Nothing deletes a page. On the CLI `@<path>` reads
+the content from a file.
+
+A page is addressed by its title, as the wiki shows it, never by a path. Forgejo
+stores a page under a path made from the title (`a b` becomes `a-b`; a title
+with both dashes and spaces is percent-escaped and given a `.-` suffix), and its
+page endpoints take that path: on a Forgejo 15 forge
+`wiki/page/ceph-rdb-risc-v-dpu-card` was a 404 while the listed `sub_url`
+`ceph-rdb+risc-v+dpu+card.-` was the page. The methods therefore list the wiki's
+pages, every page of the listing, match the title (exact first, then the one
+match ignoring case) and use the listed `sub_url` verbatim. A repository whose
+wiki is off or empty answers 404 to the listing, which `wiki_page_ensure` reads
+as "no page" and creates. The record is `wiki-<owner>-<repo>-<title>`, the title
+through the same slug as every other name.
+
 ## Work items as issues
 
 `work_item_sync --input factory=<model> --input workItem=<ref>` mirrors one work
@@ -670,6 +698,7 @@ swamp data query 'specName == "runner" && isLatest' --json
 | `tagProtection`          | `tag-protection-<owner>-<repo>-<pattern>`    | A tag protection rule: the pattern and who may push matching tags                    |
 | `prMergeState`           | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                                       |
 | `workItemIssue`          | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                                       |
+| `wikiPage`               | `wiki-<owner>-<repo>-<title>`                | A wiki page: title, listed path, size and hash; the content after `wiki_page_get`    |
 
 Every spec has an infinite lifetime except `userMatch`. `<target>` is an owner
 or `<owner>-<repo>`, the scope of an Actions method.
