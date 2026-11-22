@@ -1,0 +1,82 @@
+{
+  "extension": "@dataverket/forgejo",
+  "version": "2026.11.22.1",
+  "reviewedAt": "2026-11-22T18:55:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Independent review, fourth round. Since round three only the workflow file, README.md, smoke/neg-j.sh and smoke/README.md differ (sha256 of every source against the hashes kept from round three); forgejo.ts, team.ts and both test files are identical. The changed assert expression and its message carry team and repository names only. After this round's 7 workflow runs on the rebuilt Forgejo 15.0.12, grep -F for the admin token over the scratch repository's .swamp and every captured output found nothing. Carried over, code unchanged: api.ts redaction (round one), wfs in neg-j.sh grepping every workflow run (round two). Minor, unchanged: the whole-.swamp sweep is in neg-h.sh, before batches i and j."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Carried over from round two; forgejo.ts and team.ts are byte-identical to what was reviewed in rounds two and three."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "The first assert's message 'The merge whitelist of <owner>/<name> would be empty, or a whitelist names the team <team> itself. Nothing was sent.' was returned by five failing runs here, and 'Nothing was sent' was true in each: the sha256 of the rule's full API answer, updated_at included, was the same before and after. Method error paths carried over from rounds one to three, code unchanged."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "deno test: 196 passed, 0 failed, no source file modified; deno fmt --check and swamp extension fmt --check clean; test files unchanged since round three, where lint and check were clean. neg-j.sh still counts 67 checks; the wrong-case workflow case (lines 195-202) no longer PATCHes the list back: it asserts the run failed, the rule's team lists are still empty and the member can neither push nor merge, then the reverse spelling. That pins the state a failed run leaves, the gap noted in round three. I did not rerun the ten batches; the 437-check, 306 s Environment claim rests on the author's run."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Carried over from round two: forgejo.ts is unchanged, and the hidden-team, hidden-login and whitelist-off checks were run then against the same code. The workflow's steps after the first are unchanged; a plain good run on a repository the team already holds succeeded here and left both team lists empty, the member with user_can_push and user_can_merge false."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Carried over from rounds two and three. New and checked: Forgejo 15.0.12 refuses a team name outside letters, digits, dash and dot (creating a team with a non-ASCII letter answered 422 '[Name]: AlphaDashDot'), so lowerAscii() covers every team name the forge can hold."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Carried over; nothing in this round's change holds or creates a resource."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Carried over from round two; the changed sentences in the workflow description and the README ('whatever the case of either name', 'in any case of letters') name nothing of the publisher's."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Method schemas unchanged since round one. The workflow's input schema is unchanged; its first assert now compares team names without case, matching how the forge treats them."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Carried over; resource declarations unchanged."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Carried over from round two (requireAddable) and round three (case refusal in findTeam); team.ts unchanged."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "Carried over; no binary, no pre-flight check added."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Carried over from round three; data names and team.ts unchanged."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "The round-three issue is fixed and verified live. On a repository the team holds, with a rule whose merge whitelist held one login: team=BOTS with mergeWhitelistTeams=[\"bots\"], team=bots with mergeWhitelistTeams=[\"BOTS\"], team=BOTS with pushWhitelistTeams=[\"bots\"], team=bots with pushWhitelistTeams=[\"Bots\"], and an empty merge whitelist each failed at whitelists-make-sense, and the rule's API answer was byte-for-byte the same after as before. The expression does not misfire: team=bots with mergeWhitelistTeams=[\"bots-admin\"] (a name that only contains the team's) succeeded with that team in the list, and the plain run with empty team lists succeeded. exists() and lowerAscii() therefore work inside a swamp workflow assert, which I could not confirm in round three. The later asserts still compare exactly, which is sound because team_repo_ensure accepts only the forge's spelling (round three) and the forge answers whitelists in its own spelling."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Carried over; version, upgrades entry and manifest unchanged since round two. swamp extension fmt manifest.yaml --check passes."
+    }
+  ]
+}

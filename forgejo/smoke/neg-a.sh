@@ -3,7 +3,7 @@ source "$(dirname "$0")/negative.sh"
 echo "=== A. organizations, repositories, users, collaborators ==="
 
 holds "health reads the version the forge runs" \
-  '.dataArtifacts[] | select(.name == "status") | .attributes.version | startswith("15.0.11")' forge health
+  '.dataArtifacts[] | select(.name == "status") | .attributes.version | startswith("15.0.12")' forge health
 holds "org_ensure creates an organization" \
   '.dataArtifacts[] | select(.name == "fxnew") | .attributes.action == "created" and .attributes.visibility == "private"' \
   forge org_ensure name=fxnew visibility=private description=first

@@ -201,6 +201,18 @@ const BranchProtectionInfo = z.object({
   pushWhitelistUsernames: z.array(z.string()).describe(
     "Logins allowed to push directly (only meaningful with the whitelist on).",
   ),
+  pushWhitelistTeams: z.array(z.string()).default([]).describe(
+    "Org teams allowed to push directly (only meaningful with the whitelist on).",
+  ),
+  enableMergeWhitelist: z.boolean().default(false).describe(
+    "True = only the logins and teams below may merge a pull request into the branch.",
+  ),
+  mergeWhitelistUsernames: z.array(z.string()).default([]).describe(
+    "Logins allowed to merge (only meaningful with the merge whitelist on).",
+  ),
+  mergeWhitelistTeams: z.array(z.string()).default([]).describe(
+    "Org teams allowed to merge (only meaningful with the merge whitelist on).",
+  ),
   requiredApprovals: z.number().describe(
     "Approving reviews needed before a PR into this branch may merge.",
   ),
@@ -693,6 +705,10 @@ function toProtectionInfo(
     enablePush: Boolean(p.enable_push),
     enablePushWhitelist: Boolean(p.enable_push_whitelist),
     pushWhitelistUsernames: strs(p.push_whitelist_usernames),
+    pushWhitelistTeams: strs(p.push_whitelist_teams),
+    enableMergeWhitelist: Boolean(p.enable_merge_whitelist),
+    mergeWhitelistUsernames: strs(p.merge_whitelist_usernames),
+    mergeWhitelistTeams: strs(p.merge_whitelist_teams),
     requiredApprovals: Number(p.required_approvals ?? 0),
     requireSignedCommits: Boolean(p.require_signed_commits),
     applyToAdmins: Boolean(p.apply_to_admins),
@@ -717,13 +733,24 @@ function protectionBody(
   current: Json | null,
 ): { body: Json; changed: boolean } {
   const body: Json = {};
+  let changed = false;
+  const set = (v: unknown[]): string[] => [...new Set(v.map(String))].sort();
   const same = (a: unknown, b: unknown): boolean =>
     Array.isArray(a) && Array.isArray(b)
-      ? a.length === b.length && a.every((x, i) => String(x) === String(b[i]))
+      ? set(a).length === set(b).length &&
+        set(a).every((x, i) => x === set(b)[i])
       : a === b;
   const diff = (key: string, want: unknown, cur: unknown) => {
     if (want === undefined) return;
     if (current !== null && same(want, cur)) return;
+    body[key] = want;
+    changed = true;
+  };
+  // Forgejo keeps a whitelisted login or team that lost its access to the repository, leaves it out of
+  // its answer, and counts it again when the access returns. A list that is given is sent, the same or not.
+  const whitelist = (key: string, want: unknown, cur: unknown) => {
+    if (want === undefined) return;
+    diff(key, want, cur);
     body[key] = want;
   };
   diff("enable_push", desired.enablePush, Boolean(current?.enable_push));
@@ -732,12 +759,33 @@ function protectionBody(
     desired.enablePushWhitelist,
     Boolean(current?.enable_push_whitelist),
   );
-  diff(
+  whitelist(
     "push_whitelist_usernames",
     desired.pushWhitelistUsernames,
     Array.isArray(current?.push_whitelist_usernames)
       ? current.push_whitelist_usernames
       : [],
+  );
+  const list = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
+  whitelist(
+    "push_whitelist_teams",
+    desired.pushWhitelistTeams,
+    list(current?.push_whitelist_teams),
+  );
+  diff(
+    "enable_merge_whitelist",
+    desired.enableMergeWhitelist,
+    Boolean(current?.enable_merge_whitelist),
+  );
+  whitelist(
+    "merge_whitelist_usernames",
+    desired.mergeWhitelistUsernames,
+    list(current?.merge_whitelist_usernames),
+  );
+  whitelist(
+    "merge_whitelist_teams",
+    desired.mergeWhitelistTeams,
+    list(current?.merge_whitelist_teams),
   );
   diff(
     "required_approvals",
@@ -781,7 +829,45 @@ function protectionBody(
     desired.protectedFilePatterns,
     String(current?.protected_file_patterns ?? ""),
   );
-  return { body, changed: Object.keys(body).length > 0 };
+  return { body, changed };
+}
+
+/**
+ * The whitelist names asked for that the forge's answer leaves out, each as
+ * `list "name"`. Forgejo drops a name without write access to the repository
+ * from the rule, with no error.
+ */
+function notCounted(desired: ProtectionDesired, rule: Json): string[] {
+  const lists: [string, string[] | undefined, unknown][] = [
+    [
+      "pushWhitelistUsernames",
+      desired.pushWhitelistUsernames,
+      rule.push_whitelist_usernames,
+    ],
+    [
+      "pushWhitelistTeams",
+      desired.pushWhitelistTeams,
+      rule.push_whitelist_teams,
+    ],
+    [
+      "mergeWhitelistUsernames",
+      desired.mergeWhitelistUsernames,
+      rule.merge_whitelist_usernames,
+    ],
+    [
+      "mergeWhitelistTeams",
+      desired.mergeWhitelistTeams,
+      rule.merge_whitelist_teams,
+    ],
+  ];
+  const lost: string[] = [];
+  for (const [label, want, got] of lists) {
+    const have = Array.isArray(got) ? got.map(String) : [];
+    for (const name of want ?? []) {
+      if (!have.includes(name)) lost.push(`${label} ${JSON.stringify(name)}`);
+    }
+  }
+  return lost;
 }
 
 /** A Go zero time (and absent values) — "never happened" in the API. */
@@ -1081,6 +1167,19 @@ const ProtectionSettingsShape = {
   pushWhitelistUsernames: z.array(z.string()).optional().describe(
     "Logins allowed to push directly. Converged as an exact set.",
   ),
+  pushWhitelistTeams: z.array(z.string()).optional().describe(
+    "Org teams allowed to push directly. Converged as an exact set.",
+  ),
+  enableMergeWhitelist: z.coerce.boolean().optional().describe(
+    "Limit who may merge a pull request into the branch to the merge whitelist. " +
+      "On with both lists empty, nobody may merge.",
+  ),
+  mergeWhitelistUsernames: z.array(z.string()).optional().describe(
+    "Logins allowed to merge. Converged as an exact set.",
+  ),
+  mergeWhitelistTeams: z.array(z.string()).optional().describe(
+    "Org teams allowed to merge. Converged as an exact set.",
+  ),
   requiredApprovals: z.coerce.number().int().optional().describe(
     "Approving reviews required before merge.",
   ),
@@ -1102,6 +1201,10 @@ type ProtectionDesired = {
   enablePush?: boolean;
   enablePushWhitelist?: boolean;
   pushWhitelistUsernames?: string[];
+  pushWhitelistTeams?: string[];
+  enableMergeWhitelist?: boolean;
+  mergeWhitelistUsernames?: string[];
+  mergeWhitelistTeams?: string[];
   requiredApprovals?: number;
   requireSignedCommits?: boolean;
   applyToAdmins?: boolean;
@@ -1211,7 +1314,7 @@ const PrMergeArgs = z.object({
  */
 export const model = {
   type: "@dataverket/forgejo",
-  version: "2026.11.15.1",
+  version: "2026.11.22.1",
   globalArguments: GlobalArgs,
   upgrades: [
     {
@@ -1267,6 +1370,13 @@ export const model = {
       toVersion: "2026.11.15.1",
       description:
         "wiki_page_get and wiki_page_ensure read and converge a repository's wiki pages; no schema change",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.22.1",
+      description:
+        "team_ensure, team_member_ensure, team_repo_ensure and team_get join the type; a branch rule gains its " +
+        "merge whitelist and its push whitelist teams; global arguments unchanged",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -1926,7 +2036,8 @@ export const model = {
       description:
         "Find-or-create a branch-protection rule for a branch or glob and " +
         "converge the supplied constraints. Idempotent — reports created/" +
-        "updated/unchanged. Never deletes a rule.",
+        "updated/unchanged. A whitelist that is given is sent on every run, " +
+        "since the forge keeps names it does not show. Never deletes a rule.",
       arguments: BranchProtectionEnsureArgs,
       execute: async (
         rawArgs,
@@ -1942,6 +2053,7 @@ export const model = {
         }, [404]);
         let rule: Json;
         let action: z.infer<typeof Action>;
+        let sent = false;
         if (probe.status === 404) {
           const { body } = protectionBody(a, null);
           logInfo(context, "Creating branch protection", {
@@ -1954,25 +2066,42 @@ export const model = {
             body: { ...body, rule_name: a.rule },
           });
           rule = r.body;
+          sent = true;
           action = "created";
         } else {
           const { body, changed } = protectionBody(a, probe.body);
-          if (changed) {
-            logInfo(context, "Updating branch protection", {
-              repo: full,
-              rule: a.rule,
-              body,
-            });
+          if (Object.keys(body).length > 0) {
+            logInfo(
+              context,
+              changed
+                ? "Updating branch protection"
+                : "Sending the rule's whitelists again; nothing the forge shows differs",
+              { repo: full, rule: a.rule, body },
+            );
             const r = await call(g, {
               method: "PATCH",
               path: `${base}/${enc(a.rule)}`,
               body,
             });
             rule = r.body;
-            action = "updated";
+            sent = true;
+            action = changed ? "updated" : "unchanged";
           } else {
             rule = probe.body;
             action = "unchanged";
+          }
+        }
+        if (sent) {
+          const lost = notCounted(a, rule);
+          if (lost.length > 0) {
+            throw new Error(
+              `${full}: the forge does not count ${lost.join(", ")} in the ` +
+                `branch protection ${a.rule} (the rule was ${
+                  action === "unchanged" ? "sent again" : action
+                }). A login or a ` +
+                "team counts in a whitelist only with write access to the repository; " +
+                "give it that and run again.",
+            );
           }
         }
         const handle = await writeRecord(
