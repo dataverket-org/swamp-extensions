@@ -1,0 +1,194 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Renovate proposes; a person merges, refreshes the deno.lock beside a changed specifier, and publishes the extension the change is in: a pin here is bundled at publish (CLAUDE.md, rule 7).",
+    "A release waits seven days; a fix for a known vulnerability does not."
+  ],
+  "extends": [
+    "config:recommended"
+  ],
+  "automerge": false,
+  "minimumReleaseAge": "7 days",
+  "osvVulnerabilityAlerts": true,
+  "semanticCommits": "enabled",
+  "semanticCommitScope": "deps",
+  "ignorePaths": [
+    "**/fixtures/**"
+  ],
+  "deno": {
+    "enabled": false
+  },
+  "customManagers": [
+    {
+      "description": "jsr: versions in import specifiers, which swamp bundles",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.ts$/"
+      ],
+      "matchStrings": [
+        "[\"']jsr:(?<depName>@[a-z0-9-]+/[a-z0-9-]+)@(?<currentValue>[0-9][^\"'/]*)"
+      ],
+      "datasourceTemplate": "jsr"
+    },
+    {
+      "description": "The same for npm: specifiers",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.ts$/"
+      ],
+      "matchStrings": [
+        "[\"']npm:(?<depName>(?:@[a-z0-9-]+/)?[a-z0-9._-]+)@(?<currentValue>[0-9][^\"'/]*)"
+      ],
+      "datasourceTemplate": "npm"
+    },
+    {
+      "description": "cert-manager, which smoke tests install by release tag",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "cert-manager/cert-manager/releases/download/(?<currentValue>v[\\d.]+)/",
+        "CERT_MANAGER_VERSION=\\$\\{CERT_MANAGER_VERSION:-(?<currentValue>v[\\d.]+)\\}"
+      ],
+      "depNameTemplate": "cert-manager/cert-manager",
+      "packageNameTemplate": "cert-manager/cert-manager",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "CloudNativePG in its smoke test: the tag in the URL",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "cloudnative-pg/cloudnative-pg/releases/download/(?<currentValue>v[\\d.]+)/"
+      ],
+      "depNameTemplate": "cloudnative-pg/cloudnative-pg",
+      "packageNameTemplate": "cloudnative-pg/cloudnative-pg",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "CloudNativePG in its smoke test: the file name, which carries the version without its v",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "/cnpg-(?<currentValue>[\\d.]+)\\.yaml"
+      ],
+      "depNameTemplate": "cloudnative-pg/cloudnative-pg",
+      "packageNameTemplate": "cloudnative-pg/cloudnative-pg",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "description": "The Barman Cloud plugin in the CNPG smoke test",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "cloudnative-pg/plugin-barman-cloud/releases/download/(?<currentValue>v[\\d.]+)/"
+      ],
+      "depNameTemplate": "cloudnative-pg/plugin-barman-cloud",
+      "packageNameTemplate": "cloudnative-pg/plugin-barman-cloud",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "Pebble, the ACME test server",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "PEBBLE_VERSION=\\$\\{PEBBLE_VERSION:-(?<currentValue>v[\\d.]+)\\}"
+      ],
+      "depNameTemplate": "letsencrypt/pebble",
+      "packageNameTemplate": "letsencrypt/pebble",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "Gateway API in its smoke test; the old version is the one an upgrade is tested from and stays",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "GATEWAY_API_VERSION=(?<currentValue>v[\\d.]+)"
+      ],
+      "depNameTemplate": "kubernetes-sigs/gateway-api",
+      "packageNameTemplate": "kubernetes-sigs/gateway-api",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "Envoy Gateway in the Gateway API smoke test",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^[^/]+/smoke/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "ENVOY_GATEWAY_VERSION=(?<currentValue>v[\\d.]+)"
+      ],
+      "depNameTemplate": "envoyproxy/gateway",
+      "packageNameTemplate": "envoyproxy/gateway",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Every update is a chore, whatever kind of dependency it is",
+      "matchPackageNames": [
+        "*"
+      ],
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "swamp supplies zod and does not bundle it, so the specifier is not ours to move",
+      "matchDatasources": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "zod"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "One pull request per package across every extension that imports it",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "jsr",
+        "npm"
+      ],
+      "groupName": "{{{depName}}}"
+    },
+    {
+      "description": "A workflow's actions resolve on this forge's own actions org (DEFAULT_ACTIONS_URL=self), so their versions are read there",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDatasources": [
+        "github-tags"
+      ],
+      "overrideDatasource": "forgejo-tags",
+      "registryUrls": [
+        "https://git.dataverket.org"
+      ]
+    },
+    {
+      "description": "These registries may give no release time, so the seven days cannot always be counted; such an image is proposed at once, and the person merging reads the release date",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "code.forgejo.org/**",
+        "ghcr.io/**",
+        "quay.io/**",
+        "registry.k8s.io/**"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    }
+  ]
+}
