@@ -1,0 +1,199 @@
+id: f62633ad-4f28-4289-9e61-f9ed5025ef37
+name: "@dataverket/forgejo-team-repository-behind-rule"
+description: >-
+  Give a team of an organization one more repository, and only behind a branch rule that keeps the team off the
+  branch: for a bot that may open pull requests and may never push to, or merge into, the branch they target. The
+  order is the point. The branch rule is written first: direct push limited to the push whitelist, merging limited
+  to the merge whitelist, both converged as exact sets and sent even when the forge shows them as asked, since the
+  forge keeps a name that lost its access and shows it again when the access returns. Then the rule the forge holds
+  is checked: both whitelists on, and the team in neither. Only then is the repository added to the team, and the
+  rule is sent and checked once more, now that the team has access. A step that fails stops the run, so a rule the
+  forge did not take as asked leaves the team without the repository. The run refuses, before anything is sent, a
+  merge whitelist with nobody in it, since the forge would then let nobody merge, and a whitelist that names the
+  team itself, whatever the case of either name. A login or a team counts in a whitelist only with write access to the repository; one the forge
+  does not count fails the first step with its name. The Owners team and a team with administrator access are
+  refused. Other settings of the rule are left as they are, a rule is never deleted, and nothing is ever taken
+  from the team. What the run does not check: that the branch named is the repository's default branch, that no
+  other rule matches the branch first, and who the team's members are. The rule does not hold back a member of
+  the team who is named in a whitelist as a person, an administrator of the repository, or an owner of the
+  organization; read the team with team_get. Runs with the @dataverket/forgejo instance named, whose token may
+  change the repository's branch rules and the organization's teams; afterwards its records
+  branch-protection-<owner>-<name>-<branch> and teamrepo-<owner>-<team>-<name> show what is in force. Owner,
+  repository, team and branch names are used in data names as given, so they must be made of letters, digits,
+  '.', '_' and '-'.
+version: 1
+inputs:
+  properties:
+    forgejo:
+      type: string
+      description: The @dataverket/forgejo instance whose token may change branch rules and teams
+    owner:
+      type: string
+      description: The organization that owns the repository and the team
+    name:
+      type: string
+      description: The repository
+    team:
+      type: string
+      description: The team that gets the repository
+    branch:
+      type: string
+      default: main
+      description: The branch, or glob, the rule protects
+    pushWhitelistUsernames:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Logins that may push to the branch directly. Empty with no team means nobody does
+    pushWhitelistTeams:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Teams that may push to the branch directly
+    mergeWhitelistUsernames:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Logins that may merge a pull request into the branch
+    mergeWhitelistTeams:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Teams that may merge a pull request into the branch
+  required:
+    - forgejo
+    - owner
+    - name
+    - team
+jobs:
+  - name: behind-rule
+    description: The branch rule written and checked, the repository added to the team, the rule sent and checked again.
+    steps:
+      - name: whitelists-make-sense
+        description: >-
+          Somebody may merge, and the team is in neither whitelist, whatever the case of the names. Nothing has been
+          sent yet.
+        task:
+          type: assert
+          expr: >-
+            size(inputs.mergeWhitelistUsernames) + size(inputs.mergeWhitelistTeams) > 0 &&
+            !inputs.pushWhitelistTeams.exists(t, t.lowerAscii() == inputs.team.lowerAscii()) &&
+            !inputs.mergeWhitelistTeams.exists(t, t.lowerAscii() == inputs.team.lowerAscii())
+          message: >-
+            The merge whitelist of ${{ inputs.owner }}/${{ inputs.name }} would be empty, or a whitelist names the
+            team ${{ inputs.team }} itself. Nothing was sent.
+          severity: high
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+      - name: rule
+        description: >-
+          Direct push limited to the push whitelist and merging to the merge whitelist, as exact sets. Only what
+          differs is sent, and a name the forge does not count fails the step.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: branch_protection_ensure
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+            rule: ${{ inputs.branch }}
+            enablePush: true
+            enablePushWhitelist: true
+            pushWhitelistUsernames: ${{ inputs.pushWhitelistUsernames }}
+            pushWhitelistTeams: ${{ inputs.pushWhitelistTeams }}
+            enableMergeWhitelist: true
+            mergeWhitelistUsernames: ${{ inputs.mergeWhitelistUsernames }}
+            mergeWhitelistTeams: ${{ inputs.mergeWhitelistTeams }}
+        dependsOn:
+          - step: whitelists-make-sense
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: rule-in-force
+        description: The rule the forge holds has both whitelists on and the team in neither.
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.enablePushWhitelist == true &&
+            data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.enableMergeWhitelist == true &&
+            !(inputs.team in data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.pushWhitelistTeams) &&
+            !(inputs.team in data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.mergeWhitelistTeams)
+          message: >-
+            The ${{ inputs.branch }} rule of ${{ inputs.owner }}/${{ inputs.name }} does not keep the team
+            ${{ inputs.team }} off the branch:
+            ${{ data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes }}
+          severity: high
+        dependsOn:
+          - step: rule
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: team-repository
+        description: The repository added to the team, unless the team has it.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: team_repo_ensure
+          inputs:
+            org: ${{ inputs.owner }}
+            team: ${{ inputs.team }}
+            name: ${{ inputs.name }}
+        dependsOn:
+          - step: rule-in-force
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: rule-again
+        description: >-
+          The same rule sent once more, now that the team has access to the repository: a name the forge kept and
+          did not show would be shown now, and is taken out.
+        task:
+          type: model_method
+          modelIdOrName: ${{ inputs.forgejo }}
+          methodName: branch_protection_ensure
+          inputs:
+            owner: ${{ inputs.owner }}
+            name: ${{ inputs.name }}
+            rule: ${{ inputs.branch }}
+            enablePush: true
+            enablePushWhitelist: true
+            pushWhitelistUsernames: ${{ inputs.pushWhitelistUsernames }}
+            pushWhitelistTeams: ${{ inputs.pushWhitelistTeams }}
+            enableMergeWhitelist: true
+            mergeWhitelistUsernames: ${{ inputs.mergeWhitelistUsernames }}
+            mergeWhitelistTeams: ${{ inputs.mergeWhitelistTeams }}
+        dependsOn:
+          - step: team-repository
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+      - name: rule-still-in-force
+        description: With the team holding the repository, the rule has both whitelists on and the team in neither.
+        task:
+          type: assert
+          expr: >-
+            data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.enablePushWhitelist == true &&
+            data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.enableMergeWhitelist == true &&
+            !(inputs.team in data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.pushWhitelistTeams) &&
+            !(inputs.team in data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes.mergeWhitelistTeams)
+          message: >-
+            The team ${{ inputs.team }} has ${{ inputs.owner }}/${{ inputs.name }}, and the ${{ inputs.branch }} rule
+            does not keep it off the branch: ${{ data.latest(inputs.forgejo, "branch-protection-" + inputs.owner + "-" + inputs.name + "-" + inputs.branch).attributes }}
+          severity: high
+        dependsOn:
+          - step: rule-again
+            condition:
+              type: succeeded
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0

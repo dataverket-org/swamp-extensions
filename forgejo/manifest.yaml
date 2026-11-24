@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@dataverket/forgejo"
-version: "2026.11.15.1"
+version: "2026.11.22.1"
 description: >
   Forgejo (or Gitea) administration for swamp over the /api/v1 REST API with
   a scoped access token, in the model type `@dataverket/forgejo`, and the
@@ -65,6 +65,20 @@ description: >
   No redirect is followed: a renamed repository's old name is refused with
   the new name, never read, patched or deleted in its place.
 
+  Teams and whitelists: `team_ensure`, `team_member_ensure`,
+  `team_repo_ensure` and `team_get` make an organization's team, give it
+  read or write per repository unit, add a member and a repository, and read
+  it back; nothing is ever removed, and the Owners team and a team with
+  administrator access are refused. A branch rule's push and merge
+  whitelists take logins and teams as exact sets; a name the forge does not
+  count is an error that names it, and a list that is given is sent on every
+  run, since the forge keeps a name that lost its access and does not show
+  it. The shipped workflow
+  `@dataverket/forgejo-team-repository-behind-rule` writes the branch rule,
+  checks it, only then adds the repository to the team, and sends and checks
+  the rule once more, for a bot that opens pull requests and never reaches
+  the branch they target.
+
   Wiki pages: `wiki_page_get` reads one by its title with its content, and
   `wiki_page_ensure` creates it or rewrites it to the content given, leaving
   a page that already holds those bytes alone; a page is never deleted.
@@ -98,9 +112,11 @@ models:
   - work_item_sync.ts
   - tag_protection.ts
   - wiki.ts
+  - team.ts
 workflows:
   - workflow-5a8da8d5-7458-4310-bf2d-66e1dbf4c394.yaml
   - workflow-2b798979-97bc-4421-8c04-d538d5b5917d.yaml
+  - workflow-f62633ad-4f28-4289-9e61-f9ed5025ef37.yaml
 vaults: []
 datastores: []
 reports: []
@@ -122,4 +138,6 @@ labels:
   - pull-requests
   - webhooks
   - wiki
+  - teams
+  - branch-protection
 dependencies: []

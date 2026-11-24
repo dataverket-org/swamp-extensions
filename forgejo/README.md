@@ -146,6 +146,14 @@ swamp model method run forge pr_ensure \
 swamp model method run forge pr_get --arg owner=apps --arg name=damson --arg index=4
 swamp model method run forge pr_merge \
   --arg owner=apps --arg name=damson --arg index=4 --arg deleteBranch=true
+
+# a team for a bot that opens pull requests, and one repository for it, behind a branch rule
+swamp model method run forge team_ensure --arg org=apps --arg name=bots \
+  --arg 'unitsMap={"repo.code":"write","repo.pulls":"write","repo.issues":"write"}'
+swamp model method run forge team_member_ensure --arg org=apps --arg team=bots --arg username=updater
+swamp workflow run @dataverket/forgejo-team-repository-behind-rule \
+  --input forgejo=forge --input owner=apps --input name=damson --input team=bots \
+  --input 'pushWhitelistUsernames=["ann"]' --input 'mergeWhitelistUsernames=["ann","bo"]'
 ```
 
 Argument names are the schemas' own;
@@ -170,42 +178,46 @@ Read and audit:
 | `push_mirror_list`       | The push mirrors an org or repository has, and stored records the forge no longer has; the audit a mirroring workflow asserts on |
 | `runner_list`            | The Actions runners an org or repository may use, with their status and level (`repo`, `org`, `instance`)                        |
 | `issue_list`             | The issues of a repository in a state, every page, pull requests excluded                                                        |
+| `team_get`               | One team of an organization: the access it gives per unit, its members and its repositories, every page                          |
 | `label_list`             | The labels of an organization or a repository, every page                                                                        |
 | `wiki_page_get`          | One wiki page by its title, with its markdown content, size, hash and last commit                                                |
 
 Idempotent provisioning:
 
-| Method                       | Does                                                                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `org_ensure`                 | Find-or-create an organization and converge visibility and description                                                |
-| `repo_ensure`                | Find-or-create a repository and converge its settings                                                                 |
-| `collaborator_ensure`        | Give a user access to a repository; membership read first; never removes one, refuses the owner                       |
-| `branch_protection_ensure`   | Find-or-create a branch protection rule and converge what it enforces                                                 |
-| `tag_protection_ensure`      | Find-or-create a tag protection rule for a glob; both whitelists converged as exact sets; never deletes               |
-| `mirror_ensure`              | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description                |
-| `mirror_sync_now`            | Queue an immediate pull sync                                                                                          |
-| `pull_mirror_ensure`         | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest     |
-| `push_mirror_ensure`         | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address   |
-| `push_mirror_sync_now`       | Queue an immediate push of every push mirror of a repository                                                          |
-| `repo_topics_ensure`         | Give a repository topics; additive unless `exact`                                                                     |
-| `repo_units_ensure`          | Switch a repository's Actions, packages or projects unit; sends only what is given                                    |
-| `repo_merge_settings_ensure` | Read or converge a repository's pull-request merge settings; sends only what is given                                 |
-| `repo_rename`                | Rename a repository, verify-first                                                                                     |
-| `actions_secret_put`         | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value             |
-| `runner_registration_token`  | A registration token for `forgejo-runner register`, in the default vault; its endpoint is deprecated since Forgejo 15 |
-| `pr_ensure`                  | Open a pull request, find-or-create on the head and base pair, converging title and body                              |
-| `pr_assign`                  | Assign a pull request, every login checked against the forge first                                                    |
-| `issue_ensure`               | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name  |
-| `issue_labels_ensure`        | The labels of an issue or a pull request by name; additive unless `exact`                                             |
-| `issue_state_ensure`         | Open or close several issues, each with a comment saying why; one already in that state is left alone, uncommented    |
-| `issue_body_ensure`          | Give an issue the text given, replacing what is there; written only when it differs, never recorded                   |
-| `label_ensure`               | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`            |
-| `webhook_retarget`           | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                   |
-| `pr_feedback`                | Read a pull request's comments, reviews with their state, and each review's inline comments                           |
-| `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                          |
-| `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                             |
-| `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                      |
-| `wiki_page_ensure`           | Create a wiki page or rewrite it to the content given; unchanged when it already holds those bytes; never deletes     |
+| Method                       | Does                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `org_ensure`                 | Find-or-create an organization and converge visibility and description                                                                 |
+| `repo_ensure`                | Find-or-create a repository and converge its settings                                                                                  |
+| `collaborator_ensure`        | Give a user access to a repository; membership read first; never removes one, refuses the owner                                        |
+| `branch_protection_ensure`   | Find-or-create a branch protection rule and converge what it enforces, the push and merge whitelists of logins and teams as exact sets |
+| `tag_protection_ensure`      | Find-or-create a tag protection rule for a glob; both whitelists converged as exact sets; never deletes                                |
+| `team_ensure`                | Find-or-create a team of an organization and converge the access it gives per repository unit, as the whole map; never deletes         |
+| `team_member_ensure`         | Add a login to a team unless it is a member; never removes one                                                                         |
+| `team_repo_ensure`           | Add a repository to a team unless the team has it; never removes one                                                                   |
+| `mirror_ensure`              | Find-or-create a GitHub pull mirror; on an existing one converges interval, visibility and description                                 |
+| `mirror_sync_now`            | Queue an immediate pull sync                                                                                                           |
+| `pull_mirror_ensure`         | A pull mirror from anywhere that sends only the settings it is given, so the forge's own defaults decide the rest                      |
+| `push_mirror_ensure`         | Make Forgejo push a repository to a remote on every commit and on an interval; find-or-create on the remote address                    |
+| `push_mirror_sync_now`       | Queue an immediate push of every push mirror of a repository                                                                           |
+| `repo_topics_ensure`         | Give a repository topics; additive unless `exact`                                                                                      |
+| `repo_units_ensure`          | Switch a repository's Actions, packages or projects unit; sends only what is given                                                     |
+| `repo_merge_settings_ensure` | Read or converge a repository's pull-request merge settings; sends only what is given                                                  |
+| `repo_rename`                | Rename a repository, verify-first                                                                                                      |
+| `actions_secret_put`         | Create or update an Actions secret, repo- or org-scoped; the name and scope are recorded, never the value                              |
+| `runner_registration_token`  | A registration token for `forgejo-runner register`, in the default vault; its endpoint is deprecated since Forgejo 15                  |
+| `pr_ensure`                  | Open a pull request, find-or-create on the head and base pair, converging title and body                                               |
+| `pr_assign`                  | Assign a pull request, every login checked against the forge first                                                                     |
+| `issue_ensure`               | File several issues in one call, each unless one of the same exact title exists, open or closed, with labels by name                   |
+| `issue_labels_ensure`        | The labels of an issue or a pull request by name; additive unless `exact`                                                              |
+| `issue_state_ensure`         | Open or close several issues, each with a comment saying why; one already in that state is left alone, uncommented                     |
+| `issue_body_ensure`          | Give an issue the text given, replacing what is there; written only when it differs, never recorded                                    |
+| `label_ensure`               | The labels of an organization or of one repository: create, patch in place, keep; delete only with `prune`                             |
+| `webhook_retarget`           | Repoint one hook that drifted, `config.url` alone; never creates a hook, refuses an ambiguous match                                    |
+| `pr_feedback`                | Read a pull request's comments, reviews with their state, and each review's inline comments                                            |
+| `pr_comment`                 | Post a comment on a pull request; every call posts a new one                                                                           |
+| `pr_merge_state`             | A pull request's head and, once merged, its merge commit, time and merger                                                              |
+| `work_item_sync`             | Mirror a `@swamp/software-factory` work item into one issue, one way; see "Work items as issues"                                       |
+| `wiki_page_ensure`           | Create a wiki page or rewrite it to the content given; unchanged when it already holds those bytes; never deletes                      |
 
 Lifecycle and deletes:
 
@@ -445,6 +457,81 @@ each write and refuses, naming the login, rather than report an update that
 pushes nothing. Give the login write access (`collaborator_ensure`) and run
 again.
 
+## A branch rule's whitelists
+
+`branch_protection_ensure` converges four lists as exact sets, each sent only
+when it is given: `pushWhitelistUsernames` and `pushWhitelistTeams`, in force
+with `enablePushWhitelist`, and `mergeWhitelistUsernames` and
+`mergeWhitelistTeams`, in force with `enableMergeWhitelist`. The order of a list
+does not matter. The merge whitelist on with both of its lists empty is a rule
+nobody may merge through.
+
+Forgejo does two things with a whitelist that it reports no error for, seen on
+15.0.12. A login or a team that cannot write to the repository is dropped from
+the list it was sent in; the method checks the forge's answer after each write
+and refuses, naming the list and the name, rather than report an update that
+lets nobody through. And a login or a team that was whitelisted and then lost
+its access is kept in the rule, left out of the rule's answer, and counted again
+when the access returns. So a list that is given is sent on every run, an empty
+one too, even when the forge's answer already shows it: that clears what the
+answer does not show. Such a run reports `unchanged` when nothing the forge
+shows differed. A list that is not given is not sent, and what the rule keeps of
+it stays. A login or a team that does not exist is refused by the forge itself,
+with a 422.
+
+## Teams
+
+`team_ensure` finds an organization's team by name, creates it when it is
+missing, and converges the access it gives: `unitsMap` names repository units
+(`repo.code`, `repo.issues`, `repo.pulls`, `repo.releases`, `repo.wiki`,
+`repo.projects`, `repo.packages`, `repo.actions`) with `read` or `write`, and is
+the whole map, so a unit left out, or named `none`, is given no access.
+`includesAllRepositories` chooses between every repository of the organization
+and only those added with `team_repo_ensure`. `team_member_ensure` and
+`team_repo_ensure` add one login or one repository and do nothing when it is
+there; a user or a repository that does not exist is refused before anything is
+sent, since the forge answers both with the same 404 as "not in the team".
+`team_get` reads one team back with its members and repositories. The forge
+holds no two teams whose names differ only by case, so every method refuses a
+name in another case than the forge's and gives the forge's spelling: a workflow
+that compares team names then sees one spelling only.
+
+Everything here adds. No method removes a team, a member or a repository. A team
+with administrator access, and the Owners team, are refused by all three methods
+that write: `team_ensure` does not change one, and `team_member_ensure` and
+`team_repo_ensure` add nothing to one. Either lets its members remove a branch
+rule, and that is given by a person.
+
+A team by itself protects nothing. On Forgejo 15.0.12 a member of a team with
+write on `repo.code` and `repo.pulls` can push to the default branch and merge
+into it until a branch rule says otherwise.
+
+## A team's repository behind a rule
+
+The workflow `@dataverket/forgejo-team-repository-behind-rule` gives a team one
+more repository in the order that leaves no gap: first the branch rule, with
+direct push limited to the push whitelist and merging to the merge whitelist;
+then a check that the rule the forge holds has both whitelists on and the team
+in neither; only then `team_repo_ensure`; and last the rule sent and checked
+once more, now that the team has access. It is for a bot that may open pull
+requests and may never push to, or merge into, the branch they target.
+
+```sh
+swamp workflow run @dataverket/forgejo-team-repository-behind-rule \
+  --input forgejo=forge --input owner=apps --input name=damson --input team=bots \
+  --input 'pushWhitelistUsernames=["ann"]' --input 'mergeWhitelistUsernames=["ann","bo"]'
+```
+
+A merge whitelist with nobody in it, and a whitelist that names the team itself
+in any case of letters, fail the run before anything is sent. A name the forge
+does not count fails the rule step, and the team is left without the repository;
+so does the Owners team or a team with administrator access. Run again with the
+same inputs it changes nothing. What the run does not check: that the branch
+named is the repository's default branch, that no other rule matches the branch
+first, and who the team's members are. What the rule does not hold back: a
+member of the team who is in a whitelist as a person, an administrator of the
+repository, and an owner of the organization. `team_get` shows who the team is.
+
 ## Labels of an organization or a repository
 
 `label_ensure` without a repository name works on an organization's labels,
@@ -615,13 +702,13 @@ workflow turns that off; it never creates a rule where there is none.
   package.
 
 stagecraft's `@swamp/stagecraft/conformance` workflow passes against it on
-Forgejo 15.0.11, through a publisher, with `statusNames=in-progress,shipped`,
+Forgejo 15.0.12, through a publisher, with `statusNames=in-progress,shipped`,
 `createType=bug` and `missing=999999`, in the live suite (`smoke/`).
 
-## Checked against Forgejo 15.0.11
+## Checked against Forgejo 15.0.12
 
 The live suite in `smoke/` runs every method of both types against a throwaway
-Forgejo 15.0.11 in podman, through swamp, refusals and leaks included; its
+Forgejo 15.0.12 in podman, through swamp, refusals and leaks included; its
 README says what each batch checks and what it cannot reach (`work_item_sync`
 beyond its refusal, GitHub, an online runner).
 
@@ -659,46 +746,49 @@ swamp data query 'specName == "pushMirror" && isLatest' --json
 swamp data query 'specName == "runner" && isLatest' --json
 ```
 
-| Spec                     | Name                                         | Holds                                                                                |
-| ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `server`                 | `status`                                     | Version and health, from `health`                                                    |
-| `org`                    | `<org>`                                      | An organization, from `org_list` and `org_ensure`                                    |
-| `repo`                   | `repo-<owner>-<repo>`                        | A repository and its settings                                                        |
-| `user`                   | `<login>`                                    | A user, admin view, never a credential                                               |
-| `mirror`                 | `mirror-<owner>-<repo>`                      | A pull mirror's sync health                                                          |
-| `webhook`                | `webhook-<owner>-<repo>-<id>`                | A webhook, audited or repointed, never its secret                                    |
-| `collaborator`           | `collaborator-<owner>-<repo>-<login>`        | A user's access level on a repository                                                |
-| `branch_protection`      | `branch-protection-<owner>-<repo>-<rule>`    | A branch-protection rule                                                             |
-| `pull_request`           | `pull-<owner>-<repo>-<index>`                | A pull request: state, mergeability, head CI                                         |
-| `actionsSecret`          | `actions-secret-<target>-<name>`             | An Actions secret's name and scope. Never the value                                  |
-| `runnerRegistration`     | `runner-registration-<target>`               | A registration token, in the default vault; the record holds a reference             |
-| `runner`                 | `runner-<target>-<name or id>`               | A registered runner: name, online/offline status, labels                             |
-| `runnerPrune`            | `runner-prune-<target>-<name>`               | Offline runners of one name deleted at a scope, and those kept, each with the reason |
-| `repoRename`             | `repo-rename-<owner>-<new name>`             | Old and new name, and the URLs that changed                                          |
-| `pushMirror`             | `push-mirror-<owner>-<repo>-<remote>`        | Remote address, timing, last push and last error                                     |
-| `pushMirrorDelete`       | `push-mirror-delete-<owner>-<repo>-<remote>` | Which remote was removed from which repository                                       |
-| `pullMirror`             | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed                 |
-| `repoTopics`             | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                               |
-| `repoUnits`              | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                              |
-| `repoMergeSettings`      | `repo-merge-settings-<owner>-<repo>`         | A repository's merge settings, and which changed                                     |
-| `answer`, tracker        | `answer-...`, as the publisher names it      | One operation's result or failure; garbage-collected after 30 days                   |
-| `description`, tracker   | `description`                                | What the tracker says of itself                                                      |
-| `trackerLabels`, tracker | `tracker-labels`                             | The tracker's label scheme, as `label_ensure` takes it                               |
-| `prAssignment`           | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                                  |
-| `userMatch`              | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d                    |
-| `repoDelete`             | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                                           |
-| `orgDelete`              | `org-delete-<org>`                           | What the organization was, and what happened                                         |
-| `issue`                  | `issue-<owner>-<repo>-<number>`              | An issue filed or found by title                                                     |
-| `issueLabels`            | `issue-labels-<owner>-<repo>-<number>`       | The labels set on an issue                                                           |
-| `label`                  | `label-<owner>-<repo or org>-<name>`         | A label of a repository or an organization                                           |
-| `prFeedback`             | `pr-feedback-<owner>-<repo>-<index>`         | A pull request's discussion read back                                                |
-| `prComment`              | `pr-comment-<owner>-<repo>-<index>-<id>`     | A comment posted on a pull request                                                   |
-| `issueState`             | `issue-state-<owner>-<repo>-<number>`        | An issue's state as `issue_state_ensure` set or found it                             |
-| `issueBody`              | `issue-body-<owner>-<repo>-<number>`         | Whether `issue_body_ensure` rewrote an issue's text; never the text                  |
-| `tagProtection`          | `tag-protection-<owner>-<repo>-<pattern>`    | A tag protection rule: the pattern and who may push matching tags                    |
-| `prMergeState`           | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                                       |
-| `workItemIssue`          | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                                       |
-| `wikiPage`               | `wiki-<owner>-<repo>-<title>`                | A wiki page: title, listed path, size and hash; the content after `wiki_page_get`    |
+| Spec                     | Name                                         | Holds                                                                                   |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `server`                 | `status`                                     | Version and health, from `health`                                                       |
+| `org`                    | `<org>`                                      | An organization, from `org_list` and `org_ensure`                                       |
+| `repo`                   | `repo-<owner>-<repo>`                        | A repository and its settings                                                           |
+| `user`                   | `<login>`                                    | A user, admin view, never a credential                                                  |
+| `mirror`                 | `mirror-<owner>-<repo>`                      | A pull mirror's sync health                                                             |
+| `webhook`                | `webhook-<owner>-<repo>-<id>`                | A webhook, audited or repointed, never its secret                                       |
+| `collaborator`           | `collaborator-<owner>-<repo>-<login>`        | A user's access level on a repository                                                   |
+| `branch_protection`      | `branch-protection-<owner>-<repo>-<rule>`    | A branch-protection rule                                                                |
+| `pull_request`           | `pull-<owner>-<repo>-<index>`                | A pull request: state, mergeability, head CI                                            |
+| `actionsSecret`          | `actions-secret-<target>-<name>`             | An Actions secret's name and scope. Never the value                                     |
+| `runnerRegistration`     | `runner-registration-<target>`               | A registration token, in the default vault; the record holds a reference                |
+| `runner`                 | `runner-<target>-<name or id>`               | A registered runner: name, online/offline status, labels                                |
+| `runnerPrune`            | `runner-prune-<target>-<name>`               | Offline runners of one name deleted at a scope, and those kept, each with the reason    |
+| `repoRename`             | `repo-rename-<owner>-<new name>`             | Old and new name, and the URLs that changed                                             |
+| `pushMirror`             | `push-mirror-<owner>-<repo>-<remote>`        | Remote address, timing, last push and last error                                        |
+| `pushMirrorDelete`       | `push-mirror-delete-<owner>-<repo>-<remote>` | Which remote was removed from which repository                                          |
+| `pullMirror`             | `pull-mirror-<owner>-<repo>`                 | A pull mirror: source, visibility, interval, last sync, what changed                    |
+| `repoTopics`             | `repo-topics-<owner>-<repo>`                 | A repository's topics, and which were added or removed                                  |
+| `repoUnits`              | `repo-units-<owner>-<repo>`                  | A repository's units, and which changed                                                 |
+| `repoMergeSettings`      | `repo-merge-settings-<owner>-<repo>`         | A repository's merge settings, and which changed                                        |
+| `answer`, tracker        | `answer-...`, as the publisher names it      | One operation's result or failure; garbage-collected after 30 days                      |
+| `description`, tracker   | `description`                                | What the tracker says of itself                                                         |
+| `trackerLabels`, tracker | `tracker-labels`                             | The tracker's label scheme, as `label_ensure` takes it                                  |
+| `prAssignment`           | `pr-assignment-<owner>-<repo>-<index>`       | A pull request's assignees, as Forgejo reports them                                     |
+| `userMatch`              | `user-match-<login>`                         | A user matched by `user_search`: login and full name. Lifetime 7d                       |
+| `repoDelete`             | `repo-delete-<owner>-<repo>`                 | What the repository was, and what happened                                              |
+| `orgDelete`              | `org-delete-<org>`                           | What the organization was, and what happened                                            |
+| `issue`                  | `issue-<owner>-<repo>-<number>`              | An issue filed or found by title                                                        |
+| `issueLabels`            | `issue-labels-<owner>-<repo>-<number>`       | The labels set on an issue                                                              |
+| `label`                  | `label-<owner>-<repo or org>-<name>`         | A label of a repository or an organization                                              |
+| `prFeedback`             | `pr-feedback-<owner>-<repo>-<index>`         | A pull request's discussion read back                                                   |
+| `prComment`              | `pr-comment-<owner>-<repo>-<index>-<id>`     | A comment posted on a pull request                                                      |
+| `issueState`             | `issue-state-<owner>-<repo>-<number>`        | An issue's state as `issue_state_ensure` set or found it                                |
+| `issueBody`              | `issue-body-<owner>-<repo>-<number>`         | Whether `issue_body_ensure` rewrote an issue's text; never the text                     |
+| `tagProtection`          | `tag-protection-<owner>-<repo>-<pattern>`    | A tag protection rule: the pattern and who may push matching tags                       |
+| `team`                   | `team-<org>-<team>`                          | A team: the access it gives per unit; after `team_get` its members and repositories too |
+| `teamMember`             | `teammember-<org>-<team>-<login>`            | A login's membership of a team, as last ensured                                         |
+| `teamRepo`               | `teamrepo-<org>-<team>-<repo>`               | A repository's place in a team, as last ensured                                         |
+| `prMergeState`           | `pr-merge-state-<owner>-<repo>-<index>`      | A pull request's merge commit, time and merger                                          |
+| `workItemIssue`          | `work-item-<owner>-<repo>-<work item>`       | The link from a factory work item to its issue                                          |
+| `wikiPage`               | `wiki-<owner>-<repo>-<title>`                | A wiki page: title, listed path, size and hash; the content after `wiki_page_get`       |
 
 Every spec has an infinite lifetime except `userMatch`. `<target>` is an owner
 or `<owner>-<repo>`, the scope of an Actions method.

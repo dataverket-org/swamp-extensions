@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One throwaway Forgejo 15.0.11 (rootless image, SQLite) in podman on
+# One throwaway Forgejo 15.0.12 (rootless image, SQLite) in podman on
 # 127.0.0.1:13000, seeded with what the negative suite needs: an admin with an
 # all-scopes token, a plain user with a narrow token, a second plain user, an
 # organization, repositories with commits and branches, webhooks, and a branch
@@ -8,7 +8,7 @@
 #   usage: forge.sh up | down
 set -euo pipefail
 cd "$(dirname "$0")"
-IMAGE=code.forgejo.org/forgejo/forgejo:15.0.11-rootless
+IMAGE=code.forgejo.org/forgejo/forgejo:15.0.12-rootless
 NAME=forgejo-smoke
 URL=http://127.0.0.1:13000
 INI=/var/lib/gitea/custom/conf/app.ini

@@ -14,6 +14,7 @@ import { extension as pullMirror } from "./pull_mirror.ts";
 import { extension as pushMirror } from "./push_mirror.ts";
 import { extension as repoDelete } from "./repo_delete.ts";
 import { extension as tagProtection } from "./tag_protection.ts";
+import { extension as team } from "./team.ts";
 import { extension as topics } from "./topics.ts";
 import { extension as units } from "./units.ts";
 import { extension as workItemSync } from "./work_item_sync.ts";
@@ -67,6 +68,10 @@ const ADDED_METHODS = [
   "issue_state_ensure",
   "issue_body_ensure",
   "tag_protection_ensure",
+  "team_ensure",
+  "team_get",
+  "team_member_ensure",
+  "team_repo_ensure",
   "label_ensure",
   "label_list",
   "pr_comment",
@@ -89,6 +94,7 @@ const MODULES = [
   pushMirror,
   repoDelete,
   tagProtection,
+  team,
   topics,
   units,
   workItemSync,
@@ -96,7 +102,7 @@ const MODULES = [
 
 Deno.test("the base owns the dataverket type at the published version", () => {
   assertEquals(model.type, "@dataverket/forgejo");
-  assertEquals(model.version, "2026.11.15.1");
+  assertEquals(model.version, "2026.11.22.1");
 });
 Deno.test("the upgrade chain ends at the model's version and is a no-op", () => {
   const last = model.upgrades.at(-1)!;
@@ -511,6 +517,138 @@ Deno.test("branch_protection_ensure creates a rule", async () => {
   assertEquals([names(h), data(h).action], [[
     "branch-protection-acme-tool-main",
   ], "created"]);
+});
+
+Deno.test("branch_protection_ensure sends a merge whitelist and records it", async () => {
+  const h = harness({
+    [`GET ${R}/branch_protections/main`]: {
+      status: 200,
+      body: { rule_name: "main", enable_push: true },
+    },
+    [`PATCH ${R}/branch_protections/main`]: {
+      status: 200,
+      body: {
+        rule_name: "main",
+        enable_push: true,
+        enable_merge_whitelist: true,
+        merge_whitelist_usernames: ["ann"],
+        merge_whitelist_teams: ["people"],
+      },
+    },
+  });
+  await B.branch_protection_ensure.execute({
+    owner: "acme",
+    name: "tool",
+    rule: "main",
+    enableMergeWhitelist: true,
+    mergeWhitelistUsernames: ["ann"],
+    mergeWhitelistTeams: ["people"],
+  }, h.context);
+  assertEquals(writes(h.calls).map((c) => c.body), [{
+    enable_merge_whitelist: true,
+    merge_whitelist_usernames: ["ann"],
+    merge_whitelist_teams: ["people"],
+  }]);
+  assertEquals([
+    data(h).action,
+    data(h).enableMergeWhitelist,
+    data(h).mergeWhitelistUsernames,
+    data(h).mergeWhitelistTeams,
+  ], ["updated", true, ["ann"], ["people"]]);
+});
+
+Deno.test("branch_protection_ensure sends a given whitelist again when it is the same set, and reports unchanged", async () => {
+  const current = {
+    rule_name: "main",
+    enable_merge_whitelist: true,
+    merge_whitelist_usernames: ["bo", "ann"],
+    push_whitelist_teams: ["people"],
+  };
+  const h = harness({
+    [`GET ${R}/branch_protections/main`]: { status: 200, body: current },
+    [`PATCH ${R}/branch_protections/main`]: { status: 200, body: current },
+  });
+  await B.branch_protection_ensure.execute({
+    owner: "acme",
+    name: "tool",
+    rule: "main",
+    enableMergeWhitelist: true,
+    mergeWhitelistUsernames: ["ann", "bo"],
+    pushWhitelistTeams: ["people"],
+  }, h.context);
+  assertEquals(writes(h.calls).map((c) => c.body), [{
+    push_whitelist_teams: ["people"],
+    merge_whitelist_usernames: ["ann", "bo"],
+  }]);
+  assertEquals(data(h).action, "unchanged");
+});
+
+Deno.test("branch_protection_ensure sends an empty whitelist over a rule that shows none, so a hidden name is cleared", async () => {
+  const shown = {
+    rule_name: "main",
+    enable_merge_whitelist: true,
+    merge_whitelist_usernames: ["ann"],
+    merge_whitelist_teams: [],
+  };
+  const h = harness({
+    [`GET ${R}/branch_protections/main`]: { status: 200, body: shown },
+    [`PATCH ${R}/branch_protections/main`]: { status: 200, body: shown },
+  });
+  await B.branch_protection_ensure.execute({
+    owner: "acme",
+    name: "tool",
+    rule: "main",
+    mergeWhitelistTeams: [],
+  }, h.context);
+  assertEquals(writes(h.calls).map((c) => c.body), [{
+    merge_whitelist_teams: [],
+  }]);
+});
+
+Deno.test("branch_protection_ensure sends nothing when no whitelist is given and nothing differs", async () => {
+  const h = harness({
+    [`GET ${R}/branch_protections/main`]: {
+      status: 200,
+      body: { rule_name: "main", required_approvals: 1 },
+    },
+  });
+  await B.branch_protection_ensure.execute({
+    owner: "acme",
+    name: "tool",
+    rule: "main",
+    requiredApprovals: 1,
+  }, h.context);
+  assertEquals(writes(h.calls), []);
+  assertEquals(data(h).action, "unchanged");
+});
+
+Deno.test("branch_protection_ensure refuses a whitelist name the forge does not count", async () => {
+  const h = harness({
+    [`GET ${R}/branch_protections/main`]: { status: 404 },
+    [`POST ${R}/branch_protections`]: {
+      status: 201,
+      body: {
+        rule_name: "main",
+        enable_merge_whitelist: true,
+        merge_whitelist_usernames: ["ann"],
+        merge_whitelist_teams: [],
+      },
+    },
+  });
+  await assertRejects(
+    () =>
+      B.branch_protection_ensure.execute({
+        owner: "acme",
+        name: "tool",
+        rule: "main",
+        enableMergeWhitelist: true,
+        mergeWhitelistUsernames: ["ann", "reader"],
+        mergeWhitelistTeams: ["bots"],
+      }, h.context),
+    Error,
+    'does not count mergeWhitelistUsernames "reader", mergeWhitelistTeams "bots" in the branch protection main',
+  );
+  assertEquals(h.written(), []);
 });
 
 Deno.test("branch_protection_ensure passes on a refused create", async () => {
